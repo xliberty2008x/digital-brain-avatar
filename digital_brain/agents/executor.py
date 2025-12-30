@@ -1,4 +1,5 @@
 from google.adk.agents.llm_agent import LlmAgent
+from ..tools.neo4j_toolkit import full_access_toolset
 
 executor_agent = LlmAgent(
     model="gemini-3-flash-preview",
@@ -27,5 +28,5 @@ executor_agent = LlmAgent(
       "error": null
     }
     """,
-    # tools=[full_access_toolset()], # Placeholder for write tools
+    tools=[full_access_toolset()],
 )

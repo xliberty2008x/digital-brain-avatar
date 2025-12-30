@@ -1,4 +1,6 @@
 from google.adk.agents import BaseAgent, LoopAgent, SequentialAgent
+from google.adk.apps.app import App
+from google.adk.plugins import ReflectAndRetryToolPlugin
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from typing import AsyncGenerator
@@ -11,6 +13,7 @@ from .agents.extractor import entity_extractor
 from .agents.retriever import context_retriever
 from .agents.writer import write_agent
 from .agents.critic import critic_agent
+from .agents.executor import executor_agent
 from .agents.response import response_agent
 from .tools.utils import retry_generator
 
@@ -116,10 +119,23 @@ class DigitalBrainOrchestrator(BaseAgent):
                 content={"parts": [{"text": "Ця думка дуже важлива. Я надійно записую її у твою пам'ять... 🧠"}]},
             )
             
-            # Use retry_generator to handle potential Cold Starts of Cloud Run
-            async for event in retry_generator(lambda: write_flow_sequence.run_async(ctx)):
+            # Step 1: Extract Entities (Pure LLM)
+            async for event in entity_extractor.run_async(ctx):
+                yield event
+                
+            # Step 2: Retrieve Context from DB (MCP - Network sensitive)
+            async for event in retry_generator(lambda: context_retriever.run_async(ctx), max_retries=4, initial_delay=5):
+                yield event
+                
+            # Step 3: Write Queries (Pure LLM)
+            async for event in write_agent.run_async(ctx):
                 yield event
             
+            # Step 4: Execute Queries (MCP - Network sensitive)
+            async for event in retry_generator(lambda: executor_agent.run_async(ctx), max_retries=4, initial_delay=5):
+                yield event
+            
+            # Step 5: Final Psychologist Response
             async for event in response_agent.run_async(ctx):
                 yield event
             
@@ -147,3 +163,11 @@ write_flow_sequence = SequentialAgent(
 )
 
 root_agent = orchestrator
+
+app = App(
+    name="digital_brain",
+    root_agent=root_agent,
+    plugins=[
+        ReflectAndRetryToolPlugin(max_retries=3),
+    ],
+)

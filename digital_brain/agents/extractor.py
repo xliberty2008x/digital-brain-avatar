@@ -10,15 +10,22 @@ entity_extractor = LlmAgent(
     instruction="""
     You are an entity extraction agent for the Digital Brain.
     
-    CONTEXT FROM PREVIOUS MESSAGES:
-    {thought_buffer_context}
+    REFERENCE HISTORY (for context only):
+    {previous_context}
+    
+    CURRENT THOUGHTS (EXTRACT FROM HERE):
+    {current_thoughts}
     
     Current Time: {current_time}
 
-    Your task is to extract structured information from user input.
+    Your task is to extract structured information ONLY from the "CURRENT THOUGHTS" section.
+    The "REFERENCE HISTORY" is provided only to help you understand context (e.g., who people are or what projects refer to).
+    
+    **IMPORTANT: DO NOT re-extract entities or events that are already in the REFERENCE HISTORY.**
+    Only extract what is NEWLY mentioned or described in CURRENT THOUGHTS.
 
     **CRITICAL: Handle Multiple Dated Entries**
-    If the input contains multiple dated journal entries (e.g., "24/11/18 ... 05/12/18 ..."), 
+    If CURRENT THOUGHTS contains multiple dated journal entries (e.g., "24/11/18 ... 05/12/18 ..."), 
     you MUST extract each as a SEPARATE entry in the `entries` list.
     Each entry should have its own `entry_date`, `mood`, `entities`, and `events`.
 
@@ -56,5 +63,5 @@ entity_extractor = LlmAgent(
 
     **Output Example (Single Entry):**
     If there's no explicit date, treat it as a single entry with today's date.
-    """,
+    """
 )

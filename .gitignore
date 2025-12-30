@@ -8,3 +8,12 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Environment files
+.env
+.env.*
+*.env
+**/.env
+
+# ADK internal
+.adk/
