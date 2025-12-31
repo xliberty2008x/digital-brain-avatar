@@ -16,6 +16,7 @@ from .agents.critic import critic_agent
 from .agents.executor import executor_agent
 from .agents.response import response_agent
 from .tools.utils import retry_generator
+from .callbacks.context_cleaner import clean_context_after_write
 
 async def consume_generator(gen):
     """Helper to drive an async generator to completion in the background."""
@@ -25,8 +26,49 @@ async def consume_generator(gen):
     except Exception as e:
         print(f"Background Task Error: {e}")
 
+from pydantic import ConfigDict
+
 class DigitalBrainOrchestrator(BaseAgent):
+    model_config = ConfigDict(extra="allow")
     
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    async def _prune_history(self, ctx: InvocationContext):
+        """Removes technical noise from history, keeping only User and Context."""
+        history = ctx.session.events
+        last_user_idx = -1
+        for i in range(len(history) - 1, -1, -1):
+            if history[i].author == "user":
+                last_user_idx = i
+                break
+        
+        if last_user_idx != -1:
+            context_event = None
+            # Find the most recent context_retriever output to preserve
+            for event in reversed(history[last_user_idx:]):
+                if event.author == "context_retriever":
+                    context_event = event
+                    break
+            
+            # Identify events to keep
+            to_keep = list(history[:last_user_idx + 1])
+            if context_event:
+                to_keep.append(context_event)
+            
+            # In ADK, session.events might not support clear/extend in all versions.
+            # Using pop() loop to ensure deletion if clear() fails to persist.
+            while len(ctx.session.events) > last_user_idx + 1:
+                ctx.session.events.pop()
+            
+            # Now session.events has [Previous...] + [User]
+            if context_event:
+                # Add context AFTER user if it's not already the last one
+                if ctx.session.events[-1].author != "context_retriever":
+                    ctx.session.events.append(context_event)
+            
+            print(f"🧹 Orchestrator: Pruned history. Current size: {len(ctx.session.events)} events.")
+
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         # 0. Initial Setup & Context Reconstruction (STATELESS)
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -112,7 +154,9 @@ class DigitalBrainOrchestrator(BaseAgent):
                 yield event
             
         elif route == "WRITE":
-            ctx.session.state["thought_for_journal_entry"] = ctx.session.state["current_thoughts"] 
+            ctx.session.state["thought_for_journal_entry"] = ctx.session.state["current_thoughts"]
+            # FLAG START OF WRITE FLOW FOR CONTEXT CLEANER
+            ctx.session.state["is_write_flow"] = True 
             
             yield Event(
                 author="digital_brain",
@@ -122,32 +166,39 @@ class DigitalBrainOrchestrator(BaseAgent):
             # Step 1: Extract Entities (Pure LLM)
             async for event in entity_extractor.run_async(ctx):
                 yield event
+            await self._prune_history(ctx) # Prune technical output from extractor
                 
             # Step 2: Retrieve Context from DB (MCP - Network sensitive)
             async for event in retry_generator(lambda: context_retriever.run_async(ctx), max_retries=4, initial_delay=5):
                 yield event
+            # DO NOT PRUNE HERE yet, we want to KEEP this result for the next steps
                 
             # Step 3: Write Queries (Pure LLM)
             async for event in write_agent.run_async(ctx):
                 yield event
+            await self._prune_history(ctx) # Prune writer output
             
             # Step 4: Execute Queries (MCP - Network sensitive)
             async for event in retry_generator(lambda: executor_agent.run_async(ctx), max_retries=4, initial_delay=5):
                 yield event
+            await self._prune_history(ctx) # Prune executor output
             
             # Step 5: Final Psychologist Response
             async for event in response_agent.run_async(ctx):
                 yield event
             
-        elif route == "READ":
-            ctx.session.state["thought_buffer"] = []
-            print(">> READ flow")
+        # elif route == "READ":
+        #     ctx.session.state["thought_buffer"] = []
+        #     print(">> READ flow")
             
         else:
             print(f"Error: Unknown route {route}")
 
 
-orchestrator = DigitalBrainOrchestrator(name="digital_brain_orchestrator")
+orchestrator = DigitalBrainOrchestrator(
+    name="digital_brain_orchestrator",
+    after_agent_callback=clean_context_after_write
+)
 
 # 4. Writer-Critic Loop for Cypher generation
 # cypher_loop = LoopAgent(

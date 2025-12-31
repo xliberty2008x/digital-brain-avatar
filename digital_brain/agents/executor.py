@@ -4,8 +4,12 @@ from ..tools.neo4j_toolkit import full_access_toolset
 executor_agent = LlmAgent(
     model="gemini-3-flash-preview",
     name="executor_agent",
+    include_contents='none',
     instruction="""
     You are an execution agent for the Digital Brain.
+    
+    CYPHER QUERIES TO EXECUTE:
+    {queries_output}
 
     Execute the provided Cypher queries using write_neo4j_cypher tool.
 

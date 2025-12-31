@@ -6,6 +6,7 @@ write_agent = LlmAgent(
     name="write_agent",
     output_schema=QueriesOutput,
     output_key="queries_output",
+    include_contents='none',
     instruction="""
     You are a Cypher query writer for the Digital Brain.
     

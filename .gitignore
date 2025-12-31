@@ -9,7 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
-# Environment files
+# Credentials and Secrets
+*.json
 .env
 .env.*
 *.env

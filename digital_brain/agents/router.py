@@ -35,9 +35,6 @@ router_agent = LlmAgent(
        - If CURRENT THOUGHTS is just a short reaction or agreement, DO NOT WRITE.
        - If the substance is in PREVIOUS CONTEXT and CURRENT THOUGHTS is just "yes" or similar, route to SKIP.
 
-    4. **READ**:
-       - Explicit requests to recall info ("What did I say about X?", "Summarize last week").
-
     **Output Format**:
     {"route": "ROUTE_NAME", "missing": ["list", "of", "missing", "info"]}
     
