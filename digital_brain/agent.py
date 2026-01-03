@@ -34,40 +34,6 @@ class DigitalBrainOrchestrator(BaseAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
     
-    async def _prune_history(self, ctx: InvocationContext):
-        """Removes technical noise from history, keeping only User and Context."""
-        history = ctx.session.events
-        last_user_idx = -1
-        for i in range(len(history) - 1, -1, -1):
-            if history[i].author == "user":
-                last_user_idx = i
-                break
-        
-        if last_user_idx != -1:
-            context_event = None
-            # Find the most recent context_retriever output to preserve
-            for event in reversed(history[last_user_idx:]):
-                if event.author == "context_retriever":
-                    context_event = event
-                    break
-            
-            # Identify events to keep
-            to_keep = list(history[:last_user_idx + 1])
-            if context_event:
-                to_keep.append(context_event)
-            
-            # In ADK, session.events might not support clear/extend in all versions.
-            # Using pop() loop to ensure deletion if clear() fails to persist.
-            while len(ctx.session.events) > last_user_idx + 1:
-                ctx.session.events.pop()
-            
-            # Now session.events has [Previous...] + [User]
-            if context_event:
-                # Add context AFTER user if it's not already the last one
-                if ctx.session.events[-1].author != "context_retriever":
-                    ctx.session.events.append(context_event)
-            
-            print(f"🧹 Orchestrator: Pruned history. Current size: {len(ctx.session.events)} events.")
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         # 0. Initial Setup & Context Reconstruction (STATELESS)
@@ -166,22 +132,18 @@ class DigitalBrainOrchestrator(BaseAgent):
             # Step 1: Extract Entities (Pure LLM)
             async for event in entity_extractor.run_async(ctx):
                 yield event
-            await self._prune_history(ctx) # Prune technical output from extractor
                 
             # Step 2: Retrieve Context from DB (MCP - Network sensitive)
             async for event in retry_generator(lambda: context_retriever.run_async(ctx), max_retries=4, initial_delay=5):
                 yield event
-            # DO NOT PRUNE HERE yet, we want to KEEP this result for the next steps
                 
             # Step 3: Write Queries (Pure LLM)
             async for event in write_agent.run_async(ctx):
                 yield event
-            await self._prune_history(ctx) # Prune writer output
             
             # Step 4: Execute Queries (MCP - Network sensitive)
             async for event in retry_generator(lambda: executor_agent.run_async(ctx), max_retries=4, initial_delay=5):
                 yield event
-            await self._prune_history(ctx) # Prune executor output
             
             # Step 5: Final Psychologist Response
             async for event in response_agent.run_async(ctx):

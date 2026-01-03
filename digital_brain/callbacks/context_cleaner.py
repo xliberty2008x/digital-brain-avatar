@@ -19,10 +19,50 @@ async def clean_context_after_write(callback_context: CallbackContext) -> Option
         is_write = state.get("is_write_flow", False)
         
         if is_write:
-            # Final check and cleanup flag reset
-            logger.info(f"🧹 ContextCleaner: Finalizing WRITE flow (Agent: {agent_name}).")
-            # We already pruned in Orchestrator, but this resets the state
-            state["is_write_flow"] = False
+            logger.info(f"🧹 ContextCleaner: Detected end of WRITE flow (Agent: {agent_name}). Cleaning up history...")
+            
+            # session.events is a list-like object in ADK that triggers persistence.
+            history = session.events
+            
+            # 1. Find the last message from 'user'.
+            last_user_idx = -1
+            for i in range(len(history) - 1, -1, -1):
+                if history[i].author == "user":
+                    last_user_idx = i
+                    break
+                    
+            if last_user_idx != -1:
+                # 2. Identify and preserve important events:
+                # - The retrieved context (context_retriever)
+                # - The final bot response (response_agent)
+                
+                context_event = None
+                for event in history[last_user_idx:]:
+                    if event.author == "context_retriever":
+                        context_event = event
+                        break
+                
+                final_event = history[-1] if len(history) > 0 else None
+                
+                # Start with history before the turn + the user message
+                clean_history = list(history[:last_user_idx + 1])
+                
+                if context_event:
+                    clean_history.append(context_event)
+                    logger.info("🧹 ContextCleaner: Preserved the context_retriever output.")
+                
+                if final_event and final_event.author == "response_agent":
+                    clean_history.append(final_event)
+                    logger.info("🧹 ContextCleaner: Preserved the final response from response_agent.")
+                
+                # Update the session events
+                session.events.clear()
+                session.events.extend(clean_history)
+                
+                logger.info(f"🧹 ContextCleaner: Cleaned history. Kept {len(clean_history)} events.")
+                
+                # Reset the flag
+                state["is_write_flow"] = False
         
     except Exception as e:
         logger.error(f"⚠️ ContextCleaner Error: {e}")

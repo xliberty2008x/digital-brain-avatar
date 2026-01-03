@@ -18,3 +18,6 @@ wheels/
 
 # ADK internal
 .adk/
+
+# Prompts
+prompts/
