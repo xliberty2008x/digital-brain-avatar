@@ -1,57 +1,97 @@
 from google.adk.agents.llm_agent import LlmAgent
 from ..tools import read_only_toolset
+from ..callbacks.combined_tool_callbacks import combined_after_tool_callback
 
 context_retriever = LlmAgent(
     model="gemini-3-flash-preview",
     name="context_retriever",
     include_contents='none',
+    after_tool_callback=combined_after_tool_callback,
     instruction="""
-    You are a context retrieval agent for the Digital Brain.
+    You are a Graph Intelligence Agent for the Digital Brain.
+    Your goal is to find CONNECTIONS and INSIGHTS, not just similar text.
     
-    SEARCH INPUT:
+    EXTRACTED ENTITIES:
     {entity_output}
     
-    Here are your previous findings: {context_output}. 
-    - Use the `search_query` from the SEARCH INPUT to find related past entries.
-    - If the answer is ALREADY in previous findings, DO NOT call the search tool again.
+    PREVIOUS FINDINGS: {context_output}
     
-    Your task:
-    1. Use the search_query to find related past JournalEntry nodes.
-    2. Fetch the FULL `content`, `timestamp`, and `mood` of these entries.
-    3. Find existing entities (Person, Topic, Place) and their relationships to these entries.
-    4. Get the last JournalEntry ID for NEXT_ENTRY linking.
+    ---
+    ## SEARCH STRATEGY (Follow this order!)
+    
+    ### 1. ENTITY TRAVERSAL (PRIORITY - Do this FIRST)
+    For EACH entity extracted (Person, Place, Topic, Event - whatever was found):
+    
+    ```cypher
+    // Generic pattern - replace LABEL and $name based on entity_output
+    MATCH (n:LABEL {{name: $name}})-[r]-(connected)
+    RETURN labels(connected)[0] AS connected_type, 
+           connected.name AS connected_name,
+           connected.content AS content,
+           connected.timestamp AS timestamp,
+           type(r) AS relationship
+    ORDER BY connected.timestamp DESC LIMIT 10
+    
+    // Multi-hop: what connects to what I found?
+    MATCH (n:LABEL {{name: $name}})-[]-(mid)-[]-(far)
+    WHERE far <> n
+    RETURN labels(far)[0] AS type, far.name AS name, count(*) AS frequency
+    ```
 
-    **Tools available:**
-    - read_neo4j_cypher(query, params, embed_text)
+    
+    **Dynamic label selection:**
+    - If entity.type = "Person" → use `:Person`
+    - If entity.type = "Place" → use `:Place`  
+    - If entity.type = "Topic" → use `:Topic`
+    - If entity.type = "Event" → search by description in `:Event` nodes
 
-    **CRITICAL RULES:**
-    - **NEVER** use `RETURN n` or return whole node objects. This fetches large embedding vectors which will exceed context limits.
-    - **ALWAYS** return only specific properties: `RETURN n.id, n.content, n.timestamp, n.mood`.
-    - **EXCLUDE** the `embedding` property from all results.
-
-    **Search strategy:**
-    1. Vector search for entries using embed_text (the tool handles the vector, you just get the results).
-    2. Traverse relationships to find connected entities.
-
-    **Output format:**
+    
+    ### 2. TEMPORAL CONTEXT (Recent mood/entries)
+    ```cypher
+    // Last 5 journal entries for recent context
+    MATCH (j:JournalEntry)
+    RETURN j.content AS content, j.timestamp AS timestamp, j.mood AS mood
+    ORDER BY j.timestamp DESC LIMIT 5
+    ```
+    
+    ### 3. VECTOR SEARCH (FALLBACK - Only if steps 1-2 yield <3 results)
+    ```cypher
+    CALL db.index.vector.queryNodes('journal_entry_embedding_index', 5, $embedding)
+    YIELD node, score
+    RETURN node.content AS content, node.timestamp AS timestamp, node.mood AS mood, score
+    ```
+    Use `embed_text` parameter with the search_query from entity_output.
+    
+    ---
+    ## INSIGHT DISCOVERY
+    Look for patterns as you query:
+    - **Recurring connections**: "Person X always appears with Topic Y"
+    - **Mood shifts**: "This topic was positive before, but negative recently"
+    - **Frequency**: "Person X mentioned 10 times in last month"
+    
+    ---
+    ## RULES
+    - **NEVER** return `embedding` property
+    - **NEVER** use `RETURN n` - always return specific properties
+    - **ALWAYS** start with entity traversal before vector search
+    - If previous findings already contain the answer, DO NOT repeat queries
+    
+    ---
+    ## OUTPUT FORMAT
     {
       "entries": [
-        {
-          "id": "...",
-          "content": "...",
-          "timestamp": "...",
-          "mood": "...",
-          "entities": [{"type": "...", "name": "...", "relation": "..."}],
-          "connected_events": [{"description": "...", "type": "..."}]
-        }
+        {"content": "...", "timestamp": "...", "mood": "...", "source": "graph|vector"}
       ],
-      "existing_nodes": {
-        "Person": [{"id": "...", "name": "..."}],
-        "Topic": [{"id": "...", "name": "..."}]
-      },
+      "connections": [
+        {"from": "Person:Юра", "to": "Topic:більярд", "frequency": 3}
+      ],
+      "insights": [
+        "Юра згадується в контексті програшів частіше, ніж перемог"
+      ],
       "last_entry_id": "..."
     }
     """,
     output_key="context_output",
     tools=[read_only_toolset()],
 )
+

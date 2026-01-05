@@ -37,9 +37,10 @@ async def clean_context_after_write(callback_context: CallbackContext) -> Option
                 # - The final bot response (response_agent)
                 
                 context_event = None
-                for event in history[last_user_idx:]:
-                    if event.author == "context_retriever":
-                        context_event = event
+                # Search backwards for the LAST retriever event (the final text/JSON output)
+                for i in range(len(history) - 1, last_user_idx, -1):
+                    if history[i].author == "context_retriever":
+                        context_event = history[i]
                         break
                 
                 final_event = history[-1] if len(history) > 0 else None
@@ -55,11 +56,35 @@ async def clean_context_after_write(callback_context: CallbackContext) -> Option
                     clean_history.append(final_event)
                     logger.info("🧹 ContextCleaner: Preserved the final response from response_agent.")
                 
-                # Update the session events
-                session.events.clear()
-                session.events.extend(clean_history)
+                # --- Detailed Logging of Removed Events ---
+                logger.info("--- 🗑️  ContextCleaner: Detailed Removal Log ---")
+                removed_count = 0
+                kept_ids = {id(e) for e in clean_history}
                 
-                logger.info(f"🧹 ContextCleaner: Cleaned history. Kept {len(clean_history)} events.")
+                # Check events starting from the user message to the end (since previous history is kept by default)
+                for event in history[last_user_idx:]:
+                    if id(event) not in kept_ids:
+                        removed_count += 1
+                        # Safe content preview
+                        content_str = "No content"
+                        if hasattr(event, "content") and event.content:
+                             content_str = str(event.content)
+                        
+                        # Clean newlines for log readability
+                        preview = content_str[:150].replace('\n', ' ')
+                        
+                        # Check for tool info
+                        tool_info = ""
+                        # Events might be ToolCall or ToolResponse types in ADK, 
+                        # but typically valid Event objects have 'tool_calls' or similar fields if they are complex.
+                        # We stick to generic author/content logging.
+                        
+                        logger.info(f"❌ Removing [{event.author}]: {preview}...")
+
+                logger.info(f"--- Summary: Removed {removed_count} events. Kept {len(clean_history)} events. ---")
+
+                # Update the session events
+                session.events[:] = clean_history
                 
                 # Reset the flag
                 state["is_write_flow"] = False

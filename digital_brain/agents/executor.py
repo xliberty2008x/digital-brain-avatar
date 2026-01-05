@@ -1,10 +1,12 @@
 from google.adk.agents.llm_agent import LlmAgent
 from ..tools.neo4j_toolkit import full_access_toolset
+from ..callbacks.combined_tool_callbacks import combined_after_tool_callback
 
 executor_agent = LlmAgent(
     model="gemini-3-flash-preview",
     name="executor_agent",
     include_contents='none',
+    after_tool_callback=combined_after_tool_callback,
     instruction="""
     You are an execution agent for the Digital Brain.
     

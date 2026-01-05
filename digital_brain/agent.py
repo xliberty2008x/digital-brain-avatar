@@ -37,9 +37,11 @@ class DigitalBrainOrchestrator(BaseAgent):
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         # 0. Initial Setup & Context Reconstruction (STATELESS)
+
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ctx.session.state["current_time"] = current_time
         ctx.session.state["critique_feedback"] = ""  # Default empty for deactivated loop
+        ctx.session.state["clarify_missing"] = None  # Reset clarify state each turn
         if "context_output" not in ctx.session.state:
             ctx.session.state["context_output"] = ""
         
@@ -141,7 +143,11 @@ class DigitalBrainOrchestrator(BaseAgent):
             async for event in write_agent.run_async(ctx):
                 yield event
             
-            # Step 4: Execute Queries (MCP - Network sensitive)
+            # Step 4: Critic validates and fixes duplicates (Pure LLM)
+            async for event in critic_agent.run_async(ctx):
+                yield event
+            
+            # Step 5: Execute Queries (MCP - Network sensitive)
             async for event in retry_generator(lambda: executor_agent.run_async(ctx), max_retries=4, initial_delay=5):
                 yield event
             
