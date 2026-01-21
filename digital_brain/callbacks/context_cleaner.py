@@ -32,29 +32,29 @@ async def clean_context_after_write(callback_context: CallbackContext) -> Option
                     break
                     
             if last_user_idx != -1:
-                # 2. Identify and preserve important events:
-                # - The retrieved context (context_retriever)
-                # - The final bot response (response_agent)
+                # 2. Build clean history: keep ONLY user messages and response_agent outputs
+                # This removes ALL internal sub-agent logs (router, extractor, retriever, writer, executor)
                 
-                context_event = None
-                # Search backwards for the LAST retriever event (the final text/JSON output)
-                for i in range(len(history) - 1, last_user_idx, -1):
-                    if history[i].author == "context_retriever":
-                        context_event = history[i]
-                        break
+                # Define which authors to KEEP
+                allowed_authors = {"user", "response_agent", "digital_brain_orchestrator"}
                 
-                final_event = history[-1] if len(history) > 0 else None
+                clean_history = []
                 
-                # Start with history before the turn + the user message
-                clean_history = list(history[:last_user_idx + 1])
+                for event in history:
+                    # Keep only events from allowed authors
+                    if event.author in allowed_authors:
+                        # Additionally filter out orchestrator tool calls (just in case)
+                        has_function_calls = False
+                        try:
+                            function_calls = event.get_function_calls()
+                            has_function_calls = bool(function_calls)
+                        except (AttributeError, TypeError):
+                            pass
+                        
+                        if not has_function_calls:
+                            clean_history.append(event)
                 
-                if context_event:
-                    clean_history.append(context_event)
-                    logger.info("🧹 ContextCleaner: Preserved the context_retriever output.")
-                
-                if final_event and final_event.author == "response_agent":
-                    clean_history.append(final_event)
-                    logger.info("🧹 ContextCleaner: Preserved the final response from response_agent.")
+                logger.info(f"🧹 ContextCleaner: Preserved response_agent output.")
                 
                 # --- Detailed Logging of Removed Events ---
                 logger.info("--- 🗑️  ContextCleaner: Detailed Removal Log ---")
@@ -85,6 +85,12 @@ async def clean_context_after_write(callback_context: CallbackContext) -> Option
 
                 # Update the session events
                 session.events[:] = clean_history
+                
+                # Clear memory-related session state to prevent stale data in next retriever run
+                state["accumulated_context"] = []
+                state["previous_findings"] = []
+                state["context_output"] = ""
+                logger.info("🧹 ContextCleaner: Cleared accumulated_context, previous_findings, context_output")
                 
                 # Reset the flag
                 state["is_write_flow"] = False

@@ -48,20 +48,24 @@ def combined_after_tool_callback(
 
     # === 2. Normalize Unicode (Fix for \u0430 bloat) ===
     def normalize_unicode(obj: Any) -> Any:
-        """Recursively decode unicode escape sequences in strings."""
+        """Recursively decode unicode escape sequences securely."""
         if isinstance(obj, dict):
             return {k: normalize_unicode(v) for k, v in obj.items()}
         elif isinstance(obj, list):
             return [normalize_unicode(item) for item in obj]
         elif isinstance(obj, str):
-            try:
-                # Only attempt to decode if it looks like there are escape sequences
-                if "\\u" in obj:
-                    # 'unicode_escape' decodes \uXXXX sequences
-                    # We encode to latin-1 and decode with unicode_escape to handle already-loaded strings
-                    return obj.encode('utf-8').decode('unicode_escape')
-            except Exception:
-                pass
+            if "\\u" in obj:
+                try:
+                    # 1. Unescape only the \uXXXX sequences using a regex to avoid mangling existing UTF-8
+                    def repl(m):
+                        return m.group(0).encode('utf-8').decode('unicode_escape')
+                    
+                    res = re.sub(r'(\\u[0-9a-fA-F]{4})+', repl, obj)
+                    
+                    # 2. Heal any surrogates (like emoji pairs) and ensure valid UTF-8
+                    return res.encode('utf-16', 'surrogatepass').decode('utf-16')
+                except Exception:
+                    return obj
             return obj
         else:
             return obj

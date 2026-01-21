@@ -12,7 +12,6 @@ from .agents.router import router_agent
 from .agents.extractor import entity_extractor
 from .agents.retriever import context_retriever
 from .agents.writer import write_agent
-from .agents.critic import critic_agent
 from .agents.executor import executor_agent
 from .agents.response import response_agent
 from .tools.utils import retry_generator
@@ -40,10 +39,11 @@ class DigitalBrainOrchestrator(BaseAgent):
 
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ctx.session.state["current_time"] = current_time
-        ctx.session.state["critique_feedback"] = ""  # Default empty for deactivated loop
         ctx.session.state["clarify_missing"] = None  # Reset clarify state each turn
         if "context_output" not in ctx.session.state:
             ctx.session.state["context_output"] = ""
+        if "accumulated_context" not in ctx.session.state:
+            ctx.session.state["accumulated_context"] = []  # Persist retriever findings across turns
         
         # Capture raw input from current turn
         current_raw_input = ""
@@ -99,6 +99,7 @@ class DigitalBrainOrchestrator(BaseAgent):
         full_context = previous_buffer + current_buffer + [current_raw_input]
         ctx.session.state["thought_buffer_context"] = "\n".join(full_context)
         
+
         # 1. Run Router
         async for event in router_agent.run_async(ctx):
              yield event
@@ -134,24 +135,65 @@ class DigitalBrainOrchestrator(BaseAgent):
             # Step 1: Extract Entities (Pure LLM)
             async for event in entity_extractor.run_async(ctx):
                 yield event
+            
+            # Step 1.5: DETERMINISTIC ENTITY RESOLUTION (Phase 1)
+            # Check which entities already exist in Neo4j BEFORE Retriever runs
+            entity_output = ctx.session.state.get("entity_output", {})
+            if entity_output:
+                try:
+                    from .services.entity_resolver import resolve_entities
+                    resolution = await resolve_entities(entity_output)
+                    ctx.session.state["existing_entities"] = resolution.get("existing_entities", [])
+                    ctx.session.state["new_entities"] = resolution.get("new_entities", [])
+                    print(f"🔍 ENTITY RESOLUTION: {len(resolution.get('existing_entities', []))} existing, {len(resolution.get('new_entities', []))} new")
+                except Exception as e:
+                    print(f"⚠️ Entity resolution failed: {e}")
+                    ctx.session.state["existing_entities"] = []
+                    ctx.session.state["new_entities"] = []
+            
+            # Step 1.6: CORE ENTITY LOOKUP (Phase 0)
+            # Load ALL Heavy Nodes grouped by label for Retriever and Writer
+            ctx.session.state["potential_core_entities"] = {}
+            try:
+                from .services.core_entity_service import get_all_core_entities
+                core_entities = await get_all_core_entities()
+                ctx.session.state["potential_core_entities"] = core_entities
+            except Exception as e:
+                print(f"⚠️ Core Entity Lookup failed: {e}")
                 
             # Step 2: Retrieve Context from DB (MCP - Network sensitive)
+            # Pass accumulated findings to retriever
+            ctx.session.state["previous_findings"] = ctx.session.state.get("accumulated_context", [])
+            
             async for event in retry_generator(lambda: context_retriever.run_async(ctx), max_retries=4, initial_delay=5):
                 yield event
+            
+            # Accumulate new findings (keep last 10 to avoid unbounded growth)
+            new_context = ctx.session.state.get("context_output", "")
+            if new_context:
+                accumulated = ctx.session.state.get("accumulated_context", [])
+                accumulated.append({"turn": current_time, "findings": new_context})
+                ctx.session.state["accumulated_context"] = accumulated[-10:]  # Keep last 10 turns
                 
             # Step 3: Write Queries (Pure LLM)
             async for event in write_agent.run_async(ctx):
                 yield event
             
-            # Step 4: Critic validates and fixes duplicates (Pure LLM)
-            async for event in critic_agent.run_async(ctx):
-                yield event
-            
-            # Step 5: Execute Queries (MCP - Network sensitive)
+            # Step 4: Execute Queries (MCP - Network sensitive)
             async for event in retry_generator(lambda: executor_agent.run_async(ctx), max_retries=4, initial_delay=5):
                 yield event
             
-            # Step 5: Final Psychologist Response
+            # Step 5.5: POST-WRITE REFLEX LOOP (Phase 3)
+            # Check for duplicates that slipped through and auto-merge them
+            try:
+                from .services.consistency_checker import run_consistency_check
+                consistency_result = await run_consistency_check()
+                if consistency_result.get("merged", 0) > 0:
+                    print(f"🔄 REFLEX LOOP: Merged {consistency_result['merged']} duplicates, created {consistency_result['aliases_created']} aliases")
+            except Exception as e:
+                print(f"⚠️ Consistency check failed: {e}")
+            
+            # Step 6: Final Psychologist Response
             async for event in response_agent.run_async(ctx):
                 yield event
             

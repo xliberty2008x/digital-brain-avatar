@@ -1,97 +1,90 @@
 from google.adk.agents.llm_agent import LlmAgent
 from ..tools import read_only_toolset
 from ..callbacks.combined_tool_callbacks import combined_after_tool_callback
+from ..models.retriever_output import RetrieverOutput
 
 context_retriever = LlmAgent(
     model="gemini-3-flash-preview",
     name="context_retriever",
     include_contents='none',
     after_tool_callback=combined_after_tool_callback,
+    output_schema=RetrieverOutput,
     instruction="""
     You are a Graph Intelligence Agent for the Digital Brain.
-    Your goal is to find CONNECTIONS and INSIGHTS, not just similar text.
-    
-    EXTRACTED ENTITIES:
-    {entity_output}
-    
-    PREVIOUS FINDINGS: {context_output}
+    Your PRIMARY goals:
+    1. FETCH CONTEXT for entities
+    2. DETECT DUPLICATES and generate merge commands
     
     ---
-    ## SEARCH STRATEGY (Follow this order!)
+    ## INPUT DATA
     
-    ### 1. ENTITY TRAVERSAL (PRIORITY - Do this FIRST)
-    For EACH entity extracted (Person, Place, Topic, Event - whatever was found):
+    ### 🌟 CORE ENTITIES (All heavy nodes from DB, grouped by label):
+    {potential_core_entities}
     
-    ```cypher
-    // Generic pattern - replace LABEL and $name based on entity_output
-    MATCH (n:LABEL {{name: $name}})-[r]-(connected)
-    RETURN labels(connected)[0] AS connected_type, 
-           connected.name AS connected_name,
-           connected.content AS content,
-           connected.timestamp AS timestamp,
-           type(r) AS relationship
-    ORDER BY connected.timestamp DESC LIMIT 10
+    Format: {"Person": [{"name": "...", "id": "...", "weight": N}], "Topic": [...], ...}
+    Weight = number of connections. Higher weight = more important.
     
-    // Multi-hop: what connects to what I found?
-    MATCH (n:LABEL {{name: $name}})-[]-(mid)-[]-(far)
-    WHERE far <> n
-    RETURN labels(far)[0] AS type, far.name AS name, count(*) AS frequency
-    ```
-
-    
-    **Dynamic label selection:**
-    - If entity.type = "Person" → use `:Person`
-    - If entity.type = "Place" → use `:Place`  
-    - If entity.type = "Topic" → use `:Topic`
-    - If entity.type = "Event" → search by description in `:Event` nodes
-
-    
-    ### 2. TEMPORAL CONTEXT (Recent mood/entries)
-    ```cypher
-    // Last 5 journal entries for recent context
-    MATCH (j:JournalEntry)
-    RETURN j.content AS content, j.timestamp AS timestamp, j.mood AS mood
-    ORDER BY j.timestamp DESC LIMIT 5
-    ```
-    
-    ### 3. VECTOR SEARCH (FALLBACK - Only if steps 1-2 yield <3 results)
-    ```cypher
-    CALL db.index.vector.queryNodes('journal_entry_embedding_index', 5, $embedding)
-    YIELD node, score
-    RETURN node.content AS content, node.timestamp AS timestamp, node.mood AS mood, score
-    ```
-    Use `embed_text` parameter with the search_query from entity_output.
+    ### ENTITIES FROM CURRENT INPUT:
+    - Existing: {existing_entities}
+    - New: {new_entities}
     
     ---
-    ## INSIGHT DISCOVERY
-    Look for patterns as you query:
-    - **Recurring connections**: "Person X always appears with Topic Y"
-    - **Mood shifts**: "This topic was positive before, but negative recently"
-    - **Frequency**: "Person X mentioned 10 times in last month"
+    ## TASK 1: FETCH CONTEXT
+    
+    Query history for entities mentioned in current input:
+    - If ID is NOT "MISSING": `MATCH (e {id: $entity_id})-[r]-(j:JournalEntry) RETURN ...`
+    - If ID IS "MISSING": `MATCH (e) WHERE e.name = $entity_name AND NOT 'JournalEntry' IN labels(e) MATCH (e)-[r]-(j:JournalEntry) RETURN ...`
+    
+    RETURN e.name, j.content, j.timestamp
+    ORDER BY j.timestamp DESC
+    LIMIT 3
+    ```
+    
+    ---
+    ## TASK 2: DETECT DUPLICATES (CRITICAL!)
+    
+    Compare `new_entities` and `existing_entities` against `CORE ENTITIES`:
+    
+    **IF** a new/existing entity name is SIMILAR to a Core Entity:
+    - Example: new entity "mom" vs Core Entity "Mom" (weight: 50)
+    - Example: new entity "Sashka" vs Core Entity "Sasha" (weight: 30)
+    
+    **THEN** create a MergeCommand:
+    - keep_id: ID of Core Entity (higher weight)
+    - keep_name: Name of Core Entity
+    - remove_id: ID of duplicate (or "NEW" if not yet created)
+    - remove_name: Name of duplicate
+    - reason: "Same person referred to by different name"
+    
+    **Query to verify similarity** (if unsure):
+    ```cypher
+    MATCH (a {id: $id1}), (b {id: $id2})
+    OPTIONAL MATCH (a)-[r1]-(common)-[r2]-(b)
+    RETURN count(common) AS shared_connections
+    ```
+    If shared_connections > 0, they likely refer to same entity.
     
     ---
     ## RULES
-    - **NEVER** return `embedding` property
-    - **NEVER** use `RETURN n` - always return specific properties
-    - **ALWAYS** start with entity traversal before vector search
-    - If previous findings already contain the answer, DO NOT repeat queries
+    - MAX 3 tool calls
+    - NEVER return `embedding` property
+    - Always check for duplicates before outputting
     
     ---
-    ## OUTPUT FORMAT
+    ## OUTPUT (RetrieverOutput schema)
     {
-      "entries": [
-        {"content": "...", "timestamp": "...", "mood": "...", "source": "graph|vector"}
-      ],
-      "connections": [
-        {"from": "Person:Юра", "to": "Topic:більярд", "frequency": 3}
-      ],
-      "insights": [
-        "Юра згадується в контексті програшів частіше, ніж перемог"
-      ],
-      "last_entry_id": "..."
+      "context_summary": "Retrieved history for X, Y, Z...",
+      "merge_commands": [
+        {
+          "keep_id": "person_123",
+          "keep_name": "Sasha",
+          "remove_id": "NEW",
+          "remove_name": "Sashka",
+          "reason": "Same person, nickname variant"
+        }
+      ]
     }
     """,
     output_key="context_output",
     tools=[read_only_toolset()],
 )
-

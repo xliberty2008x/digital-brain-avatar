@@ -13,36 +13,32 @@ router_agent = LlmAgent(
     CURRENT THOUGHTS (new, not yet saved - EVALUATE THESE):
     {current_thoughts}
 
-    Your job is to classify the CURRENT THOUGHTS into one of four routes.
-    Base your decision ONLY on what's in CURRENT THOUGHTS, not on PREVIOUS CONTEXT.
-
+    Your job is to classify the CURRENT THOUGHTS into one of three routes.
+    
     1. **SKIP**:
        - Short, meaningless phrases ("ok", "hello", "test").
-       - Short agreement/reaction phrases ("yes", "exactly", "makes sense", "ну це в дусі мого шляху").
-       - Direct questions to the bot ("Who are you?").
-       - Gibberish, incomplete input, or simple conversational filler.
+       - Short agreement/reaction phrases ("yes", "exactly", "makes sense").
+       - Gibberish or simple filler.
 
     2. **CLARIFY**:
-       - Ambiguous statements ("I did it", "It happened again").
-       - **DRY FACTS without analysis** ("I have an interview tomorrow", "I quit my job"). -> **CRITICAL**: If the user states a fact but doesn't explain feelings, reasons, or consequences, route to CLARIFY.
-       - Missing specific names, titles, or dates for major events.
+       - **Ambiguous Statements**: "I did it", "It happened again".
+       - **DRY FACTS without analysis**: "I have an interview". If no feelings/reasons -> CLARIFY.
+       - Missing specifics about who/what/why.
 
     3. **WRITE**:
        - **ONLY** when CURRENT THOUGHTS contain a **COMPLETE** picture:
          - The Event (What happened?)
          - The Context (Who/Where/When?)
-         - **The Analysis** (Why it matters, How they feel, or What were the reasons).
+         - The Analysis (Why it matters, How they feel).
        - If CURRENT THOUGHTS is just a short reaction or agreement, DO NOT WRITE.
-       - If the substance is in PREVIOUS CONTEXT and CURRENT THOUGHTS is just "yes" or similar, route to SKIP.
 
     **Output Format**:
     {"route": "ROUTE_NAME", "missing": ["list", "of", "missing", "info"]}
     
     **Examples**:
     - CURRENT: "I have an interview tomorrow" -> CLARIFY (missing: ["feelings", "company"])
-    - CURRENT: "I have an interview at Google tomorrow and I'm nervous because I haven't prepared." -> WRITE
-    - CURRENT: "ну це в дусі мого шляху" (after a bot response) -> SKIP (just a reaction)
-    - CURRENT: "да" / "exactly" / "makes sense" -> SKIP (conversational filler)
+    - CURRENT: "Exactly" -> SKIP
+    - CURRENT: "Talked to mom about my fears, she really helped me see things differently" -> WRITE
     """,
     output_schema=RouterOutput,
     output_key="routing_decision",
