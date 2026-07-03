@@ -11,6 +11,8 @@ wheels/
 
 # Credentials and Secrets
 *.json
+!plugins/**/*.json
+!.claude-plugin/*.json
 .env
 .env.*
 *.env
