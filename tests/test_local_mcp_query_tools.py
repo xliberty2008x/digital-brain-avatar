@@ -81,6 +81,17 @@ def test_validate_embedding_usage_rejects_relationship_chained_journal_write_mis
         raise AssertionError("expected ValueError")
 
 
+def test_validate_embedding_usage_rejects_whitespace_before_label_journal_write_missing_embed_text():
+    query = "CREATE (j : JournalEntry {id: $id, content: $content}) RETURN j"
+
+    try:
+        validate_embedding_usage(query, None)
+    except ValueError as exc:
+        assert "embed_text" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
 def test_validate_embedding_usage_allows_unrelated_journal_read_without_embed_text():
     query = "MATCH (j:JournalEntry) RETURN j"
 
