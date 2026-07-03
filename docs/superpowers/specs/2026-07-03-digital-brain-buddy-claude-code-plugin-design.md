@@ -26,7 +26,11 @@ currently optional, not enforced.
 ## Goals
 
 - Add a Claude Code plugin manifest that reuses the existing skill/persona
-  content without duplicating it (dual-host, shared content).
+  content without duplicating it (shared content across all hosts).
+- Make the same plugin installable in the Claude Desktop app's "Cowork"
+  feature (org-plugins), which turns out to use the same
+  `.claude-plugin/plugin.json` + `skills/`/`agents/`/`hooks/`/`.mcp.json`
+  shape as Claude Code, plus one extra `version.json` file.
 - Fix the plugin's MCP wiring to point at the local Neo4j/MCP stack.
 - Improve the read skill's related-node discovery by porting the ADK
   retriever's shared-connections technique into the plugin's documented
@@ -41,6 +45,10 @@ currently optional, not enforced.
 
 ## Non-goals
 
+- No automated installer for the Claude Desktop (Cowork) target — placing the
+  plugin under `/Library/Application Support/Claude/org-plugins/` is a
+  documented manual step (requires elevated filesystem permissions on
+  macOS/Windows), not something to script in this project.
 - No changes to the Codex-side manifest, `.codex-plugin/plugin.json`, or the
   per-skill `agents/openai.yaml` files. Codex keeps working exactly as today.
 - No changes to the ADK app's own orchestration (`digital_brain/agent.py` and
@@ -51,22 +59,23 @@ currently optional, not enforced.
 - No attempt to make the plugin work without the local Docker stack running;
   offline/remote fallback is out of scope.
 
-## Architecture: dual-host, shared content
+## Architecture: three hosts, one shared content tree
 
 ```
 plugins/digital-brain-buddy/
-├── .codex-plugin/plugin.json        # existing, untouched
-├── .claude-plugin/plugin.json       # NEW — Claude Code manifest
+├── .codex-plugin/plugin.json        # existing, untouched — Codex manifest
+├── .claude-plugin/plugin.json       # NEW — Claude Code / Cowork manifest (same format, both hosts)
+├── version.json                     # NEW — bump to trigger Cowork re-sync; Claude Code ignores it
 ├── SOUL.MD                          # shared, untouched
 ├── .mcp.json                        # shared — URL fixed to local endpoint
-├── skills/                          # shared SKILL.md content, both hosts read these
+├── skills/                          # shared SKILL.md content, all three hosts read these
 │   ├── digital-brain-buddy-session/
 │   ├── digital-brain-buddy-read-memory/
 │   ├── digital-brain-buddy-write-memory/
 │   ├── digital-brain-buddy-graph-mcp/
 │   │   └── references/runtime-patterns.md   # gets new related-node template
 │   └── digital-brain-buddy-identity-bootstrap/
-├── agents/                          # NEW — Claude-Code-only native subagents
+├── agents/                          # NEW — Claude-Code/Cowork native subagents
 │   ├── digital-brain-reader.md
 │   ├── digital-brain-writer.md
 │   └── digital-brain-entity-check.md
@@ -77,14 +86,24 @@ plugins/digital-brain-buddy/
     └── compose-up.sh                # NEW — used by hooks.json and the command
 ```
 
-Each host manifest (`.codex-plugin/plugin.json` for Codex,
-`.claude-plugin/plugin.json` for Claude Code) points at the same
-`./skills/`, `./.mcp.json`, and (Claude Code only) `./agents/`, `./hooks/`,
-`./commands/` at plugin root. Claude Code's plugin format supports this
-directly — component directories load from plugin root regardless of which
-manifest enabled the plugin. Codex's `agents/openai.yaml` files stay nested
-inside each skill directory exactly as today; the new root-level `agents/*.md`
-is a distinct, additive mechanism that Codex does not read.
+`.claude-plugin/plugin.json` is one manifest that both the Claude Code CLI
+and the Claude Desktop app's Cowork feature read — Anthropic's own docs
+confirm Cowork's org-plugin format is `.claude-plugin/plugin.json` +
+`.mcp.json` + `agents/`/`commands/`/`skills/`/`hooks/`, the same shape Claude
+Code plugins already use. The only Cowork-specific addition is
+`version.json` at plugin root (a version string; bumping it triggers
+Cowork's plugin re-sync — Claude Code doesn't read this file, so it's
+harmless there). Codex's `.codex-plugin/plugin.json` and each skill's nested
+`agents/openai.yaml` stay untouched; the new root-level `agents/*.md` is an
+additive mechanism Codex does not read.
+
+**Cowork install is a manual filesystem step, not a marketplace add.**
+Anthropic's docs place org-plugins at a system directory —
+`/Library/Application Support/Claude/org-plugins/<plugin-name>/` on macOS —
+which typically needs elevated permissions to write to, unlike the
+user-writable Claude Code plugin cache. The implementation plan should copy
+(or symlink) `plugins/digital-brain-buddy/` there and note the `sudo`
+requirement explicitly rather than trying to script around it.
 
 ## Components
 
@@ -170,7 +189,7 @@ to state embeddings are mandatory (not "prefer" or "when the entry should
 participate in vector search"), matching the new hard-reject behavior, so the
 model doesn't need an error round-trip to learn this.
 
-### 4. Native Claude Code subagents
+### 4. Native subagents (Claude Code & Cowork)
 
 Three new files under `plugins/digital-brain-buddy/agents/`, each a thin
 wrapper that points at the corresponding shared skill and narrows scope for
@@ -245,6 +264,29 @@ of blocking.
 the same `compose-up.sh`, for recovering from a mid-session container crash
 without restarting the whole Claude Code session.
 
+*Open question for the plan:* whether Cowork runs plugin `hooks/hooks.json`
+the same way Claude Code CLI does isn't confirmed by anything gathered for
+this spec — it's a newer, less-documented desktop feature. Treat the
+SessionStart hook as "Claude Code CLI, confirmed" and "Cowork, to be verified
+manually" rather than assuming parity.
+
+### 6. Installing into Claude Desktop (Cowork)
+
+No new content — this target reuses everything in §1-5 as-is. The
+implementation plan needs one manual step:
+
+1. Copy or symlink `plugins/digital-brain-buddy/` (repo path) to
+   `/Library/Application Support/Claude/org-plugins/digital-brain-buddy/`
+   (macOS). This is under `/Library`, not `~/Library`, so it requires `sudo`.
+2. `.claude-plugin/plugin.json` must include `name`, `version`, and
+   `description` (already true from §1's manifest) — no Cowork-specific
+   fields needed unless auto-deploy is wanted, which it isn't here
+   (`installationPreference` left unset ⇒ defaults to manual "available").
+3. Add `version.json` (e.g. `"0.1.0"`) at plugin root so future edits trigger
+   Cowork's re-sync when the string is bumped.
+4. Open the Claude desktop app → plugin browser → Organization tab → enable
+   `digital-brain-buddy`.
+
 ## Data flow (Claude Code path)
 
 1. Session starts in this repo → `SessionStart` hook runs `compose-up.sh` →
@@ -302,3 +344,12 @@ without restarting the whole Claude Code session.
      rejected.
   7. Kill `mcp-cypher` mid-session, run `/digital-brain-up`, confirm it comes
      back without restarting Claude Code.
+- Manual verification (Cowork):
+  1. Copy the plugin to `/Library/Application Support/Claude/org-plugins/digital-brain-buddy/`,
+     confirm it appears in the desktop app's Organization plugin tab.
+  2. Enable it, start a Cowork session, confirm `digital-brain-reader` /
+     `digital-brain-writer` / `digital-brain-entity-check` are available.
+  3. Specifically check whether the SessionStart hook fired (docker compose
+     came up without being manually started) — record the actual behavior
+     either way, since this isn't confirmed ahead of time (§5's open
+     question).
