@@ -19,5 +19,8 @@ wheels/
 # ADK internal
 .adk/
 
+# Local database backups
+backups/
+
 # Prompts
 prompts/

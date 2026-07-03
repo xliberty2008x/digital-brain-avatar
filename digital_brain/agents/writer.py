@@ -85,7 +85,7 @@ write_agent = LlmAgent(
     | Location | id, name | type (City/Country) |
     | Pet | id, name | species, breed |
     | Object | id, name | type, description |
-    | JournalEntry | id, content, timestamp, mood | - |
+    | JournalEntry | id, content, timestamp, mood, embedding | - |
     
     ### Relationships:
     | Relationship | From → To |
@@ -96,6 +96,10 @@ write_agent = LlmAgent(
     | PARTICIPATED | Person → Event |
     | OWNS | Person → Pet/Object |
     | WORKS_AT | Person → Organization |
+
+    **LOCAL EMBEDDING RULE (MANDATORY):**
+    - Every newly created JournalEntry MUST include `embedding: $embedding` in its property map.
+      The executor passes full journal text as `embed_text`; the local MCP server turns that into `$embedding`.
     
     ---
     ## DUPLICATE PREVENTION

@@ -1,0 +1,25 @@
+[project]
+name = "digital-brain-mcp-cypher"
+version = "0.1.0"
+description = "Local Cypher MCP server for Digital Brain with pluggable embeddings"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=2.10.0",
+    "neo4j>=5.26.0",
+]
+
+[project.optional-dependencies]
+huggingface = [
+    "sentence-transformers>=3.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+digital-brain-mcp-cypher = "digital_brain_mcp_cypher.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/digital_brain_mcp_cypher"]

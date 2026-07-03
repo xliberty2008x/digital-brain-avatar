@@ -2,7 +2,7 @@
 """
 Direct MCP Client for deterministic Neo4j queries.
 Bypasses LLM agents for reliable entity existence checks.
-Includes retry logic for Cloud Run cold starts.
+Includes retry logic for local MCP startup and temporary unavailability.
 """
 
 import aiohttp
@@ -10,17 +10,91 @@ import asyncio
 import json
 from typing import Any
 
-DEFAULT_MCP_URL = "https://mcp-neo4j-cypher-858161250402.us-central1.run.app/api/mcp/"
+from ..config import DEFAULT_LOCAL_MCP_URL, get_mcp_url
 
-# Retry configuration for cold starts
+DEFAULT_MCP_URL = DEFAULT_LOCAL_MCP_URL
+
+# Retry configuration for MCP startup or temporary unavailability
 MAX_RETRIES = 4
 INITIAL_DELAY = 5  # seconds
+
+MCP_PROTOCOL_VERSION = "2024-11-05"
+
+
+def _response_mentions_missing_session(text: str) -> bool:
+    return "Missing session ID" in text or "mcp-session-id" in text
+
+
+async def _parse_json_or_sse_response(response: aiohttp.ClientResponse) -> dict[str, Any]:
+    # Read raw text to bypass strict mimetype checks of response.json()
+    text = await response.text()
+
+    # Try to parse as SSE (Server-Sent Events)
+    for line in text.splitlines():
+        if line.strip().startswith("data:"):
+            try:
+                data_str = line.strip()[5:].strip()
+                result = json.loads(data_str)
+                if "error" in result:
+                    raise Exception(f"MCP error: {result['error']}")
+                return result
+            except json.JSONDecodeError:
+                continue
+
+    try:
+        result = json.loads(text)
+        if "error" in result:
+            raise Exception(f"MCP error: {result['error']}")
+        return result
+    except json.JSONDecodeError as exc:
+        raise Exception(f"Could not parse response (first 200 chars): {text[:200]}") from exc
+
+
+async def _initialize_mcp_session(
+    session: aiohttp.ClientSession,
+    url: str,
+) -> str:
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "avatar-digital-brain", "version": "0.1.0"},
+        },
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    async with session.post(url, json=payload, headers=headers) as response:
+        if response.status not in (200, 202):
+            error_text = await response.text()
+            raise Exception(f"MCP initialize failed ({response.status}): {error_text}")
+        session_id = response.headers.get("mcp-session-id")
+        await _parse_json_or_sse_response(response)
+    if not session_id:
+        raise Exception("MCP initialize did not return mcp-session-id")
+
+    initialized = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+    async with session.post(
+        url,
+        json=initialized,
+        headers={**headers, "mcp-session-id": session_id},
+    ) as response:
+        if response.status not in (200, 202):
+            error_text = await response.text()
+            raise Exception(f"MCP initialized notification failed ({response.status}): {error_text}")
+        if response.status == 200:
+            await response.text()
+    return session_id
 
 
 async def call_mcp_tool(
     tool_name: str,
     arguments: dict[str, Any],
-    url: str = DEFAULT_MCP_URL,
+    url: str | None = None,
     max_retries: int = MAX_RETRIES,
     initial_delay: int = INITIAL_DELAY
 ) -> dict[str, Any]:
@@ -37,6 +111,7 @@ async def call_mcp_tool(
     Returns:
         Tool response as a dictionary
     """
+    endpoint = url or get_mcp_url()
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -49,46 +124,36 @@ async def call_mcp_tool(
     
     last_error = None
     delay = initial_delay
+    mcp_session_id: str | None = None
     
     for attempt in range(max_retries + 1):
         try:
             timeout = aiohttp.ClientTimeout(total=30)  # 30 second timeout
             async with aiohttp.ClientSession(timeout=timeout) as session:
+                if mcp_session_id is None:
+                    mcp_session_id = await _initialize_mcp_session(session, endpoint)
+                headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                    "mcp-session-id": mcp_session_id,
+                }
                 async with session.post(
-                    url,
+                    endpoint,
                     json=payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Accept": "application/json, text/event-stream"
-                    }
+                    headers=headers,
                 ) as response:
                     if response.status == 200:
-                        # Read raw text to bypass strict mimetype checks of response.json()
-                        text = await response.text()
-                        
-                        # Try to parse as SSE (Server-Sent Events)
-                        # Look for lines starting with "data:"
-                        for line in text.splitlines():
-                            if line.strip().startswith("data:"):
-                                try:
-                                    data_str = line.strip()[5:].strip()
-                                    result = json.loads(data_str)
-                                    if "error" in result:
-                                        raise Exception(f"MCP error: {result['error']}")
-                                    return result.get("result", {})
-                                except json.JSONDecodeError:
-                                    continue
-                        
-                        # Fallback: Try to parse the whole body as JSON
-                        # This works if the server sent JSON but with wrong mimetype,
-                        # or if it's a standard JSON response.
-                        try:
-                            result = json.loads(text)
-                            if "error" in result:
-                                raise Exception(f"MCP error: {result['error']}")
-                            return result.get("result", {})
-                        except json.JSONDecodeError:
-                            raise Exception(f"Could not parse response (first 200 chars): {text[:200]}")
+                        result = await _parse_json_or_sse_response(response)
+                        tool_result = result.get("result", {})
+                        if isinstance(tool_result, dict) and tool_result.get("isError"):
+                            content = tool_result.get("content") or []
+                            error_text = (
+                                content[0].get("text", "")
+                                if content and isinstance(content[0], dict)
+                                else str(tool_result)
+                            )
+                            raise Exception(f"MCP tool '{tool_name}' returned an error: {error_text}")
+                        return tool_result
 
                     elif response.status in [502, 503, 504]:
                         # Cold start or temporary unavailability
@@ -96,6 +161,9 @@ async def call_mcp_tool(
                         raise aiohttp.ClientError(f"Server warming up ({response.status}): {error_text}")
                     else:
                         error_text = await response.text()
+                        if response.status == 400 and _response_mentions_missing_session(error_text):
+                            mcp_session_id = None
+                            raise aiohttp.ClientError(f"MCP session unavailable ({response.status}): {error_text}")
                         raise Exception(f"MCP call failed ({response.status}): {error_text}")
                         
         except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError) as e:
@@ -114,7 +182,7 @@ async def call_mcp_tool(
     raise last_error or Exception("MCP call failed with unknown error")
 
 
-async def execute_cypher(query: str, params: dict = None) -> list[dict]:
+async def execute_cypher(query: str, params: dict = None, embed_text: str | None = None) -> list[dict]:
     """
     Execute a Cypher query directly via MCP with retry logic.
     
@@ -128,6 +196,8 @@ async def execute_cypher(query: str, params: dict = None) -> list[dict]:
     arguments = {"query": query}
     if params:
         arguments["params"] = params  # Pass dict directly, not JSON string!
+    if embed_text:
+        arguments["embed_text"] = embed_text
     
     result = await call_mcp_tool("read_neo4j_cypher", arguments)
     
@@ -138,7 +208,7 @@ async def execute_cypher(query: str, params: dict = None) -> list[dict]:
             text = content[0].get("text", "[]")
             try:
                 return json.loads(text)
-            except json.JSONDecodeError:
-                return []
-    
+            except json.JSONDecodeError as exc:
+                raise Exception(f"Could not parse Cypher result (first 200 chars): {text[:200]}") from exc
+
     return []
