@@ -1,0 +1,78 @@
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    environment:
+      NEO4J_AUTH: "${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:-password}"
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_dbms_security_procedures_allowlist: "apoc.*"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USERNAME:-neo4j} -p ${NEO4J_PASSWORD:-password} 'RETURN 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  mcp-cypher:
+    build:
+      context: ./mcp_servers/cypher
+      args:
+        EMBEDDING_EXTRAS: "${EMBEDDING_EXTRAS:-}"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    ports:
+      - "${MCP_CYPHER_PORT:-8000}:8000"
+    environment:
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USERNAME: "${NEO4J_USERNAME:-neo4j}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-password}"
+      NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
+      NEO4J_TRANSPORT: "streamable-http"
+      NEO4J_MCP_SERVER_HOST: "0.0.0.0"
+      NEO4J_MCP_SERVER_PORT: "8000"
+      NEO4J_MCP_SERVER_PATH: "/api/mcp/"
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-ollama}"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-bge-m3}"
+      EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
+      HF_HOME: "/models/huggingface"
+    volumes:
+      - hf-cache:/models/huggingface
+
+  mcp-memory:
+    build:
+      context: ./mcp-neo4j/servers/mcp-neo4j-memory
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    ports:
+      - "${MCP_MEMORY_PORT:-8001}:8000"
+    environment:
+      NEO4J_URL: "bolt://neo4j:7687"
+      NEO4J_USERNAME: "${NEO4J_USERNAME:-neo4j}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-password}"
+      NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
+      NEO4J_TRANSPORT: "streamable-http"
+      NEO4J_MCP_SERVER_HOST: "0.0.0.0"
+      NEO4J_MCP_SERVER_PORT: "8000"
+      NEO4J_MCP_SERVER_PATH: "/api/mcp/"
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
+volumes:
+  neo4j-data:
+  neo4j-logs:
+  hf-cache:
+  ollama-data:

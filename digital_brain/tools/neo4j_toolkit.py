@@ -8,13 +8,14 @@ from google.adk.tools.mcp_tool.mcp_toolset import (
     StreamableHTTPConnectionParams,
 )
 
-# Default MCP Server URL
-DEFAULT_MCP_URL = "https://mcp-neo4j-cypher-858161250402.us-central1.run.app/api/mcp/"
+from ..config import DEFAULT_LOCAL_MCP_URL, get_mcp_url
+
+DEFAULT_MCP_URL = DEFAULT_LOCAL_MCP_URL
 
 
 def create_neo4j_toolset(
     tools: list[str] | None = None,
-    url: str = DEFAULT_MCP_URL
+    url: str | None = None
 ) -> McpToolset:
     """
     Create a Neo4j MCP toolset with optional tool filtering.
@@ -28,13 +29,13 @@ def create_neo4j_toolset(
         Configured McpToolset
     """
     return McpToolset(
-        connection_params=StreamableHTTPConnectionParams(url=url),
+        connection_params=StreamableHTTPConnectionParams(url=url or get_mcp_url()),
         tool_filter=tools,
     )
 
 
 # Pre-configured toolsets for common use cases
-def read_only_toolset(url: str = DEFAULT_MCP_URL) -> McpToolset:
+def read_only_toolset(url: str | None = None) -> McpToolset:
     """Toolset with only read operations (no writes)."""
     return create_neo4j_toolset(
         tools=['read_neo4j_cypher', 'get_neo4j_schema'],
@@ -42,7 +43,7 @@ def read_only_toolset(url: str = DEFAULT_MCP_URL) -> McpToolset:
     )
 
 
-def full_access_toolset(url: str = DEFAULT_MCP_URL) -> McpToolset:
+def full_access_toolset(url: str | None = None) -> McpToolset:
     """Toolset with full read/write access."""
     return create_neo4j_toolset(
         tools=['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema'],
