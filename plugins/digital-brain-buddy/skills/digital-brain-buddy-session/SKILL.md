@@ -39,8 +39,9 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
 
 6. Treat delegated memory I/O as the default internal execution pattern for this skill:
 - keep the main agent focused on conversation, judgment, and final phrasing
-- delegate bounded graph retrieval to `../digital-brain-buddy-read-memory/SKILL.md`
-- delegate persistence to `../digital-brain-buddy-write-memory/SKILL.md`
+- delegate bounded graph retrieval to `../digital-brain-buddy-read-memory/SKILL.md` — on hosts with native subagents (Claude Code, Cowork), invoke `digital-brain-reader` directly instead of improvising the delegation
+- delegate persistence to `../digital-brain-buddy-write-memory/SKILL.md` — on hosts with native subagents, invoke `digital-brain-writer` directly
+- before writing a new or ambiguous entity that resembles a known core entity, delegate the duplicate check to `digital-brain-entity-check` (native subagent hosts) or the equivalent verification step in `references/subagent-prompts.md` (Codex); never authorize a merge without it
 - serialize writes through one writer worker at a time
 - if the host runtime requires explicit user permission for subagents, honor that constraint and fall back locally until permission exists
 
@@ -70,6 +71,11 @@ Classify each turn before acting:
 ## Subagent Mode
 
 Use this mode by default when the host environment allows delegated execution.
+On Claude Code and Cowork, the reader/writer/entity-check subagents are
+`digital-brain-reader`, `digital-brain-writer`, and `digital-brain-entity-check`
+(see `../../agents/`). On Codex, use the delegation shape declared in each
+skill's `agents/openai.yaml` plus the prompt templates in
+`references/subagent-prompts.md`.
 
 - Main session agent owns:
   - reading `SOUL.MD`
@@ -83,17 +89,21 @@ Use this mode by default when the host environment allows delegated execution.
   - core entities / heavy nodes
   - people map: names, ids, relations to the user, and recurring sensitive themes
   - semantic journal lookup
-  - one-hop or two-hop graph traversal for evidence packs
+  - one-hop, two-hop, and shared-connections related-node traversal for evidence packs
+- Entity-check subagent owns:
+  - verifying whether a new/existing entity name resembling a known core entity shares real graph connections
+  - returning an authorized/not-authorized merge decision, never a guess
 - Writer subagent owns:
   - latest valid `JournalEntry.id`
   - alias-first entity resolution
-  - one chain-safe `JournalEntry` write
+  - one chain-safe `JournalEntry` write with `embed_text` always set
   - returning the created id plus resolved entity ids
 
 Rules:
 
-- Do not offload the final interpretation of the user's situation to the reader or writer.
+- Do not offload the final interpretation of the user's situation to the reader, entity-check, or writer.
 - Prefer running the reader in parallel with local drafting when retrieval is not blocking.
+- Before the writer runs on a new/existing entity that resembles a known core entity, run the entity-check subagent first and only authorize a merge on an "authorized" result; otherwise create a new entity.
 - Run writer tasks serially. Never have two unresolved writer tasks race for the latest journal id.
 - If subagents are unavailable, fall back to the same workflow locally.
 - If the host runtime requires explicit user approval for subagents, treat this mode as the preferred plan and switch to it as soon as that approval exists.
