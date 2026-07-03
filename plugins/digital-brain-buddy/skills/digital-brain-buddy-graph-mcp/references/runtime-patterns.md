@@ -108,7 +108,7 @@ Accepted chain relations:
 `digital_brain/agents/executor.py`
 
 - all mutations go through `write_neo4j_cypher`
-- JournalEntry writes are expected to include `embed_text`
+- JournalEntry writes must include `embed_text` — the MCP server (`mcp_servers/cypher`) hard-rejects the write otherwise
 
 ## Live Graph Snapshot Checked On 2026-04-08
 

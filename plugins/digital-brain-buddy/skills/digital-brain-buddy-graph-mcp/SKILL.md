@@ -32,7 +32,7 @@ Use the Neo4j Cypher MCP tools directly:
 Rules:
 
 - Pass `params` as an object, not a JSON string, when using the MCP connector directly.
-- Use `embed_text` on JournalEntry writes, and on semantic read queries that rely on vector search.
+- `embed_text` is mandatory on JournalEntry writes — the MCP server hard-rejects a JournalEntry create/merge with no `embed_text`. Also use it on semantic read queries that rely on vector search.
 
 ## Read Workflow
 
