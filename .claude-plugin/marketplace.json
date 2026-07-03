@@ -1,0 +1,13 @@
+{
+  "name": "avatar-digital-brain-local",
+  "owner": {
+    "name": "Kyrylo Dubovyk"
+  },
+  "plugins": [
+    {
+      "name": "digital-brain-buddy",
+      "source": "./plugins/digital-brain-buddy",
+      "description": "Buddy persona with Neo4j memory tools for the avatar_digital_brain graph."
+    }
+  ]
+}
