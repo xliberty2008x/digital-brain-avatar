@@ -46,6 +46,7 @@ services:
       - hf-cache:/models/huggingface
 
   mcp-memory:
+    profiles: ["memory"]
     build:
       context: ./mcp-neo4j/servers/mcp-neo4j-memory
     depends_on:

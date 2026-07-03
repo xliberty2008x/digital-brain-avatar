@@ -98,6 +98,8 @@ def main() -> None:
         f"scanned={counters['scanned']} updated={counters['updated']} "
         f"skipped={counters['skipped']} failed={counters['failed']}"
     )
+    if counters["failed"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

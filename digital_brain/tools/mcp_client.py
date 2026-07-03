@@ -144,7 +144,16 @@ async def call_mcp_tool(
                 ) as response:
                     if response.status == 200:
                         result = await _parse_json_or_sse_response(response)
-                        return result.get("result", {})
+                        tool_result = result.get("result", {})
+                        if isinstance(tool_result, dict) and tool_result.get("isError"):
+                            content = tool_result.get("content") or []
+                            error_text = (
+                                content[0].get("text", "")
+                                if content and isinstance(content[0], dict)
+                                else str(tool_result)
+                            )
+                            raise Exception(f"MCP tool '{tool_name}' returned an error: {error_text}")
+                        return tool_result
 
                     elif response.status in [502, 503, 504]:
                         # Cold start or temporary unavailability
@@ -199,7 +208,7 @@ async def execute_cypher(query: str, params: dict = None, embed_text: str | None
             text = content[0].get("text", "[]")
             try:
                 return json.loads(text)
-            except json.JSONDecodeError:
-                return []
-    
+            except json.JSONDecodeError as exc:
+                raise Exception(f"Could not parse Cypher result (first 200 chars): {text[:200]}") from exc
+
     return []

@@ -9,7 +9,16 @@ keeping the current ADK/Gemini agent layer.
 cp .env.example .env.local
 docker compose --profile ollama up -d neo4j ollama
 docker compose exec ollama ollama pull bge-m3
-docker compose --profile ollama up -d mcp-cypher mcp-memory
+docker compose --profile ollama up -d mcp-cypher
+```
+
+`mcp-memory` is gated behind the opt-in `memory` compose profile and is not
+wired up yet: its build context (`./mcp-neo4j/servers/mcp-neo4j-memory`) is a
+submodule reference with no `.gitmodules` entry, so the directory is empty on
+a fresh checkout. Populate that submodule yourself before enabling it:
+
+```bash
+docker compose --profile memory up -d mcp-memory
 ```
 
 The app defaults to:
