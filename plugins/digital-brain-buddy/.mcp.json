@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "digital-brain-neo4j": {
+      "type": "http",
+      "url": "${DIGITAL_BRAIN_MCP_URL:-http://localhost:8000/api/mcp/}",
+      "note": "Local Neo4j Cypher MCP endpoint for avatar_digital_brain. Exposes read_neo4j_cypher, write_neo4j_cypher, and get_neo4j_schema. Override with DIGITAL_BRAIN_MCP_URL."
+    }
+  }
+}
