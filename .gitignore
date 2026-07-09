@@ -11,6 +11,8 @@ wheels/
 
 # Credentials and Secrets
 *.json
+!plugins/**/*.json
+!.claude-plugin/*.json
 .env
 .env.*
 *.env
@@ -24,3 +26,6 @@ backups/
 
 # Prompts
 prompts/
+
+# Local scratch (architecture drafts, ad-hoc notes)
+tmp/

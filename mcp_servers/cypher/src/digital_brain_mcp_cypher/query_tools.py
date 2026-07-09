@@ -10,7 +10,19 @@ READ_FORBIDDEN_RE = re.compile(
     r"\b(CREATE|MERGE|SET|DELETE|DETACH|DROP|REMOVE|CALL\s+dbms|LOAD\s+CSV|CREATE\s+INDEX|DROP\s+INDEX)\b",
     re.IGNORECASE,
 )
-JOURNAL_WRITE_RE = re.compile(r"\b(CREATE|MERGE)\s*\([^)]*:JournalEntry\b", re.IGNORECASE)
+# Keywords that end a CREATE/MERGE node-pattern span. Includes DDL tokens so
+# `CREATE VECTOR INDEX ... FOR (j:JournalEntry)` is not treated as a journal write.
+_CLAUSE_KEYWORDS_RE = (
+    r"CREATE|MERGE|MATCH|WITH|RETURN|WHERE|SET|DELETE|DETACH|REMOVE|UNWIND|CALL|"
+    r"FOREACH|FOR|INDEX|CONSTRAINT|UNIQUE|VECTOR|FULLTEXT|LOOKUP|RANGE|POINT|TEXT"
+)
+# Matches a node labeled :JournalEntry inside a CREATE/MERGE clause, including
+# relationship-chained patterns like `MERGE (p)-[:WROTE]->(j:JournalEntry {...})`.
+# Requires an opening `(` before the label so schema DDL is excluded.
+JOURNAL_WRITE_RE = re.compile(
+    rf"\b(?:CREATE|MERGE)\b(?:(?!\b(?:{_CLAUSE_KEYWORDS_RE})\b).)*?\(\s*[A-Za-z_][A-Za-z0-9_]*\s*:\s*JournalEntry\b",
+    re.IGNORECASE | re.DOTALL,
+)
 EMBEDDING_PARAM_RE = re.compile(r"\$embedding\b")
 
 
@@ -38,10 +50,15 @@ def with_embedding_param(params: dict[str, Any] | None, embedding: list[float] |
 
 
 def validate_embedding_usage(query: str, embed_text: str | None) -> None:
-    """Require JournalEntry writes with embed_text to consume `$embedding`."""
-    if not embed_text:
+    """Require JournalEntry writes to always pass embed_text and consume `$embedding`."""
+    query = query or ""
+    if not JOURNAL_WRITE_RE.search(query):
         return
-    if JOURNAL_WRITE_RE.search(query or "") and not EMBEDDING_PARAM_RE.search(query or ""):
+    if embed_text is None or not str(embed_text).strip():
+        raise ValueError(
+            "JournalEntry writes must pass embed_text so the entry gets an embedding"
+        )
+    if not EMBEDDING_PARAM_RE.search(query):
         raise ValueError(
             "JournalEntry writes that pass embed_text must set an embedding property with `$embedding`"
         )

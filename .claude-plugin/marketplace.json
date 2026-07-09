@@ -1,0 +1,14 @@
+{
+  "name": "avatar-digital-brain-local",
+  "description": "Local-only marketplace for testing the digital-brain-buddy plugin against this repo's checkout.",
+  "owner": {
+    "name": "Kyrylo Dubovyk"
+  },
+  "plugins": [
+    {
+      "name": "digital-brain-buddy",
+      "source": "./plugins/digital-brain-buddy",
+      "description": "Buddy persona with Neo4j memory tools for the avatar_digital_brain graph."
+    }
+  ]
+}

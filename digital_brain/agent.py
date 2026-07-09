@@ -160,6 +160,24 @@ class DigitalBrainOrchestrator(BaseAgent):
                 ctx.session.state["potential_core_entities"] = core_entities
             except Exception as e:
                 print(f"⚠️ Core Entity Lookup failed: {e}")
+            
+            # Step 1.7: RECENT JOURNAL ENTRIES (Phase 0.5)
+            # Load last 3 journal entries for fallback context
+            ctx.session.state["recent_journal_entries"] = []
+            ctx.session.state["last_journal_entry_id"] = None
+            try:
+                from .services.recent_entries_service import (
+                    get_recent_journal_entries,
+                    get_latest_journal_entry_id,
+                )
+                recent_entries = await get_recent_journal_entries(limit=3)
+                ctx.session.state["recent_journal_entries"] = recent_entries
+                last_entry_id = await get_latest_journal_entry_id()
+                ctx.session.state["last_journal_entry_id"] = last_entry_id
+                if last_entry_id:
+                    print(f"🔗 LAST JOURNAL ENTRY ID: {last_entry_id}")
+            except Exception as e:
+                print(f"⚠️ Recent Entries Lookup failed: {e}")
                 
             # Step 2: Retrieve Context from DB (MCP - Network sensitive)
             # Pass accumulated findings to retriever

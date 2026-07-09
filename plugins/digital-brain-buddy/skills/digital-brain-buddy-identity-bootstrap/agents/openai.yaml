@@ -1,0 +1,4 @@
+interface:
+  display_name: "Digital Brain Buddy Identity"
+  short_description: "Initialize or refine the bundled SOUL file"
+  default_prompt: "Use $digital-brain-buddy-identity-bootstrap to initialize or rewrite the Digital Brain buddy SOUL file."

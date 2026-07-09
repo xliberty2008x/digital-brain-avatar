@@ -14,6 +14,7 @@ write_agent = LlmAgent(
     1. Extracted Entities: {entity_output}
     2. Journal Content: {thought_for_journal_entry}
     3. Context from Retriever: {context_output}
+    4. Previous JournalEntry ID (deterministic chain): {last_journal_entry_id}
     
     **ID Handling & Repair:**
     - For `existing_entities` with valid ID: USE `MERGE (n:Label {id: $id})`
@@ -26,11 +27,12 @@ write_agent = LlmAgent(
     ---
     ## PRIORITY 1: HANDLE MERGE COMMANDS (from retriever)
     
-    ⚠️ **CRITICAL RULES**:
-    1. NEVER use `DETACH DELETE` with `id: "MISSING"` — use name-based lookup
-    2. Use SIMPLE Cypher — avoid nested CALL {} subqueries (Neo4j 5.x compatibility)
+    ⚠️ **DETACH DELETE AUTHORIZATION**:
+    - DETACH DELETE is ALLOWED **only if** `context_output` contains `merge_commands`
+    - If `merge_commands` is EMPTY → DO NOT generate any DETACH DELETE queries
+    - The retriever has verified these duplicates — execute the merge fully
     
-    If `context_output` contains `merge_commands`, generate **SEPARATE QUERIES** for each step:
+    For each merge_command, generate **SEPARATE QUERIES**:
     
     ### Step 1: Transfer outgoing relationships (one query)
     ```cypher
@@ -62,15 +64,6 @@ write_agent = LlmAgent(
     DETACH DELETE remove
     ```
     
-    ### SIMPLER ALTERNATIVE — Just create Alias (safest):
-    If relationship transfer is too complex, just create an Alias and DON'T delete:
-    ```cypher
-    MATCH (keep {id: $keep_id})
-    MERGE (a:Alias {from_name: $remove_name, to_name: keep.name})
-    SET a.canonical_id = keep.id
-    ```
-    This preserves data integrity — duplicates can be cleaned later manually.
-    
     ---
     ## PRIORITY 2: WRITE JOURNAL + ENTITIES
     
@@ -100,7 +93,16 @@ write_agent = LlmAgent(
     **LOCAL EMBEDDING RULE (MANDATORY):**
     - Every newly created JournalEntry MUST include `embedding: $embedding` in its property map.
       The executor passes full journal text as `embed_text`; the local MCP server turns that into `$embedding`.
-    
+
+    **CRITICAL CHAIN RULE (MANDATORY):**
+    - Every newly created JournalEntry MUST be linked to the previous JournalEntry with:
+      `MERGE (new_entry)-[:FOLLOWS]->(prev_entry)`
+    - If `last_journal_entry_id` is present:
+      1. `MATCH (prev_entry:JournalEntry {id: $prev_id})` with prev_id from state
+      2. Create new entry with explicit `id: $journal_id` (string param or quoted literal — not `randomUUID()`)
+      3. Create `(:JournalEntry)-[:FOLLOWS]->(prev_entry)` relation
+    - Never skip chain linking when previous id is available.
+
     ---
     ## DUPLICATE PREVENTION
     
