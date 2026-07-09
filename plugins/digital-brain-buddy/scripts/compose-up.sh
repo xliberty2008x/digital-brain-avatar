@@ -48,9 +48,15 @@ while true; do
   sleep 2
 done
 
-if ! docker compose --profile ollama up -d mcp-cypher; then
-  warn_and_exit "failed to start mcp-cypher"
+# Rebuild + recreate mcp-cypher so SessionStart / /digital-brain-up pick up
+# local source changes (hard-reject, embeddings). Cached layers keep builds
+# cheap when nothing changed; --force-recreate ensures the container is not
+# left running an old image under the same tag. Cold builds may approach the
+# hook timeout (hooks.json: 180s).
+echo "$PLUGIN_NAME: building and (re)starting mcp-cypher from local sources..."
+if ! docker compose --profile ollama up -d --build --force-recreate mcp-cypher; then
+  warn_and_exit "failed to build/start mcp-cypher"
 fi
 
-echo "$PLUGIN_NAME: local Neo4j + Cypher MCP stack is up"
+echo "$PLUGIN_NAME: local Neo4j + Cypher MCP stack is up (mcp-cypher rebuilt)"
 exit 0
