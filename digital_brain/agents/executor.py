@@ -1,14 +1,22 @@
 from google.adk.agents.llm_agent import LlmAgent
 from ..tools.neo4j_toolkit import full_access_toolset
+from ..callbacks.combined_before_tool_callbacks import combined_before_tool_callback
 from ..callbacks.combined_tool_callbacks import combined_after_tool_callback
-from ..callbacks.journal_chain_guard import journal_chain_guard_before_tool_callback
+from ..callbacks.journal_chain_guard import journal_chain_guard_after_tool_callback
+
+
+async def _executor_after_tool_callback(tool, args, tool_context, tool_response):
+    """Chain-guard advance first, then shared after-tool filters."""
+    await journal_chain_guard_after_tool_callback(tool, args, tool_context, tool_response)
+    return combined_after_tool_callback(tool, args, tool_context, tool_response)
+
 
 executor_agent = LlmAgent(
     model="gemini-3-flash-preview",
     name="executor_agent",
     include_contents='none',
-    before_tool_callback=journal_chain_guard_before_tool_callback,
-    after_tool_callback=combined_after_tool_callback,
+    before_tool_callback=combined_before_tool_callback,
+    after_tool_callback=_executor_after_tool_callback,
     instruction="""
     You are an execution agent for the Digital Brain.
     

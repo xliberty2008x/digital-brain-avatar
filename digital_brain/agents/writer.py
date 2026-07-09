@@ -98,8 +98,8 @@ write_agent = LlmAgent(
     - Every newly created JournalEntry MUST be linked to the previous JournalEntry with:
       `MERGE (new_entry)-[:FOLLOWS]->(prev_entry)`
     - If `last_journal_entry_id` is present:
-      1. `MATCH (prev_entry:JournalEntry {id: "<last_journal_entry_id>"})`
-      2. Create new entry with explicit `id`
+      1. `MATCH (prev_entry:JournalEntry {id: $prev_id})` with prev_id from state
+      2. Create new entry with explicit `id: $journal_id` (string param or quoted literal — not `randomUUID()`)
       3. Create `(:JournalEntry)-[:FOLLOWS]->(prev_entry)` relation
     - Never skip chain linking when previous id is available.
 

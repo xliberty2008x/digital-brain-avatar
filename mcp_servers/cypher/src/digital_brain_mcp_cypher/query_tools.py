@@ -10,12 +10,17 @@ READ_FORBIDDEN_RE = re.compile(
     r"\b(CREATE|MERGE|SET|DELETE|DETACH|DROP|REMOVE|CALL\s+dbms|LOAD\s+CSV|CREATE\s+INDEX|DROP\s+INDEX)\b",
     re.IGNORECASE,
 )
-_CLAUSE_KEYWORDS_RE = r"CREATE|MERGE|MATCH|WITH|RETURN|WHERE|SET|DELETE|DETACH|REMOVE|UNWIND|CALL|FOREACH"
-# Matches a `:JournalEntry` label anywhere within a CREATE/MERGE clause, including
-# relationship-chained patterns like `MERGE (p)-[:WROTE]->(j:JournalEntry {...})`,
-# not just when JournalEntry is the first node right after CREATE/MERGE.
+# Keywords that end a CREATE/MERGE node-pattern span. Includes DDL tokens so
+# `CREATE VECTOR INDEX ... FOR (j:JournalEntry)` is not treated as a journal write.
+_CLAUSE_KEYWORDS_RE = (
+    r"CREATE|MERGE|MATCH|WITH|RETURN|WHERE|SET|DELETE|DETACH|REMOVE|UNWIND|CALL|"
+    r"FOREACH|FOR|INDEX|CONSTRAINT|UNIQUE|VECTOR|FULLTEXT|LOOKUP|RANGE|POINT|TEXT"
+)
+# Matches a node labeled :JournalEntry inside a CREATE/MERGE clause, including
+# relationship-chained patterns like `MERGE (p)-[:WROTE]->(j:JournalEntry {...})`.
+# Requires an opening `(` before the label so schema DDL is excluded.
 JOURNAL_WRITE_RE = re.compile(
-    rf"\b(?:CREATE|MERGE)\b(?:(?!\b(?:{_CLAUSE_KEYWORDS_RE})\b).)*?:\s*JournalEntry\b",
+    rf"\b(?:CREATE|MERGE)\b(?:(?!\b(?:{_CLAUSE_KEYWORDS_RE})\b).)*?\(\s*[A-Za-z_][A-Za-z0-9_]*\s*:\s*JournalEntry\b",
     re.IGNORECASE | re.DOTALL,
 )
 EMBEDDING_PARAM_RE = re.compile(r"\$embedding\b")
@@ -49,7 +54,7 @@ def validate_embedding_usage(query: str, embed_text: str | None) -> None:
     query = query or ""
     if not JOURNAL_WRITE_RE.search(query):
         return
-    if not embed_text:
+    if embed_text is None or not str(embed_text).strip():
         raise ValueError(
             "JournalEntry writes must pass embed_text so the entry gets an embedding"
         )

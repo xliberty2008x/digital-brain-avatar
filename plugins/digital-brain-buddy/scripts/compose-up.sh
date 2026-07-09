@@ -16,6 +16,10 @@ fi
 
 cd "$CLAUDE_PROJECT_DIR" || warn_and_exit "cannot cd to CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR), skipping compose bring-up"
 
+if [ ! -f docker-compose.yml ] && [ ! -f compose.yml ]; then
+  warn_and_exit "no docker-compose.yml in $CLAUDE_PROJECT_DIR (expected avatar_digital_brain repo root), skipping compose bring-up"
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   warn_and_exit "docker not found, skipping local Neo4j/MCP bring-up"
 fi

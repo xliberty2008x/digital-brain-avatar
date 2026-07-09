@@ -102,3 +102,22 @@ def test_validate_embedding_usage_allows_unrelated_journal_read_without_embed_te
     query = "MATCH (j:JournalEntry) RETURN j"
 
     validate_embedding_usage(query, None)
+
+
+def test_validate_embedding_usage_allows_vector_index_ddl_without_embed_text():
+    query = """
+    CREATE VECTOR INDEX journal_entry_embedding_index IF NOT EXISTS
+    FOR (j:JournalEntry) ON (j.embedding)
+    OPTIONS {indexConfig: {`vector.dimensions`: 1024, `vector.similarity_function`: 'cosine'}}
+    """
+    validate_embedding_usage(query, None)
+
+
+def test_validate_embedding_usage_rejects_whitespace_only_embed_text():
+    query = "CREATE (j:JournalEntry {id: $id, content: $content, embedding: $embedding}) RETURN j"
+    try:
+        validate_embedding_usage(query, "   ")
+    except ValueError as exc:
+        assert "embed_text" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")

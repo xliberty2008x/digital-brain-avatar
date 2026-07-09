@@ -47,6 +47,7 @@ Rules:
 
 - Pass `params` as an object, not a JSON string, when using the MCP connector directly.
 - `embed_text` is mandatory on JournalEntry writes — the MCP server hard-rejects a JournalEntry create/merge with no `embed_text`. Also use it on semantic read queries that rely on vector search.
+- The plugin MCP URL in `.mcp.json` is a literal `http://localhost:8000/api/mcp/` (some hosts do not expand shell-style env defaults). To point elsewhere, edit that file or call the repo HTTP client with `DIGITAL_BRAIN_MCP_URL`.
 
 ## Read Workflow
 
