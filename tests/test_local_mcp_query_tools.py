@@ -46,8 +46,14 @@ def test_read_only_rejects_mutating_cypher():
         raise AssertionError("expected ValueError")
 
 
-def test_validate_dimensions_truncates_overlong_vectors():
-    assert _validate_dimensions([1, 2, 3, 4], 2) == [1.0, 2.0]
+def test_validate_dimensions_rejects_mismatched_length():
+    try:
+        _validate_dimensions([1, 2, 3, 4], 2)
+    except ValueError as exc:
+        assert "dimension mismatch" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+    assert _validate_dimensions([1, 2], 2) == [1.0, 2.0]
 
 
 def test_validate_embedding_usage_rejects_journal_write_missing_embed_text():
