@@ -8,7 +8,7 @@ warn_and_exit() {
   exit 0
 }
 
-echo "$PLUGIN_NAME: bringing up local Neo4j + MCP stack..."
+echo "$PLUGIN_NAME: bringing up local Neo4j + Cypher MCP stack..."
 
 if [ -z "${CLAUDE_PROJECT_DIR:-}" ]; then
   warn_and_exit "CLAUDE_PROJECT_DIR not set, skipping compose bring-up"
@@ -24,8 +24,8 @@ if ! docker compose version >/dev/null 2>&1; then
   warn_and_exit "docker compose not available, skipping local Neo4j/MCP bring-up"
 fi
 
-if ! docker compose --profile ollama up -d neo4j; then
-  warn_and_exit "failed to start neo4j, skipping mcp-cypher/mcp-memory bring-up"
+if ! docker compose --profile ollama up -d neo4j ollama; then
+  warn_and_exit "failed to start neo4j/ollama, skipping mcp-cypher bring-up"
 fi
 
 echo "$PLUGIN_NAME: waiting for neo4j healthcheck..."
@@ -44,9 +44,9 @@ while true; do
   sleep 2
 done
 
-if ! docker compose --profile ollama up -d mcp-cypher mcp-memory; then
-  warn_and_exit "failed to start mcp-cypher/mcp-memory"
+if ! docker compose --profile ollama up -d mcp-cypher; then
+  warn_and_exit "failed to start mcp-cypher"
 fi
 
-echo "$PLUGIN_NAME: local Neo4j + MCP stack is up"
+echo "$PLUGIN_NAME: local Neo4j + Cypher MCP stack is up"
 exit 0

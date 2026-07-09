@@ -73,6 +73,13 @@ Prefer short bullet-like summaries over raw dumps.
 
 ## Rules
 
+- Use only the plugin-owned `digital-brain-neo4j` MCP server from `.mcp.json`.
+- Do not use the ChatGPT Apps connector `mcp__codex_apps__neo4j_cypher`; it is
+  separate from this plugin and may point at the retired Cloud Run service.
+- If the plugin-owned MCP tools are not visible in the thread, report that
+  plugin MCP discovery failed and use the repo-local HTTP client with
+  `DIGITAL_BRAIN_MCP_URL=<plugin .mcp.json url>` from the `avatar_digital_brain`
+  repo instead of calling the stale app connector.
 - Ground claims in graph evidence.
 - Separate direct facts from inference.
 - If the graph is thin or conflicting, say so directly.

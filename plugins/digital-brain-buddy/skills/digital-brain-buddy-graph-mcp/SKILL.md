@@ -23,7 +23,21 @@ Use this skill when Codex needs to inspect or mutate the `avatar_digital_brain` 
 
 ## MCP Tools
 
-Use the Neo4j Cypher MCP tools directly:
+Use the plugin-owned local Neo4j Cypher MCP server only:
+
+- Server id: `digital-brain-neo4j`
+- Config source: this plugin's `.mcp.json`
+- Expected local URL shape: `http://<mac-reachable-host>:8000/api/mcp/`
+
+Do not use the ChatGPT Apps connector named `Neo4j Cypher`
+(`mcp__codex_apps__neo4j_cypher`). That connector is a separate app/link, not
+this plugin's MCP server, and may still point at the retired Cloud Run service.
+If only `mcp__codex_apps__neo4j_cypher` is visible, treat plugin MCP discovery
+as broken for that thread and fall back to the repo-local HTTP client:
+`DIGITAL_BRAIN_MCP_URL=<plugin .mcp.json url> uv run python ...` from the
+`avatar_digital_brain` repo.
+
+Expected tools on `digital-brain-neo4j`:
 
 - `get_neo4j_schema(sample_size=100)` when labels or relationship names are uncertain.
 - `read_neo4j_cypher(query, params, embed_text)` for reads and vector search.
@@ -78,6 +92,7 @@ Rules:
 ## Do Not
 
 - Do not trust stale prompt docs over the live graph.
+- Do not use `mcp__codex_apps__neo4j_cypher`; it is not the plugin-owned MCP server.
 - Do not create a `JournalEntry` without explicit `id` and chain link.
 - Do not assume all mentions use one relationship type.
 - Do not stringify `params` when calling the direct MCP connector.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Digital Brain Buddy Graph MCP"
+  short_description: "Use Neo4j MCP with real graph patterns"
+  default_prompt: "Use $digital-brain-buddy-graph-mcp to query or update the avatar_digital_brain graph through Neo4j MCP using the repo's real storage patterns."

@@ -26,3 +26,6 @@ backups/
 
 # Prompts
 prompts/
+
+# Local scratch (architecture drafts, ad-hoc notes)
+tmp/

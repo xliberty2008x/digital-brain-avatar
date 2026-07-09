@@ -1,5 +1,5 @@
 {
-  "description": "Bring up local Neo4j + MCP stack for the digital-brain-buddy plugin",
+  "description": "Bring up local Neo4j + Cypher MCP stack for the digital-brain-buddy plugin",
   "hooks": {
     "SessionStart": [
       {

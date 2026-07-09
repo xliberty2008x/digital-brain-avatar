@@ -1,0 +1,4 @@
+interface:
+  display_name: "Digital Brain Buddy Session"
+  short_description: "Run the buddy persona and orchestrate graph memory"
+  default_prompt: "Use $digital-brain-buddy-session to answer as the Digital Brain buddy. The default internal workflow is: keep the main context for the conversation, delegate bounded memory reads or writes to the dedicated buddy memory skills when the host environment allows it, and otherwise fall back locally without changing the user-facing behavior."

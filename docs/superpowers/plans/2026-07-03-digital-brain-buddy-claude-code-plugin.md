@@ -78,7 +78,7 @@ between tasks) rather than executing tasks inline.
 **Interfaces:**
 - Produces: `validate_embedding_usage(query: str, embed_text: str | None) -> None` — now raises `ValueError` for *any* `CREATE`/`MERGE (:JournalEntry ...)` query where `embed_text` is falsy (previously only checked the `$embedding` param when `embed_text` was already provided). Call site is unchanged: `mcp_servers/cypher/src/digital_brain_mcp_cypher/server.py`'s `write_neo4j_cypher` already calls `validate_embedding_usage(query, embed_text)` before running the write.
 
-- [ ] **Step 1: Write the two new failing/characterization tests**
+- [x] **Step 1: Write the two new failing/characterization tests**
 
 Add to the end of `tests/test_local_mcp_query_tools.py`:
 
@@ -100,12 +100,12 @@ def test_validate_embedding_usage_allows_non_journal_write_without_embed_text():
     validate_embedding_usage(query, None)
 ```
 
-- [ ] **Step 2: Run the test file and confirm the expected failure**
+- [x] **Step 2: Run the test file and confirm the expected failure**
 
 Run: `uv run pytest tests/test_local_mcp_query_tools.py -v`
 Expected: `test_validate_embedding_usage_rejects_journal_write_missing_embed_text` **FAILS** with `AssertionError: expected ValueError` (current code returns early on falsy `embed_text` without raising). The other 6 tests (5 existing + the new non-journal characterization test) **PASS** — the non-journal test already holds under today's implementation, it's here to lock in the "don't false-positive on non-JournalEntry writes" behavior going forward.
 
-- [ ] **Step 3: Implement the hard-reject rule**
+- [x] **Step 3: Implement the hard-reject rule**
 
 In `mcp_servers/cypher/src/digital_brain_mcp_cypher/query_tools.py`, replace:
 
@@ -137,12 +137,12 @@ def validate_embedding_usage(query: str, embed_text: str | None) -> None:
         )
 ```
 
-- [ ] **Step 4: Run the full test file and confirm all pass**
+- [x] **Step 4: Run the full test file and confirm all pass**
 
 Run: `uv run pytest tests/test_local_mcp_query_tools.py -v`
 Expected: `7 passed`
 
-- [ ] **Step 5: Simplify pass**
+- [x] **Step 5: Simplify pass**
 
 Dispatch a `code-simplifier` agent scoped to
 `mcp_servers/cypher/src/digital_brain_mcp_cypher/query_tools.py` (reuse/
@@ -150,14 +150,14 @@ efficiency/clarity only — it must not change behavior). After it returns,
 re-run `uv run pytest tests/test_local_mcp_query_tools.py -v` and confirm
 `7 passed` again.
 
-- [ ] **Step 6: Review pass**
+- [x] **Step 6: Review pass**
 
 Dispatch a `pr-review-toolkit:code-reviewer` agent scoped to the diff of
 `mcp_servers/cypher/src/digital_brain_mcp_cypher/query_tools.py`. Address any
 high-confidence findings it raises, re-running the tests after each fix,
 before moving on.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add mcp_servers/cypher/src/digital_brain_mcp_cypher/query_tools.py tests/test_local_mcp_query_tools.py
@@ -174,7 +174,7 @@ git commit -m "fix: hard-reject JournalEntry writes missing embed_text at the MC
 **Interfaces:**
 - Produces: the `digital-brain-neo4j` MCP server entry all skills/subagents connect through, now resolving to the same local endpoint the rest of the repo uses.
 
-- [ ] **Step 1: Replace the Cloud Run URL with the local env-driven default**
+- [x] **Step 1: Replace the Cloud Run URL with the local env-driven default**
 
 Replace the full contents of `plugins/digital-brain-buddy/.mcp.json`:
 
@@ -190,17 +190,17 @@ Replace the full contents of `plugins/digital-brain-buddy/.mcp.json`:
 }
 ```
 
-- [ ] **Step 2: Validate JSON syntax**
+- [x] **Step 2: Validate JSON syntax**
 
 Run: `python3 -m json.tool plugins/digital-brain-buddy/.mcp.json`
 Expected: pretty-printed JSON is echoed back with no error.
 
-- [ ] **Step 3: Confirm the stale URL is gone from the repo**
+- [x] **Step 3: Confirm the stale URL is gone from the repo**
 
 Run: `grep -rn "run.app" plugins/digital-brain-buddy/`
 Expected: no output (no matches).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add plugins/digital-brain-buddy/.mcp.json
@@ -219,7 +219,7 @@ git commit -m "fix: point digital-brain-buddy plugin at the local Neo4j MCP endp
 **Interfaces:**
 - Produces: a `digital-brain-buddy` plugin name that Claude Code and Cowork's plugin browsers recognize, and an `avatar-digital-brain-local` marketplace name that Task 9's manual verification installs from.
 
-- [ ] **Step 1: Create the Claude Code / Cowork manifest**
+- [x] **Step 1: Create the Claude Code / Cowork manifest**
 
 Create `plugins/digital-brain-buddy/.claude-plugin/plugin.json`:
 
@@ -244,7 +244,7 @@ Create `plugins/digital-brain-buddy/.claude-plugin/plugin.json`:
 
 No custom `skills`/`agents`/`hooks`/`mcpServers` path overrides are needed — Claude Code and Cowork both auto-discover `skills/`, `agents/`, `hooks/hooks.json`, and `.mcp.json` at plugin root by default.
 
-- [ ] **Step 2: Create the Cowork re-sync version marker**
+- [x] **Step 2: Create the Cowork re-sync version marker**
 
 Create `plugins/digital-brain-buddy/version.json`:
 
@@ -252,7 +252,7 @@ Create `plugins/digital-brain-buddy/version.json`:
 "0.1.0"
 ```
 
-- [ ] **Step 3: Create the repo-root local marketplace descriptor**
+- [x] **Step 3: Create the repo-root local marketplace descriptor**
 
 Create `.claude-plugin/marketplace.json`:
 
@@ -272,7 +272,7 @@ Create `.claude-plugin/marketplace.json`:
 }
 ```
 
-- [ ] **Step 4: Validate both manifests**
+- [x] **Step 4: Validate both manifests**
 
 Run:
 ```bash
@@ -281,7 +281,7 @@ claude plugin validate . --strict
 ```
 Expected: both commands report the manifest as valid (no errors; `--strict` also surfaces unrecognized-field warnings as errors, so a clean pass here means the JSON shape matches what Claude Code expects).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add plugins/digital-brain-buddy/.claude-plugin/plugin.json plugins/digital-brain-buddy/version.json .claude-plugin/marketplace.json
@@ -299,7 +299,7 @@ git commit -m "feat: add Claude Code/Cowork plugin manifest and local marketplac
 **Interfaces:**
 - Produces: a documented `Related nodes via shared connections` Cypher template that Task 6's `digital-brain-entity-check` subagent also references by name.
 
-- [ ] **Step 1: Add the related-node Cypher template to `runtime-patterns.md`**
+- [x] **Step 1: Add the related-node Cypher template to `runtime-patterns.md`**
 
 In `plugins/digital-brain-buddy/skills/digital-brain-buddy-graph-mcp/references/runtime-patterns.md`, insert a new section between `### Alias-first entity lookup` and `### Chain-safe JournalEntry write skeleton`:
 
@@ -354,7 +354,7 @@ LIMIT 10
 ### Chain-safe JournalEntry write skeleton
 ```
 
-- [ ] **Step 2: Add related-node discovery to the read-memory skill's scope**
+- [x] **Step 2: Add related-node discovery to the read-memory skill's scope**
 
 In `plugins/digital-brain-buddy/skills/digital-brain-buddy-read-memory/SKILL.md`, find:
 
@@ -374,7 +374,7 @@ Replace with:
 - alias-first identity checks when a name is ambiguous
 ```
 
-- [ ] **Step 3: Add related nodes to the read-memory skill's output shape**
+- [x] **Step 3: Add related nodes to the read-memory skill's output shape**
 
 In the same file, find:
 
@@ -405,12 +405,12 @@ Return a compact evidence pack for the parent session agent:
 - ids or canonical names worth reusing in later writes
 ```
 
-- [ ] **Step 4: Confirm the file structure is intact**
+- [x] **Step 4: Confirm the file structure is intact**
 
 Run: `grep -c "^##" plugins/digital-brain-buddy/skills/digital-brain-buddy-read-memory/SKILL.md`
 Expected: `6` (unchanged section count — this task only edits list items inside existing sections, it doesn't add or remove `##` headings).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add plugins/digital-brain-buddy/skills/digital-brain-buddy-graph-mcp/references/runtime-patterns.md plugins/digital-brain-buddy/skills/digital-brain-buddy-read-memory/SKILL.md
@@ -429,7 +429,7 @@ git commit -m "feat: add shared-connections related-node discovery to the read s
 **Interfaces:**
 - Consumes: Task 1's hard-reject behavior in `query_tools.py` (this task only updates prose to match it).
 
-- [ ] **Step 1: Update write-memory's Write Rules**
+- [x] **Step 1: Update write-memory's Write Rules**
 
 In `plugins/digital-brain-buddy/skills/digital-brain-buddy-write-memory/SKILL.md`, find:
 
@@ -453,7 +453,7 @@ Replace with:
 - Keep the query serial and deterministic.
 ```
 
-- [ ] **Step 2: Update graph-mcp's MCP Tools rules**
+- [x] **Step 2: Update graph-mcp's MCP Tools rules**
 
 In `plugins/digital-brain-buddy/skills/digital-brain-buddy-graph-mcp/SKILL.md`, find:
 
@@ -473,7 +473,7 @@ Rules:
 - `embed_text` is mandatory on JournalEntry writes — the MCP server hard-rejects a JournalEntry create/merge with no `embed_text`. Also use it on semantic read queries that rely on vector search.
 ```
 
-- [ ] **Step 3: Update runtime-patterns' execution path note**
+- [x] **Step 3: Update runtime-patterns' execution path note**
 
 In `plugins/digital-brain-buddy/skills/digital-brain-buddy-graph-mcp/references/runtime-patterns.md`, find:
 
@@ -497,12 +497,12 @@ Replace with:
 - JournalEntry writes must include `embed_text` — the MCP server (`mcp_servers/cypher`) hard-rejects the write otherwise
 ```
 
-- [ ] **Step 4: Confirm no stale "expected to include" wording remains**
+- [x] **Step 4: Confirm no stale "expected to include" wording remains**
 
 Run: `grep -rn "expected to include" plugins/digital-brain-buddy/`
 Expected: no output.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add plugins/digital-brain-buddy/skills/digital-brain-buddy-write-memory/SKILL.md plugins/digital-brain-buddy/skills/digital-brain-buddy-graph-mcp/SKILL.md plugins/digital-brain-buddy/skills/digital-brain-buddy-graph-mcp/references/runtime-patterns.md
@@ -522,7 +522,7 @@ git commit -m "docs: make embed_text mandatory (not preferred) consistent across
 - Consumes: Task 4's "Related nodes via shared connections" template (referenced by name from `digital-brain-entity-check.md`).
 - Produces: three subagent names — `digital-brain-reader`, `digital-brain-writer`, `digital-brain-entity-check` — that Task 7's session skill update names explicitly.
 
-- [ ] **Step 1: Create the reader subagent**
+- [x] **Step 1: Create the reader subagent**
 
 Create `plugins/digital-brain-buddy/agents/digital-brain-reader.md`:
 
@@ -550,7 +550,7 @@ Return a compact evidence pack to the caller. Do not answer the user
 directly and do not write to the graph.
 ```
 
-- [ ] **Step 2: Create the writer subagent**
+- [x] **Step 2: Create the writer subagent**
 
 Create `plugins/digital-brain-buddy/agents/digital-brain-writer.md`:
 
@@ -578,7 +578,7 @@ the write otherwise. Return the created journal id and any canonical entity
 ids used. Do not answer the user directly.
 ```
 
-- [ ] **Step 3: Create the entity-check subagent**
+- [x] **Step 3: Create the entity-check subagent**
 
 Create `plugins/digital-brain-buddy/agents/digital-brain-entity-check.md`:
 
@@ -623,12 +623,12 @@ Return: `{ "authorized": bool, "keep_id": ..., "keep_name": ..., "reason": ... }
 Never write to the graph and never produce final buddy-voice prose.
 ```
 
-- [ ] **Step 4: Validate the plugin manifest picks up the new agents**
+- [x] **Step 4: Validate the plugin manifest picks up the new agents**
 
 Run: `claude plugin validate plugins/digital-brain-buddy --strict`
 Expected: valid, no errors (agents are auto-discovered from `agents/*.md`, no manifest change needed since Task 3 didn't set custom paths).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add plugins/digital-brain-buddy/agents/
@@ -645,7 +645,7 @@ git commit -m "feat: add native digital-brain-reader/writer/entity-check subagen
 **Interfaces:**
 - Consumes: `digital-brain-reader`, `digital-brain-writer`, `digital-brain-entity-check` (Task 6).
 
-- [ ] **Step 1: Name the concrete subagents in "Start Here" step 6**
+- [x] **Step 1: Name the concrete subagents in "Start Here" step 6**
 
 Find:
 
@@ -670,7 +670,7 @@ Replace with:
 - if the host runtime requires explicit user permission for subagents, honor that constraint and fall back locally until permission exists
 ```
 
-- [ ] **Step 2: Update the "Subagent Mode" section's opening and reader bullet**
+- [x] **Step 2: Update the "Subagent Mode" section's opening and reader bullet**
 
 Find:
 
@@ -751,12 +751,12 @@ Rules:
 - If the host runtime requires explicit user approval for subagents, treat this mode as the preferred plan and switch to it as soon as that approval exists.
 ```
 
-- [ ] **Step 3: Confirm the file still has the same top-level section count plus no leftover duplicate headings**
+- [x] **Step 3: Confirm the file still has the same top-level section count plus no leftover duplicate headings**
 
 Run: `grep -n "^## " plugins/digital-brain-buddy/skills/digital-brain-buddy-session/SKILL.md`
 Expected: exactly one `## Subagent Mode` line in the output (no duplicated section from a bad replace).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add plugins/digital-brain-buddy/skills/digital-brain-buddy-session/SKILL.md
@@ -775,7 +775,7 @@ git commit -m "feat: wire session skill to native reader/writer/entity-check sub
 **Interfaces:**
 - Produces: `scripts/compose-up.sh` (invoked by both the hook and the command), always exits `0`.
 
-- [ ] **Step 1: Create the compose bring-up script**
+- [x] **Step 1: Create the compose bring-up script**
 
 Create `plugins/digital-brain-buddy/scripts/compose-up.sh`:
 
@@ -833,11 +833,11 @@ echo "digital-brain-buddy: local Neo4j + MCP stack is up"
 exit 0
 ```
 
-- [ ] **Step 2: Make the script executable**
+- [x] **Step 2: Make the script executable**
 
 Run: `chmod +x plugins/digital-brain-buddy/scripts/compose-up.sh`
 
-- [ ] **Step 3: Create the SessionStart hook config**
+- [x] **Step 3: Create the SessionStart hook config**
 
 Create `plugins/digital-brain-buddy/hooks/hooks.json`:
 
@@ -861,7 +861,7 @@ Create `plugins/digital-brain-buddy/hooks/hooks.json`:
 }
 ```
 
-- [ ] **Step 4: Create the manual recovery command**
+- [x] **Step 4: Create the manual recovery command**
 
 Create `plugins/digital-brain-buddy/commands/digital-brain-up.md`:
 
@@ -878,12 +878,12 @@ service failed to become healthy, show the exact warning it printed and
 suggest running `docker compose ps` from the repo root to diagnose further.
 ```
 
-- [ ] **Step 5: Smoke-test the script directly (without a running session)**
+- [x] **Step 5: Smoke-test the script directly (without a running session)**
 
 Run: `CLAUDE_PROJECT_DIR="$(pwd)" bash plugins/digital-brain-buddy/scripts/compose-up.sh`
 Expected: either ends with `digital-brain-buddy: local Neo4j + MCP stack is up` (if Docker is running and the stack starts cleanly) or a clear `digital-brain-buddy: ...` warning line on stderr followed by exit code `0` — run `echo $?` afterward and confirm it prints `0` either way.
 
-- [ ] **Step 6: Validate the hook JSON and plugin manifest**
+- [x] **Step 6: Validate the hook JSON and plugin manifest**
 
 Run:
 ```bash
@@ -892,14 +892,14 @@ claude plugin validate plugins/digital-brain-buddy --strict
 ```
 Expected: both succeed with no errors.
 
-- [ ] **Step 7: Simplify pass**
+- [x] **Step 7: Simplify pass**
 
 Dispatch a `code-simplifier` agent scoped to
 `plugins/digital-brain-buddy/scripts/compose-up.sh` (clarity/reuse only, no
 behavior change). Re-run Step 5's smoke test after it returns and confirm
 the exit code is still `0`.
 
-- [ ] **Step 8: Review pass**
+- [x] **Step 8: Review pass**
 
 Dispatch a `pr-review-toolkit:code-reviewer` agent scoped to
 `plugins/digital-brain-buddy/scripts/compose-up.sh` and
@@ -907,7 +907,7 @@ Dispatch a `pr-review-toolkit:code-reviewer` agent scoped to
 findings (e.g. unquoted variables, missing error paths), re-running the
 Step 5 smoke test after each fix.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add plugins/digital-brain-buddy/scripts/compose-up.sh plugins/digital-brain-buddy/hooks/hooks.json plugins/digital-brain-buddy/commands/digital-brain-up.md

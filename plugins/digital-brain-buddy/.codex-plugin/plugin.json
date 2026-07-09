@@ -1,0 +1,37 @@
+{
+  "name": "digital-brain-buddy",
+  "version": "0.1.0+codex.20260709094800",
+  "description": "Repo-local buddy-session plugin for the avatar_digital_brain persona, SOUL file, and Neo4j MCP memory workflow.",
+  "author": {
+    "name": "Kyrylo Dubovyk"
+  },
+  "license": "UNLICENSED",
+  "keywords": [
+    "digital-brain",
+    "neo4j",
+    "buddy",
+    "memory",
+    "persona"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Digital Brain Buddy",
+    "shortDescription": "Buddy persona with Neo4j memory tools",
+    "longDescription": "Run a direct, pattern-aware buddy session on top of the avatar_digital_brain memory graph. The default internal pattern is: main session agent keeps the conversation, a reader gathers graph evidence, and a writer persists bounded memory updates when needed. Bundles the SOUL file, session workflow, delegated read/write memory skills, identity bootstrap guidance, and Neo4j Cypher MCP configuration in one repo-local plugin.",
+    "developerName": "Kyrylo Dubovyk",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Start a buddy session and use graph memory",
+      "Read my Digital Brain before answering",
+      "Store this thought using buddy rules",
+      "Use the plugin's default delegated memory workflow"
+    ],
+    "brandColor": "#1F6B5C",
+    "screenshots": []
+  }
+}

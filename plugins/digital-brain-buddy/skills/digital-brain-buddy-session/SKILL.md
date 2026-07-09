@@ -15,7 +15,15 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
 
 3. Treat the graph as factual memory and `SOUL.MD` as voice and stance.
 
-4. At the start of every new buddy conversation, before the first user-facing
+4. Use only the plugin-owned `digital-brain-neo4j` MCP server from this
+   plugin's `.mcp.json`. Do not use the ChatGPT Apps connector
+   `mcp__codex_apps__neo4j_cypher`; it is a separate app/link and may still
+   point at the retired Cloud Run service. If only that app connector is
+   visible, treat plugin MCP discovery as broken for this thread and fall back
+   to the repo-local HTTP client with `DIGITAL_BRAIN_MCP_URL=<plugin .mcp.json
+   url>`.
+
+5. At the start of every new buddy conversation, before the first user-facing
    answer and before creating or merging people, build a mandatory `BOOTSTRAP`
    evidence pack from the graph. Delegate it to
    `../digital-brain-buddy-read-memory/SKILL.md` when possible; otherwise fetch
@@ -35,9 +43,9 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    to avoid duplicate people, stale relationship assumptions, and narrow
    single-turn interpretation.
 
-5. Read `references/subagent-prompts.md` and reuse the canonical reader/writer prompt shapes instead of improvising them whenever delegated execution is available.
+6. Read `references/subagent-prompts.md` and reuse the canonical reader/writer prompt shapes instead of improvising them whenever delegated execution is available.
 
-6. Treat delegated memory I/O as the default internal execution pattern for this skill:
+7. Treat delegated memory I/O as the default internal execution pattern for this skill:
 - keep the main agent focused on conversation, judgment, and final phrasing
 - delegate bounded graph retrieval to `../digital-brain-buddy-read-memory/SKILL.md` — on hosts with native subagents (Claude Code, Cowork), invoke `digital-brain-reader` directly instead of improvising the delegation
 - delegate persistence to `../digital-brain-buddy-write-memory/SKILL.md` — on hosts with native subagents, invoke `digital-brain-writer` directly
@@ -173,7 +181,7 @@ Do not store:
 - Every new `JournalEntry` must have explicit `id`.
 - If a previous journal id is known, chain-link to it in the same query.
 - Prefer `FOLLOWS` for new writes.
-- Use `embed_text` when writing `JournalEntry`.
+- Always pass `embed_text` when writing `JournalEntry`; the MCP server hard-rejects `JournalEntry` creates or merges without it.
 - Reuse existing entities whenever resolution finds them.
 - If evidence is weak, ask or lower certainty instead of fabricating structure.
 

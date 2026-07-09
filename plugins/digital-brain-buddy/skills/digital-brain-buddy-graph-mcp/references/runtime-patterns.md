@@ -294,10 +294,11 @@ CREATE (j:JournalEntry {
   id: $journal_id,
   content: $content,
   timestamp: $timestamp,
-  mood: $mood
+  mood: $mood,
+  embedding: $embedding
 })
 MERGE (j)-[:FOLLOWS]->(prev)
 RETURN j.id AS id
 ```
 
-Use `embed_text = $content` on the MCP write call when the entry should participate in vector search.
+Pass `embed_text = $content` on every MCP `JournalEntry` write. The MCP server hard-rejects a `JournalEntry` create or merge without `embed_text`; this is a mandatory MCP input for the write path.

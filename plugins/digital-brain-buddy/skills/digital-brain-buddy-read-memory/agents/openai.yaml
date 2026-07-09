@@ -1,0 +1,4 @@
+interface:
+  display_name: "Digital Brain Buddy Read Memory"
+  short_description: "Delegated reader for graph evidence packs"
+  default_prompt: "Use $digital-brain-buddy-read-memory to gather a compact evidence pack from the Digital Brain graph for the parent buddy session. Read only what is needed and do not write to the graph."
