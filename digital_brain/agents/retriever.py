@@ -33,7 +33,7 @@ context_retriever = LlmAgent(
 
     Query history for entities mentioned in current input:
     - If ID is NOT "MISSING": `MATCH (e {id: $entity_id})-[r]-(j:JournalEntry) RETURN ...`
-    - If ID IS "MISSING": `MATCH (e) WHERE e.name = $entity_name AND NOT 'JournalEntry' IN labels(e) MATCH (e)-[r]-(j:JournalEntry) RETURN ...`
+    - If ID IS "MISSING": `MATCH (e) WHERE e.name = $entity_name AND NOT 'JournalEntry' IN labels(e) AND NOT 'Operational' IN labels(e) AND NOT 'Alias' IN labels(e) AND NOT 'LearningLog' IN labels(e) MATCH (e)-[r]-(j:JournalEntry) RETURN ...`
 
     RETURN e.name, j.content, j.timestamp
     ORDER BY j.timestamp DESC

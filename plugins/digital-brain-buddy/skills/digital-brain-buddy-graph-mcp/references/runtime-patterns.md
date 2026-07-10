@@ -205,7 +205,7 @@ MATCH (p:Person)<-[:MENTIONS|MENTIONS_PERSON]-(j:JournalEntry)
 WHERE j.id IS NOT NULL
   AND trim(coalesce(toString(j.content), toString(j.raw_text), '')) <> ''
 OPTIONAL MATCH (j)-[r]->(e)
-WHERE NOT e:JournalEntry AND NOT e:Alias AND e <> p
+WHERE NOT e:Operational AND NOT e:JournalEntry AND NOT e:Alias AND NOT e:LearningLog AND e <> p
 WITH
   p,
   collect(DISTINCT {
@@ -305,7 +305,7 @@ authorizing a merge.
 
 ```cypher
 MATCH (a {id: $entity_id}), (b)
-WHERE b <> a AND NOT b:Operational AND NOT b:JournalEntry AND NOT b:Alias
+WHERE b <> a AND NOT b:Operational AND NOT b:JournalEntry AND NOT b:Alias AND NOT b:LearningLog
 OPTIONAL MATCH (a)-[]-(common)-[]-(b)
 WITH b, count(DISTINCT common) AS shared_connections
 WHERE shared_connections > 0

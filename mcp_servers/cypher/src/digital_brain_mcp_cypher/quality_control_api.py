@@ -11,6 +11,7 @@ Workflow stores and legal transitions arrive in Tasks 5+.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 from typing import Any, Callable
@@ -103,7 +104,8 @@ def authorize_coordinator(request: Request) -> JSONResponse | None:
     provided = request.headers.get(COORDINATOR_SECRET_HEADER) or request.headers.get(
         COORDINATOR_SECRET_HEADER.lower()
     )
-    if not provided or provided != expected:
+    # Constant-time compare so wrong secrets do not leak via early char exit.
+    if not isinstance(provided, str) or not hmac.compare_digest(provided, expected):
         return _unauthorized()
     return None
 

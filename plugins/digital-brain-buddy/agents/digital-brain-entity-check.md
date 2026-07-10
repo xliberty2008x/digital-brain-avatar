@@ -19,7 +19,7 @@ it resembles, run the "Related nodes via shared connections" query from
 
 ```cypher
 MATCH (a {id: $entity_id}), (b)
-WHERE b <> a AND NOT b:Operational AND NOT b:JournalEntry AND NOT b:Alias
+WHERE b <> a AND NOT b:Operational AND NOT b:JournalEntry AND NOT b:Alias AND NOT b:LearningLog
 OPTIONAL MATCH (a)-[]-(common)-[]-(b)
 WITH b, count(DISTINCT common) AS shared_connections
 WHERE shared_connections > 0

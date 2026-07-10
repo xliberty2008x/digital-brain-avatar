@@ -301,6 +301,11 @@ PROTECTED_QUALITY_WRITE_CASES = (
     # Dynamic label / property smuggling
     "MATCH (n) SET n[$label] = true",
     "MATCH (n) SET n['id'] = $id",
+    "MATCH (n) SET n:$($label)",
+    "MATCH (n) SET n:$(label)",
+    "MATCH (n) SET n:$label",
+    "MATCH (n) SET n:Person:$($extra)",
+    "MATCH (n) SET n : $label",
     # Full node replacement of control records
     "MATCH (a:Alias {id: $id}) SET a = $props",
     "MATCH (o:Operational) SET o = {summary: 'x'}",

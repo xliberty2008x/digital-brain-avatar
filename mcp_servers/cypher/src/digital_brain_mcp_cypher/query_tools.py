@@ -126,6 +126,12 @@ DYNAMIC_PROPERTY_REFERENCE_RE = re.compile(
     rf"\b{_CYPHER_IDENTIFIER}\s*\[\s*(?:\$|['\"])",
     re.IGNORECASE,
 )
+# Neo4j dynamic labels in SET (e.g. SET n:$($label), SET n:$(expr), SET n:$p)
+# bypass the static SET_LABEL_LIST_RE scan and must be rejected wholesale.
+DYNAMIC_SET_LABEL_RE = re.compile(
+    rf"(?:\bSET\b|,)\s*{_CYPHER_IDENTIFIER}(?:\s*:\s*{_CYPHER_IDENTIFIER})*\s*:\s*\$",
+    re.IGNORECASE,
+)
 _PROTECTED_JOURNAL_PROPERTIES = (
     "id",
     "append_key",
@@ -339,6 +345,12 @@ def assert_general_write_allowed(query: str) -> None:
         raise ValueError(
             "write_neo4j_cypher cannot use dynamic property writes that could "
             "target protected journal fields; set explicit properties only"
+        )
+    if DYNAMIC_SET_LABEL_RE.search(query):
+        raise ValueError(
+            "write_neo4j_cypher cannot use dynamic labels (SET … :$ / :$() ) that "
+            "could target protected Operational/quality control records; "
+            "set explicit labels only"
         )
     # Relationship-only MERGE/CREATE onto an existing protected control node
     # still names the label in a node pattern; reject those writes too.
