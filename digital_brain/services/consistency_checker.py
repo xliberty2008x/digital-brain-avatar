@@ -11,9 +11,6 @@ from typing import Any
 
 from ..tools.mcp_client import execute_cypher
 
-# Re-exported for tests that patch mutation paths; discovery must not call it.
-from ..tools.mcp_client import call_mcp_tool  # noqa: F401
-
 
 async def _find_duplicate_persons() -> list[dict[str, Any]]:
     """Find Person nodes that might be duplicates based on similar names."""
