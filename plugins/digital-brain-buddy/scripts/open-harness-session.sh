@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # Portable harness session open for any brain host (Grok / Claude / Codex).
-# Always resolves repo-root python correctly so agents never hit bare-python
-# ModuleNotFoundError for pin (stdlib path) or optional MCP record (venv).
 #
-# Usage (from skill step 0 — no manual flags required by the user):
-#   open-harness-session.sh [--host grok|claude|codex] [extra pin_harness args…]
+# Always opens a local SessionHandle. When MCP /readyz is healthy, also records
+# the generation on the quality plane so FEEDBACK / RunEvent / DreamRun can
+# resolve the id (closes the "local pin but get_harness_generation not_found" gap).
+# If MCP is down, falls back to local-only pin so buddy memory still starts.
 #
-# Default: --use-open-api --skip-record --json
+# Usage (skill step 0 — user never runs this by hand):
+#   open-harness-session.sh [--host grok|claude|codex] [extra pin args…]
+#
+# Stdout: SessionHandle JSON only (pin script --json).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# plugins/digital-brain-buddy/scripts → repo root is ../../..
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 if [ ! -f "$REPO_ROOT/scripts/pin_harness_generation.py" ]; then
-  # Fallback: CLAUDE_PROJECT_DIR or cwd
   if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -f "${CLAUDE_PROJECT_DIR}/scripts/pin_harness_generation.py" ]; then
     REPO_ROOT="$(cd "$CLAUDE_PROJECT_DIR" && pwd)"
   elif [ -f "$(pwd)/scripts/pin_harness_generation.py" ]; then
@@ -37,6 +38,11 @@ while [ $# -gt 0 ]; do
       HOST="${1#--host=}"
       shift
       ;;
+    --skip-record|--no-record)
+      # Explicit local-only (tests / offline).
+      FORCE_SKIP_RECORD=1
+      shift
+      ;;
     *)
       EXTRA+=("$1")
       shift
@@ -44,21 +50,45 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Prefer explicit project interpreters when present; bare python3 works for
-# --skip-record after stdlib-only maintenance package load.
+MCP_URL="${DIGITAL_BRAIN_MCP_URL:-http://localhost:8000/api/mcp/}"
+# Derive readyz from MCP URL host (…/api/mcp/ → …/readyz)
+READYZ_URL="${DIGITAL_BRAIN_READYZ_URL:-}"
+if [ -z "$READYZ_URL" ]; then
+  READYZ_URL="$(printf '%s' "$MCP_URL" | sed -E 's#/api/mcp/?$##')/readyz"
+fi
+
+mcp_ready() {
+  [ "${FORCE_SKIP_RECORD:-0}" = "1" ] && return 1
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 1 --max-time 3 "$READYZ_URL" 2>/dev/null || echo 000)"
+  [ "$code" = "200" ]
+}
+
+# Build pin argv: record when MCP healthy so quality ledger matches local pin.
+PIN_ARGS=(--host "$HOST" --use-open-api --json)
+if mcp_ready; then
+  echo "open-harness-session: MCP ready → pin + record_harness_generation" >&2
+else
+  echo "open-harness-session: MCP not ready → local pin only (--skip-record)" >&2
+  PIN_ARGS+=(--skip-record)
+fi
+if [ ${#EXTRA[@]} -gt 0 ]; then
+  PIN_ARGS+=("${EXTRA[@]}")
+fi
+
+cd "$REPO_ROOT"
 run_pin() {
   local py="$1"
   shift
-  "$py" "$PIN_PY" --host "$HOST" --use-open-api --skip-record --json "$@"
+  "$py" "$PIN_PY" "${PIN_ARGS[@]}" "$@"
 }
 
-cd "$REPO_ROOT"
 if command -v uv >/dev/null 2>&1 && [ -f "$REPO_ROOT/pyproject.toml" ]; then
-  # uv keeps record path + full deps available if caller drops --skip-record later
-  exec uv run --group dev python "$PIN_PY" --host "$HOST" --use-open-api --skip-record --json "${EXTRA[@]+"${EXTRA[@]}"}"
+  # Recording needs network deps; uv project env has them.
+  exec uv run --group dev python "$PIN_PY" "${PIN_ARGS[@]}"
 fi
 if [ -x "$REPO_ROOT/.venv/bin/python" ]; then
-  exec "$REPO_ROOT/.venv/bin/python" "$PIN_PY" --host "$HOST" --use-open-api --skip-record --json "${EXTRA[@]+"${EXTRA[@]}"}"
+  exec "$REPO_ROOT/.venv/bin/python" "$PIN_PY" "${PIN_ARGS[@]}"
 fi
-# Stdlib pin path — works for open/resume without pydantic after lazy maintenance __init__
-exec python3 "$PIN_PY" --host "$HOST" --use-open-api --skip-record --json "${EXTRA[@]+"${EXTRA[@]}"}"
+# Bare python3: local pin always works (stdlib path). If record was requested
+# and fails, pin script keeps local pin and exits 0 unless --require-record.
+exec python3 "$PIN_PY" "${PIN_ARGS[@]}"

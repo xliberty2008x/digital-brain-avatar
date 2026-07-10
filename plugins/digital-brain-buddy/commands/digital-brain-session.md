@@ -42,8 +42,10 @@ Examples: `/digital-brain-session`, `/digital-brain-session open grok`,
      ${FORCE:+--force-new}
    ```
 
-   The wrapper sets `--use-open-api --skip-record --json` and picks uv / `.venv` /
-   stdlib python so the host never fails on missing pydantic.
+   The wrapper sets `--use-open-api --json`, picks uv / `.venv` / python3, and
+   **records the generation on the quality plane when MCP `/readyz` is 200**.
+   If MCP is down it falls back to local pin only (`--skip-record`) so buddy
+   memory still starts. Check JSON `record_outcome` (created/replayed/skipped).
 
 4. Parse JSON → sticky for this chat:
    - `session_id`

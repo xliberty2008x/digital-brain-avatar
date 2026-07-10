@@ -30,13 +30,22 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
 
       If `CLAUDE_PLUGIN_ROOT` is unset, use the path under the workspace:
       `plugins/digital-brain-buddy/scripts/open-harness-session.sh`.
-      Parse stdout JSON for `session_id` + `harness_generation_id`. Keep both
-      sticky for the whole conversation (pass the same generation id into every
-      Feedback/RunEvent and subagent prompt).
+      Parse stdout JSON for `session_id` + `harness_generation_id` +
+      `record_outcome`. Keep session + generation sticky for the whole
+      conversation (every Feedback/RunEvent + subagent prompts).
+
+      Wrapper behaviour (automatic — do not ask the user):
+      - MCP `/readyz` **200** → local pin **and** `record_harness_generation`
+        (quality ledger). Expect `record_outcome` ∈ {created, replayed, …}.
+      - MCP down → local pin only (`record_outcome=skipped`); memory still works;
+        sensors may still pass `harness_generation_id` but Dream/get_receipt
+        attribution is weaker until a later record succeeds.
+      - If handle JSON has pin but `get_harness_generation` is not_found, re-run
+        the wrapper **once** (or `pin_harness_generation.py` without
+        `--skip-record`) before claiming the quality plane is live.
 
    **Never** bare `python3 scripts/pin_harness_generation.py` without the
-   wrapper (old hosts hit missing deps). **Never** adopt
-   `$STATE/active/harness_generation.json` alone as “my” pin.
+   wrapper. **Never** adopt `$STATE/active/` alone as “my” pin.
    Memory BOOTSTRAP may proceed if open fails after one retry with the wrapper;
    **sensors must refuse** until a handle exists.
 
