@@ -225,3 +225,62 @@ def test_redact_evidence_record_strips_raw_keeps_id():
     assert "raw_payload" not in rec
     assert "redacted_summary" not in rec
     assert "correlation_hmac" in rec
+
+
+def test_revoked_feedback_excluded_and_unrelated_evidence_kept():
+    """Regret: revoked evidence never re-enters freeze; peers stay eligible."""
+    items = [
+        {
+            "id": "fb-revoked-regret",
+            "label": "Feedback",
+            "observed_at": "2026-07-09T10:00:00Z",
+            "evidence_hash": "h-rev",
+            "revoked": True,
+            "sensitivity": "intimate",
+            "raw_payload": "intimate raw must not freeze",
+            "kind": "entity_wrong",
+        },
+        {
+            "id": "fb-peer-ok",
+            "label": "Feedback",
+            "observed_at": "2026-07-09T11:00:00Z",
+            "evidence_hash": "h-ok",
+            "revoked": False,
+            "sensitivity": "public_ops",
+            "kind": "miss",
+        },
+    ]
+    snap = freeze_snapshot(items, policy=_policy(holdout_ratio=0.0), dream_id="dream-regret")
+    ids = {m.evidence_id for m in snap.memberships}
+    assert "fb-revoked-regret" not in ids
+    assert "fb-revoked-regret" in snap.excluded_revoked_ids
+    assert "fb-peer-ok" in ids
+    packet = snap.analyzer_packet()
+    assert_no_intimate_fields(packet)
+    assert "intimate raw must not freeze" not in str(packet)
+
+
+def test_post_redaction_export_projection_has_no_raw_fields():
+    """After retention redaction, analyzer packets carry metadata only."""
+    items = [
+        {
+            "id": "fb-redacted-meta",
+            "label": "Feedback",
+            "observed_at": "2026-07-09T10:00:00Z",
+            "evidence_hash": "h-meta",
+            "sensitivity": "intimate",
+            # raw already removed by retention; only metadata remains
+            "raw_payload": None,
+            "kind": "entity_wrong",
+            "redacted_summary": "bounded ops summary",
+        }
+    ]
+    snap = freeze_snapshot(
+        items, policy=_policy(holdout_ratio=0.0), dream_id="dream-post-redact"
+    )
+    assert "fb-redacted-meta" in {m.evidence_id for m in snap.memberships}
+    item = snap.redacted_items["fb-redacted-meta"]
+    assert "raw_payload" not in item
+    assert "payload_text" not in item
+    packet = snap.analyzer_packet()
+    assert_no_intimate_fields(packet)

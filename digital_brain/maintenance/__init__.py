@@ -51,6 +51,18 @@ from .runner import (
     maintainer_tool_profile,
     run_report_only_dream,
 )
+from .retention import (
+    BACKUP_RETENTION_LIMITATION,
+    RETENTION_ACTIONS,
+    RETENTION_SCHEMA_VERSION,
+    RetentionConfig,
+    RetentionPlan,
+    assert_apply_permitted,
+    compute_retention_config_digest,
+    default_demo_config,
+    load_retention_config,
+    select_retention_candidates,
+)
 from .snapshot import (
     EvidenceItem,
     FrozenSnapshot,
@@ -61,6 +73,7 @@ from .snapshot import (
 )
 
 __all__ = [
+    "BACKUP_RETENTION_LIMITATION",
     "CORRELATION_HMAC_KEY_VERSION",
     "HARNESS_SCHEMA_VERSION",
     "INTIMATE_FIELD_NAMES",
@@ -68,6 +81,8 @@ __all__ = [
     "MAINTAINER_ALLOWED_OPERATIONS",
     "MAINTAINER_FORBIDDEN_OPERATIONS",
     "REDACTION_POLICY_VERSION",
+    "RETENTION_ACTIONS",
+    "RETENTION_SCHEMA_VERSION",
     "TAXONOMY_VERSION",
     "ActivationAuthority",
     "Decision",
@@ -85,7 +100,10 @@ __all__ = [
     "IntimateFieldError",
     "MaintenanceLease",
     "Proposal",
+    "RetentionConfig",
+    "RetentionPlan",
     "SnapshotPolicy",
+    "assert_apply_permitted",
     "assert_legal_authority_transition",
     "assert_legal_dream_stage_transition",
     "assert_legal_owner_status_transition",
@@ -94,13 +112,16 @@ __all__ = [
     "assert_no_intimate_fields",
     "collect_harness_generation",
     "compute_generation_id",
+    "compute_retention_config_digest",
     "compute_source_ids_digest",
     "correlation_hmac",
+    "default_demo_config",
     "freeze_snapshot",
     "generation_request_fingerprint",
     "get_or_pin_session_generation",
     "is_legal_dream_stage_transition",
     "load_evidence_fixture",
+    "load_retention_config",
     "load_session_pin",
     "maintainer_tool_profile",
     "pin_session_generation",
@@ -108,6 +129,7 @@ __all__ = [
     "redact_packet",
     "resolve_state_dir",
     "run_report_only_dream",
+    "select_retention_candidates",
     "stage_idempotency_key",
     "write_active_harness_pin",
 ]

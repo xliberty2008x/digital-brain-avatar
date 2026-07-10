@@ -198,6 +198,39 @@ def _run_one(runner: Any, query: str, params: dict[str, Any] | None = None) -> d
     return dict(record)
 
 
+def _run_all(
+    runner: Any, query: str, params: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    result = runner.run(query, params or {})
+    # Prefer .data() when available (neo4j Result); fall back to iteration.
+    if hasattr(result, "data") and callable(result.data):
+        try:
+            rows = result.data()
+            if isinstance(rows, list):
+                return [dict(r) for r in rows]
+        except Exception:  # noqa: BLE001 — fall through to iteration
+            pass
+    rows_out: list[dict[str, Any]] = []
+    if hasattr(result, "__iter__") and not hasattr(result, "single"):
+        # Already a list-like from fakes.
+        for record in result:
+            if hasattr(record, "data"):
+                rows_out.append(record.data())
+            elif isinstance(record, dict):
+                rows_out.append(dict(record))
+        return rows_out
+    # Neo4j Result: iterate records.
+    try:
+        for record in result:
+            if hasattr(record, "data"):
+                rows_out.append(record.data())
+            elif isinstance(record, dict):
+                rows_out.append(dict(record))
+    except TypeError:
+        pass
+    return rows_out
+
+
 def _canonical_json(payload: Mapping[str, Any]) -> str:
     """Canonical JSON — must match digital_brain.maintenance.models._canonical_json."""
     return json.dumps(
@@ -1034,6 +1067,10 @@ class QualityStore:
         )
         if created is None:
             raise RuntimeError("FeedbackLifecycleEvent create returned no row")
+
+        stale_ids = self._mark_derived_pending_proposals_stale(
+            tx, feedback_id=feedback_id
+        )
         return {
             "outcome": "created",
             "lifecycle_event_id": created.get("id"),
@@ -1042,7 +1079,672 @@ class QualityStore:
             "actor": created.get("actor"),
             "request_fingerprint": created.get("request_fingerprint"),
             "created_at": created.get("created_at"),
+            "stale_proposal_ids": stale_ids,
         }
+
+    def _mark_derived_pending_proposals_stale(
+        self,
+        tx: Any,
+        *,
+        feedback_id: str,
+    ) -> list[str]:
+        """Mark only directly derived pending proposals stale.
+
+        Provenance path:
+        ``(:Proposal)-[:SUPPORTED_BY]->(:Finding)-[:USES_EVIDENCE]->
+        (:EvidenceRef {id: feedback_id})``.
+
+        Does not rewrite journals or co-snapshot-only proposals.
+        """
+        pending = sorted(
+            {
+                "draft",
+                "validated",
+                "review_pending",
+            }
+        )
+        # Collect matching proposals then set status (two steps for fake-session tests).
+        rows = _run_all(
+            tx,
+            """
+            MATCH (ref:Operational:EvidenceRef {id: $feedback_id})
+                  <-[:USES_EVIDENCE]-(f:Operational:Finding)
+                  <-[:SUPPORTED_BY]-(p:Operational:Proposal)
+            WHERE p.status_projection IN $pending
+            RETURN DISTINCT p.id AS id, p.status_projection AS status_projection
+            """,
+            {"feedback_id": feedback_id, "pending": pending},
+        )
+        stale_ids: list[str] = []
+        for row in rows:
+            pid = row.get("id")
+            if not pid:
+                continue
+            updated = _run_one(
+                tx,
+                """
+                MATCH (p:Operational:Proposal {id: $proposal_id})
+                WHERE p.status_projection IN $pending
+                SET p.status_projection = 'stale',
+                    p.stale_reason = 'evidence_revoked',
+                    p.stale_evidence_id = $feedback_id
+                RETURN p.id AS id
+                """,
+                {
+                    "proposal_id": pid,
+                    "pending": pending,
+                    "feedback_id": feedback_id,
+                },
+            )
+            if updated is not None and updated.get("id"):
+                stale_ids.append(str(updated["id"]))
+        return sorted(stale_ids)
+
+    # ------------------------------------------------------------------
+    # Retention (policy-bound QualityPayload redaction)
+    # ------------------------------------------------------------------
+
+    def get_quality_payload(self, payload_id: str) -> dict[str, Any]:
+        """Privileged read of a QualityPayload row (tests / owner tools only).
+
+        Normal exports must not use this. After retention apply, outcome is
+        ``not_found`` when the node was deleted.
+        """
+        payload_id = _require_sensor_id(payload_id, "payload_id")
+
+        def operation(session: Any) -> dict[str, Any]:
+            row = _run_one(
+                session,
+                """
+                MATCH (p:Operational:QualityPayload {id: $payload_id})
+                RETURN p.id AS id,
+                       p.owner_evidence_id AS owner_evidence_id,
+                       p.payload_text AS payload_text,
+                       p.sensitivity AS sensitivity,
+                       p.created_at AS created_at
+                LIMIT 1
+                """,
+                {"payload_id": payload_id},
+            )
+            if row is None:
+                return {"outcome": "not_found", "payload_id": payload_id}
+            return {
+                "outcome": "ok",
+                "payload_id": row.get("id"),
+                "owner_evidence_id": row.get("owner_evidence_id"),
+                "payload_text": row.get("payload_text"),
+                "sensitivity": row.get("sensitivity"),
+                "created_at": row.get("created_at"),
+            }
+
+        return self._with_session(operation)
+
+    def export_feedback_public(self, feedback_id: str) -> dict[str, Any]:
+        """Normal read/export projection — never includes payload_text."""
+        feedback_id = _require_sensor_id(feedback_id, "feedback_id")
+
+        def operation(session: Any) -> dict[str, Any]:
+            row = self._read_feedback_row(session, feedback_id)
+            if row is None:
+                return {"outcome": "not_found", "feedback_id": feedback_id}
+            # Intentionally omit raw payload body even when the node still exists.
+            return {
+                "outcome": "ok",
+                "feedback_id": row.get("id"),
+                "kind": row.get("kind"),
+                "sensitivity": row.get("sensitivity"),
+                "harness_generation_id": row.get("harness_generation_id"),
+                "request_fingerprint": row.get("request_fingerprint"),
+                "raw_payload_ref": row.get("raw_payload_ref"),
+                "created_at": row.get("created_at"),
+                # Explicit absence for exporters / tests.
+                "payload_text": None,
+                "raw_payload": None,
+            }
+
+        return self._with_session(operation)
+
+    def apply_retention_effect(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Policy-bound redaction/archive/purge of removable QualityPayload.
+
+        Only this dedicated transaction (and the MaintenanceStore retention
+        path that mirrors it) may remove raw payload. Generic Cypher DELETE
+        remains blocked. Every apply is receipted via EffectReceipt + lifecycle.
+
+        Required fields: id, effect_key, feedback_id, action, config_digest.
+        Optional fence: run_id + epoch + lease_key (validated when present).
+        ``dry_run: true`` returns a plan-style count without mutation.
+        Automatic apply must set ``automatic: true`` and pass
+        ``auto_apply_enabled: true`` from the reviewed config; otherwise denied.
+        Owner-initiated apply sets ``owner_initiated: true``.
+        """
+        if not isinstance(payload, dict):
+            raise TypeError("payload must be an object")
+
+        effect_id = _require_sensor_id(payload.get("id"), "id")
+        effect_key = _require_sensor_id(
+            payload.get("effect_key") or effect_id, "effect_key"
+        )
+        feedback_id = _require_sensor_id(
+            payload.get("feedback_id"), "feedback_id"
+        )
+        action = _require_enum(
+            payload.get("action"),
+            frozenset({"redact", "archive", "purge"}),
+            "action",
+        )
+        config_digest = _require_sensor_id(
+            payload.get("config_digest"), "config_digest"
+        )
+        actor = _require_bounded_text(
+            payload.get("actor") or "maintenance", "actor", MAX_ACTOR_LEN
+        )
+        dry_run = bool(payload.get("dry_run", False))
+        automatic = bool(payload.get("automatic", False))
+        owner_initiated = bool(payload.get("owner_initiated", False))
+        auto_apply_enabled = bool(payload.get("auto_apply_enabled", False))
+
+        if dry_run:
+            return self._retention_dry_run_one(
+                feedback_id=feedback_id,
+                action=action,
+                config_digest=config_digest,
+            )
+
+        if automatic and not auto_apply_enabled:
+            return {
+                "outcome": "denied",
+                "reason": "retention_auto_apply_disabled",
+                "feedback_id": feedback_id,
+                "action": action,
+                "config_digest": config_digest,
+            }
+        if not automatic and not owner_initiated:
+            return {
+                "outcome": "denied",
+                "reason": "retention_apply_requires_owner_or_auto",
+                "feedback_id": feedback_id,
+                "action": action,
+            }
+
+        effect_type = {
+            "redact": "retention_redact",
+            "archive": "retention_archive",
+            "purge": "retention_purge",
+        }[action]
+        lifecycle_event = {
+            "redact": "redacted",
+            "archive": "archived",
+            "purge": "purged",
+        }[action]
+        before_ref = str(
+            payload.get("before_ref") or f"Feedback:{feedback_id}:payload"
+        )
+        after_ref = str(
+            payload.get("after_ref") or f"Feedback:{feedback_id}:{action}ed"
+        )
+        if action == "purge":
+            after_ref = str(
+                payload.get("after_ref") or f"Feedback:{feedback_id}:purged"
+            )
+        elif action == "redact":
+            after_ref = str(
+                payload.get("after_ref") or f"Feedback:{feedback_id}:redacted"
+            )
+        elif action == "archive":
+            after_ref = str(
+                payload.get("after_ref") or f"Feedback:{feedback_id}:archived"
+            )
+
+        run_id = payload.get("run_id")
+        epoch = payload.get("epoch")
+        if epoch is None:
+            epoch = payload.get("lease_epoch")
+        lease_key = payload.get("lease_key") or "maintenance"
+        fence_required = run_id is not None or epoch is not None
+        if fence_required:
+            run_id = _require_sensor_id(run_id, "run_id")
+            if epoch is None:
+                raise ValueError("epoch is required when run_id is provided")
+            try:
+                epoch_i = int(epoch)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("epoch must be an integer") from exc
+            if epoch_i < 1:
+                raise ValueError("epoch must be >= 1")
+            lease_key = _require_sensor_id(str(lease_key), "lease_key")
+        else:
+            epoch_i = None
+            run_id = None
+            lease_key = str(lease_key)
+
+        identity = {
+            "action": action,
+            "after_ref": after_ref,
+            "before_ref": before_ref,
+            "config_digest": config_digest,
+            "effect_id": effect_id,
+            "effect_key": effect_key,
+            "effect_type": effect_type,
+            "feedback_id": feedback_id,
+        }
+        request_fingerprint = compute_sensor_request_fingerprint(identity)
+        request_hash = str(payload.get("request_hash") or request_fingerprint)
+        lifecycle_id = str(
+            payload.get("lifecycle_id") or f"fle-ret-{effect_id}"
+        )[:MAX_SENSOR_ID_LEN]
+
+        def operation(session: Any) -> dict[str, Any]:
+            return _execute_write(
+                session,
+                lambda tx: self._apply_retention_effect_tx(
+                    tx,
+                    effect_id=effect_id,
+                    effect_key=effect_key,
+                    feedback_id=feedback_id,
+                    action=action,
+                    effect_type=effect_type,
+                    lifecycle_event=lifecycle_event,
+                    lifecycle_id=lifecycle_id,
+                    config_digest=config_digest,
+                    actor=actor,
+                    before_ref=before_ref,
+                    after_ref=after_ref,
+                    request_fingerprint=request_fingerprint,
+                    request_hash=request_hash,
+                    run_id=run_id,
+                    epoch=epoch_i,
+                    lease_key=lease_key,
+                    fence_required=fence_required,
+                ),
+            )
+
+        return self._with_session(operation)
+
+    def _retention_dry_run_one(
+        self,
+        *,
+        feedback_id: str,
+        action: str,
+        config_digest: str,
+    ) -> dict[str, Any]:
+        def operation(session: Any) -> dict[str, Any]:
+            fb = self._read_feedback_row(session, feedback_id)
+            if fb is None:
+                return {
+                    "outcome": "dry_run",
+                    "would_apply": False,
+                    "reason": "feedback_missing",
+                    "feedback_id": feedback_id,
+                    "action": action,
+                    "config_digest": config_digest,
+                    "counts": {"selected": 0},
+                }
+            ref = fb.get("raw_payload_ref")
+            has_payload = False
+            if ref:
+                payload_row = _run_one(
+                    session,
+                    """
+                    MATCH (p:Operational:QualityPayload {id: $payload_id})
+                    RETURN p.id AS id, p.payload_text AS payload_text
+                    LIMIT 1
+                    """,
+                    {"payload_id": ref},
+                )
+                has_payload = bool(
+                    payload_row
+                    and str(payload_row.get("payload_text") or "").strip()
+                )
+            return {
+                "outcome": "dry_run",
+                "would_apply": has_payload,
+                "feedback_id": feedback_id,
+                "action": action,
+                "config_digest": config_digest,
+                "request_fingerprint": fb.get("request_fingerprint"),
+                "raw_payload_ref": ref,
+                "counts": {"selected": 1 if has_payload else 0},
+            }
+
+        return self._with_session(operation)
+
+    def _apply_retention_effect_tx(
+        self,
+        tx: Any,
+        *,
+        effect_id: str,
+        effect_key: str,
+        feedback_id: str,
+        action: str,
+        effect_type: str,
+        lifecycle_event: str,
+        lifecycle_id: str,
+        config_digest: str,
+        actor: str,
+        before_ref: str,
+        after_ref: str,
+        request_fingerprint: str,
+        request_hash: str,
+        run_id: str | None,
+        epoch: int | None,
+        lease_key: str,
+        fence_required: bool,
+    ) -> dict[str, Any]:
+        if fence_required and run_id is not None and epoch is not None:
+            fence_err = self._assert_retention_fence(
+                tx, lease_key=lease_key, run_id=run_id, epoch=epoch
+            )
+            if fence_err is not None:
+                return fence_err
+
+        # Idempotent receipt first.
+        existing = _run_one(
+            tx,
+            """
+            MATCH (r:Operational:EffectReceipt {id: $id})
+            RETURN r.id AS id,
+                   r.effect_key AS effect_key,
+                   r.request_fingerprint AS request_fingerprint,
+                   r.outcome AS outcome,
+                   r.verification_status AS verification_status,
+                   r.fence_epoch AS fence_epoch
+            LIMIT 1
+            """,
+            {"id": effect_id},
+        )
+        if existing is not None:
+            if existing.get("request_fingerprint") == request_fingerprint:
+                return {
+                    "outcome": "replayed",
+                    "effect_id": existing["id"],
+                    "effect_key": existing.get("effect_key"),
+                    "effect_outcome": existing.get("outcome"),
+                    "verification_status": existing.get("verification_status"),
+                    "request_fingerprint": existing.get("request_fingerprint"),
+                    "fence_epoch": existing.get("fence_epoch"),
+                    "feedback_id": feedback_id,
+                    "action": action,
+                }
+            return {
+                "outcome": "conflict",
+                "reason": "effect_id_reused",
+                "effect_id": existing["id"],
+            }
+
+        by_key = _run_one(
+            tx,
+            """
+            MATCH (r:Operational:EffectReceipt {effect_key: $effect_key})
+            RETURN r.id AS id,
+                   r.request_fingerprint AS request_fingerprint,
+                   r.outcome AS outcome,
+                   r.effect_key AS effect_key,
+                   r.verification_status AS verification_status,
+                   r.fence_epoch AS fence_epoch
+            LIMIT 1
+            """,
+            {"effect_key": effect_key},
+        )
+        if by_key is not None:
+            if by_key.get("request_fingerprint") == request_fingerprint:
+                return {
+                    "outcome": "replayed",
+                    "effect_id": by_key["id"],
+                    "effect_key": by_key.get("effect_key"),
+                    "effect_outcome": by_key.get("outcome"),
+                    "verification_status": by_key.get("verification_status"),
+                    "request_fingerprint": by_key.get("request_fingerprint"),
+                    "fence_epoch": by_key.get("fence_epoch"),
+                    "feedback_id": feedback_id,
+                    "action": action,
+                }
+            return {
+                "outcome": "conflict",
+                "reason": "effect_key_reused",
+                "effect_id": by_key["id"],
+                "effect_key": effect_key,
+            }
+
+        fb = self._read_feedback_row(tx, feedback_id)
+        if fb is None:
+            return {
+                "outcome": "not_found",
+                "reason": "feedback_missing",
+                "feedback_id": feedback_id,
+                "effect_id": effect_id,
+            }
+
+        request_fingerprint_fb = fb.get("request_fingerprint")
+        payload_ref = fb.get("raw_payload_ref")
+        deleted_payload = False
+        if payload_ref:
+            deleted = _run_one(
+                tx,
+                """
+                MATCH (f:Operational:Feedback {id: $feedback_id})
+                      -[r:HAS_RAW_PAYLOAD]->(p:Operational:QualityPayload {id: $payload_id})
+                DELETE r, p
+                RETURN $payload_id AS deleted_id
+                """,
+                {"feedback_id": feedback_id, "payload_id": payload_ref},
+            )
+            deleted_payload = deleted is not None
+            if not deleted_payload:
+                # Payload already gone — still receipt as verified absent.
+                orphan = _run_one(
+                    tx,
+                    """
+                    MATCH (p:Operational:QualityPayload {id: $payload_id})
+                    DETACH DELETE p
+                    RETURN $payload_id AS deleted_id
+                    """,
+                    {"payload_id": payload_ref},
+                )
+                deleted_payload = orphan is not None
+
+        # Verify absence.
+        still = None
+        if payload_ref:
+            still = _run_one(
+                tx,
+                """
+                MATCH (p:Operational:QualityPayload {id: $payload_id})
+                RETURN p.id AS id, p.payload_text AS payload_text
+                LIMIT 1
+                """,
+                {"payload_id": payload_ref},
+            )
+        verification_status = (
+            "verified_absent"
+            if still is None
+            or not str((still or {}).get("payload_text") or "").strip()
+            else "verification_failed"
+        )
+        if verification_status == "verification_failed":
+            return {
+                "outcome": "failed",
+                "reason": "payload_still_present",
+                "feedback_id": feedback_id,
+                "effect_id": effect_id,
+            }
+
+        # Immutable Feedback fingerprint must remain.
+        fb_after = self._read_feedback_row(tx, feedback_id)
+        if (
+            fb_after is not None
+            and fb_after.get("request_fingerprint") != request_fingerprint_fb
+        ):
+            return {
+                "outcome": "failed",
+                "reason": "feedback_fingerprint_changed",
+                "feedback_id": feedback_id,
+            }
+
+        now = _now_iso(tx)
+        # Lifecycle append (idempotent by lifecycle id).
+        existing_life = self._read_lifecycle_row(tx, lifecycle_id)
+        if existing_life is None:
+            life_identity = lifecycle_identity_payload(
+                feedback_id=feedback_id,
+                event=lifecycle_event,
+                actor=actor,
+                reason_code=f"retention_{action}",
+            )
+            life_fp = compute_sensor_request_fingerprint(life_identity)
+            _consume(
+                tx.run(
+                    """
+                    MATCH (f:Operational:Feedback {id: $feedback_id})
+                    CREATE (l:Operational:FeedbackLifecycleEvent)
+                    SET l.id = $id,
+                        l.feedback_id = $feedback_id,
+                        l.event = $event,
+                        l.actor = $actor,
+                        l.reason_code = $reason_code,
+                        l.request_fingerprint = $fp,
+                        l.config_digest = $config_digest,
+                        l.created_at = $created_at
+                    CREATE (f)-[:HAS_LIFECYCLE_EVENT]->(l)
+                    """,
+                    {
+                        "id": lifecycle_id,
+                        "feedback_id": feedback_id,
+                        "event": lifecycle_event,
+                        "actor": actor,
+                        "reason_code": f"retention_{action}",
+                        "fp": life_fp,
+                        "config_digest": config_digest,
+                        "created_at": now,
+                    },
+                )
+            )
+
+        created = _run_one(
+            tx,
+            """
+            CREATE (r:Operational:EffectReceipt)
+            SET r.id = $id,
+                r.effect_key = $effect_key,
+                r.request_hash = $request_hash,
+                r.request_fingerprint = $fp,
+                r.effect_type = $effect_type,
+                r.actor = $actor,
+                r.before_ref = $before_ref,
+                r.after_ref = $after_ref,
+                r.target_ref = $target_ref,
+                r.outcome = $effect_outcome,
+                r.verification_status = $verification_status,
+                r.config_digest = $config_digest,
+                r.action = $action,
+                r.feedback_id = $feedback_id,
+                r.fence_epoch = $epoch,
+                r.run_id = $run_id,
+                r.applied_at = datetime(),
+                r.created_at = datetime()
+            RETURN r.id AS id,
+                   r.effect_key AS effect_key,
+                   r.outcome AS outcome,
+                   r.verification_status AS verification_status,
+                   r.fence_epoch AS fence_epoch
+            """,
+            {
+                "id": effect_id,
+                "effect_key": effect_key,
+                "request_hash": request_hash,
+                "fp": request_fingerprint,
+                "effect_type": effect_type,
+                "actor": actor,
+                "before_ref": before_ref,
+                "after_ref": after_ref,
+                "target_ref": f"Feedback:{feedback_id}",
+                "effect_outcome": "applied",
+                "verification_status": verification_status,
+                "config_digest": config_digest,
+                "action": action,
+                "feedback_id": feedback_id,
+                "epoch": epoch,
+                "run_id": run_id,
+            },
+        )
+        if created is None:
+            raise RuntimeError("EffectReceipt create returned no row")
+
+        return {
+            "outcome": "created",
+            "effect_id": created["id"],
+            "effect_key": created["effect_key"],
+            "effect_type": effect_type,
+            "effect_outcome": created["outcome"],
+            "verification_status": created.get("verification_status"),
+            "fence_epoch": created.get("fence_epoch"),
+            "run_id": run_id,
+            "request_fingerprint": request_fingerprint,
+            "feedback_id": feedback_id,
+            "action": action,
+            "lifecycle_event": lifecycle_event,
+            "lifecycle_event_id": lifecycle_id,
+            "config_digest": config_digest,
+            "payload_deleted": deleted_payload or payload_ref is not None,
+            "feedback_request_fingerprint": request_fingerprint_fb,
+        }
+
+    def _assert_retention_fence(
+        self,
+        tx: Any,
+        *,
+        lease_key: str,
+        run_id: str,
+        epoch: int,
+    ) -> dict[str, Any] | None:
+        """Optional lease fence for maintenance-driven retention."""
+        row = _run_one(
+            tx,
+            """
+            MATCH (l:Operational:MaintenanceLease {key: $key})
+            RETURN l.run_id AS run_id,
+                   l.epoch AS epoch,
+                   l.lease_until AS lease_until,
+                   CASE
+                     WHEN l.lease_until IS NULL THEN true
+                     WHEN l.lease_until < datetime() THEN true
+                     ELSE false
+                   END AS expired
+            LIMIT 1
+            """,
+            {"key": lease_key},
+        )
+        if row is None:
+            return {
+                "outcome": "stale_epoch",
+                "reason": "lease_missing",
+                "lease_key": lease_key,
+            }
+        if bool(row.get("expired")):
+            return {
+                "outcome": "stale_epoch",
+                "reason": "lease_expired",
+                "lease_key": lease_key,
+            }
+        if str(row.get("run_id") or "") != run_id:
+            return {
+                "outcome": "stale_epoch",
+                "reason": "run_id_mismatch",
+                "lease_key": lease_key,
+            }
+        try:
+            current_epoch = int(row.get("epoch"))
+        except (TypeError, ValueError):
+            current_epoch = -1
+        if current_epoch != int(epoch):
+            return {
+                "outcome": "stale_epoch",
+                "reason": "epoch_mismatch",
+                "lease_key": lease_key,
+                "expected_epoch": int(epoch),
+                "current_epoch": current_epoch,
+            }
+        return None
 
     # ------------------------------------------------------------------
     # RunEvent sensors

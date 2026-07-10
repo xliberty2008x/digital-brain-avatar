@@ -224,6 +224,13 @@ class _FakeSession:
                 }
             )
 
+        # Revoke regret: mark derived pending proposals stale (no rows in unit fakes).
+        if "USES_EVIDENCE" in q and "SUPPORTED_BY" in q:
+            return _Result(None)
+
+        if "SET p.status_projection = 'stale'" in q:
+            return _Result(None)
+
         if "JournalEntry" in q or "embedding" in q.lower():
             self.created_journal = True
             raise AssertionError("sensor path must not touch journal/embeddings")
