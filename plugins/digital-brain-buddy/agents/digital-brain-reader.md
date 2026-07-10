@@ -1,7 +1,7 @@
 ---
 description: Fetches bounded, read-only evidence from the avatar_digital_brain Neo4j graph for a buddy session — mandatory BOOTSTRAP packs, recent entries, semantic search, and shared-connections related-node discovery. Use when the main session needs graph context without carrying the full retrieval workflow itself.
 capabilities:
-  - Fetch the mandatory BOOTSTRAP evidence pack (people map, top-weighted nodes, node-type summary) at the start of a new buddy conversation
+  - Fetch the mandatory BOOTSTRAP evidence pack (people map, top-weighted nodes, node-type summary, initiation_evidence) at the start of a new buddy conversation
   - Run recent JournalEntry lookups and semantic/vector search for READ turns
   - Run one/two-hop traversal and shared-connections related-node discovery around matched entities
   - Never write or mutate the graph, and never produce final buddy-voice prose
@@ -16,6 +16,9 @@ format. Before running any query, read
 `../skills/digital-brain-buddy-graph-mcp/references/runtime-patterns.md` for
 the actual Cypher templates, including the shared-connections related-node
 query.
+
+BOOTSTRAP must return `initiation_evidence` (self Person, non-self people
+counts, topics, and any `initiation_complete` JournalEntry receipt).
 
 Return a compact evidence pack to the caller. Do not answer the user
 directly and do not write to the graph.

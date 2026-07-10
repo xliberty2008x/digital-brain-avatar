@@ -54,6 +54,16 @@ return a compact first-layer context pack before any interpretation or write:
    by summed node weights.
 5. `recent_baseline`: only the most recent valid journal entries needed to
    orient the current period.
+6. `initiation_evidence` (always on BOOTSTRAP):
+   - `self_person`: Person with relation self, or null
+   - `anchor_candidates`: non-self Person list (id, name, relation) — parent
+     decides if an anchor already exists
+   - `focus_topics`: Topic list (id, name) or empty
+   - `initiation_receipt`: JournalEntry with `kind = "initiation_complete"`
+     (id, timestamp) or null
+   - `non_self_person_count`, `topic_count`
+   Do not invent missing entities. Parent session maps these to
+   `initiation_status` flags (SOUL language/overlay are parent-local).
 
 Do not create people during this step. The point is to prevent duplicate people
 and to give the session a stable social/context map before it answers.
@@ -64,6 +74,7 @@ Return a compact evidence pack for the parent session agent:
 
 - what was queried
 - bootstrap people map, top weighted nodes, and node type summary when requested
+- `initiation_evidence` when BOOTSTRAP
 - strongest factual matches
 - related nodes ranked by shared connections, kept separate from exact/direct matches
 - thin/contradictory areas
