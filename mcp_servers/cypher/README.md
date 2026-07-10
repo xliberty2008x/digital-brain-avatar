@@ -1,7 +1,8 @@
 # Digital Brain Cypher MCP
 
 Local MCP server for Digital Brain Neo4j access. It exposes general read tools
-alongside a serialized, idempotent JournalEntry append path:
+alongside a serialized, idempotent JournalEntry append path and typed quality
+sensor recorders:
 
 - `get_neo4j_schema`
 - `read_neo4j_cypher`
@@ -10,12 +11,17 @@ alongside a serialized, idempotent JournalEntry append path:
 - `bootstrap_journal_chain`
 - `append_journal_entry`
 - `get_journal_append_receipt`
+- `get_quality_receipt`
+- `get_harness_generation` / `record_harness_generation`
+- `create_feedback` / `revoke_feedback`
+- `record_run_event` (model-facing; `outcome_source` forced to `model_advisory`)
 
 `write_neo4j_cypher` remains available for idempotent post-append graph links
 (`MATCH`/`MERGE` only). It rejects JournalEntry/FOLLOWS/HEAD/JournalChain
-creation, DELETE/DETACH/REMOVE, full node replacement (`SET n = {...}`), and
-mutation of protected journal/chain fields. Normal writers must use the append
-API below for the journal core.
+creation, DELETE/DETACH/REMOVE, full node replacement (`SET n = {...}`),
+mutation of protected journal/chain fields, and protected quality/control
+labels (`Operational`, `Feedback`, `RunEvent`, …). Normal writers must use the
+append API below for the journal core and typed quality tools for sensors.
 
 ## JournalEntry append contract
 
@@ -48,6 +54,26 @@ Run `scripts/audit_journal_integrity.py`, review a candidate, then invoke
 `scripts/bootstrap_journal_chain.py --head-element-id <element-id> --apply`.
 The script calls the dedicated bootstrap tool; generic Cypher cannot access
 `JournalChain`, `HEAD`, `FOLLOWS`, or protected JournalEntry fields.
+
+## Quality sensors (Feedback / RunEvent)
+
+Typed quality writes use the quality Neo4j credential (not the model-facing
+runtime role). Sensors never create `JournalEntry` nodes or enter the journal
+vector index.
+
+1. Pin a session harness generation (`record_harness_generation` / host pin
+   script) and pass that `harness_generation_id` on every sensor.
+2. Mint one stable client id per logical Feedback / RunEvent / lifecycle event
+   and retain it for retries of that logical write.
+3. Outcomes: `created` / `replayed` (same id + fingerprint) / `conflict`
+   (same id, different fingerprint). On transport timeout, call
+   `get_quality_receipt(id)` — never blind-retry a changed payload.
+4. `create_feedback` stores optional raw text on a separate
+   `Operational:QualityPayload` node (`raw_payload_ref`); immutable metadata and
+   `request_fingerprint` remain after redaction removes the payload.
+5. Model-facing `record_run_event` always stores `outcome_source=model_advisory`.
+   Deterministic MCP/host/user tool outcomes use the in-process trusted
+   recorder (`QualityStore.record_deterministic_run_event`) — not model prose.
 
 ## Health endpoints
 

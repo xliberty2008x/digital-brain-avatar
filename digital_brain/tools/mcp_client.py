@@ -31,6 +31,16 @@ _RETRY_SAFE_TOOLS = {
     "get_harness_generation",
 }
 
+# Quality sensor writes: never blind-retry; reconcile via get_quality_receipt.
+_QUALITY_SENSOR_WRITE_TOOLS = frozenset(
+    {
+        "create_feedback",
+        "revoke_feedback",
+        "record_run_event",
+        "record_harness_generation",
+    }
+)
+
 MCP_PROTOCOL_VERSION = "2024-11-05"
 
 
@@ -316,7 +326,205 @@ async def record_harness_generation(generation: dict[str, Any]) -> dict[str, Any
         arguments["model_id"] = generation["model_id"]
     if generation.get("created_at") is not None:
         arguments["created_at"] = generation["created_at"]
-    return _tool_content_json(await call_mcp_tool("record_harness_generation", arguments))
+    try:
+        return _tool_content_json(
+            await call_mcp_tool("record_harness_generation", arguments)
+        )
+    except McpWriteOutcomeUnknown:
+        gen_id = str(arguments["id"])
+        found = await get_harness_generation(gen_id)
+        if found.get("outcome") == "ok":
+            return {**found, "reconciled": True}
+        raise
+
+
+async def get_quality_receipt(receipt_id: str) -> dict[str, Any]:
+    """Reconcile a quality write by stable id without issuing another write."""
+    return _tool_content_json(
+        await call_mcp_tool("get_quality_receipt", {"receipt_id": receipt_id})
+    )
+
+
+def _session_harness_generation_id(explicit: str | None = None) -> str:
+    """Prefer explicit id; else require DIGITAL_BRAIN_HARNESS_GENERATION_ID."""
+    if explicit is not None and str(explicit).strip():
+        return str(explicit).strip()
+    pinned = (os.getenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID") or "").strip()
+    if not pinned:
+        raise ValueError(
+            "harness_generation_id is required "
+            "(set DIGITAL_BRAIN_HARNESS_GENERATION_ID or pass explicitly)"
+        )
+    return pinned
+
+
+async def _quality_write_with_receipt_reconcile(
+    tool_name: str,
+    arguments: dict[str, Any],
+    receipt_id: str,
+) -> dict[str, Any]:
+    """Issue a quality sensor write; on unknown outcome reconcile by receipt.
+
+    Never blind-retries the write. Timeout/transport failure → receipt lookup.
+    """
+    if tool_name not in _QUALITY_SENSOR_WRITE_TOOLS and tool_name != "create_feedback":
+        pass  # allowlist is documentation; callers control tool_name
+    try:
+        return _tool_content_json(await call_mcp_tool(tool_name, arguments))
+    except McpWriteOutcomeUnknown:
+        receipt = await get_quality_receipt(receipt_id)
+        if receipt.get("outcome") == "ok":
+            return {**receipt, "reconciled": True}
+        raise
+
+
+async def create_feedback(
+    *,
+    id: str,
+    kind: str,
+    sensitivity: str,
+    harness_generation_id: str | None = None,
+    source_turn_ref: str | None = None,
+    redacted_summary: str | None = None,
+    raw_payload: str | None = None,
+    schema_version: str | None = None,
+    taxonomy_version: str | None = None,
+    request_fingerprint: str | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Create Feedback through the quality-plane MCP tool.
+
+    On ``McpWriteOutcomeUnknown``, reconciles via :func:`get_quality_receipt`
+    instead of blind-retrying.
+    """
+    arguments: dict[str, Any] = {
+        "id": id,
+        "kind": kind,
+        "sensitivity": sensitivity,
+        "harness_generation_id": _session_harness_generation_id(harness_generation_id),
+    }
+    if source_turn_ref is not None:
+        arguments["source_turn_ref"] = source_turn_ref
+    if redacted_summary is not None:
+        arguments["redacted_summary"] = redacted_summary
+    if raw_payload is not None:
+        arguments["raw_payload"] = raw_payload
+    if schema_version is not None:
+        arguments["schema_version"] = schema_version
+    if taxonomy_version is not None:
+        arguments["taxonomy_version"] = taxonomy_version
+    if request_fingerprint is not None:
+        arguments["request_fingerprint"] = request_fingerprint
+    if created_at is not None:
+        arguments["created_at"] = created_at
+    return await _quality_write_with_receipt_reconcile(
+        "create_feedback", arguments, str(id)
+    )
+
+
+async def revoke_feedback(
+    *,
+    id: str,
+    feedback_id: str,
+    actor: str,
+    reason_code: str | None = None,
+    request_fingerprint: str | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Revoke Feedback via lifecycle event; reconcile by receipt on timeout."""
+    arguments: dict[str, Any] = {
+        "id": id,
+        "feedback_id": feedback_id,
+        "actor": actor,
+    }
+    if reason_code is not None:
+        arguments["reason_code"] = reason_code
+    if request_fingerprint is not None:
+        arguments["request_fingerprint"] = request_fingerprint
+    if created_at is not None:
+        arguments["created_at"] = created_at
+    return await _quality_write_with_receipt_reconcile(
+        "revoke_feedback", arguments, str(id)
+    )
+
+
+async def record_run_event(
+    *,
+    id: str,
+    route: str,
+    tool_outcome: str,
+    harness_generation_id: str | None = None,
+    tool: str | None = None,
+    outcome_source: str | None = None,
+    task_outcome: str | None = None,
+    approach: str | None = None,
+    error_class: str | None = None,
+    decision_point: str | None = None,
+    eligible_exposure: bool | None = None,
+    entity_refs: list[str] | None = None,
+    journal_refs: list[str] | None = None,
+    redacted_summary: str | None = None,
+    sensitivity: str | None = None,
+    recurrence_key: str | None = None,
+    session_ref: str | None = None,
+    host: str | None = None,
+    trace_id: str | None = None,
+    attempt_id: str | None = None,
+    latency_ms: int | None = None,
+    observed_at: str | None = None,
+    schema_version: str | None = None,
+    taxonomy_version: str | None = None,
+    request_fingerprint: str | None = None,
+    plugin_version: str | None = None,
+    policy_digest: str | None = None,
+    mcp_version: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    """Record a model-facing RunEvent (server forces model_advisory source).
+
+    On timeout, reconciles via :func:`get_quality_receipt` — never blind-retries.
+    Deterministic MCP/host outcomes must use the server-side trusted recorder,
+    not this model-facing path.
+    """
+    arguments: dict[str, Any] = {
+        "id": id,
+        "harness_generation_id": _session_harness_generation_id(harness_generation_id),
+        "route": route,
+        "tool_outcome": tool_outcome,
+    }
+    optional: dict[str, Any] = {
+        "tool": tool,
+        "outcome_source": outcome_source,
+        "task_outcome": task_outcome,
+        "approach": approach,
+        "error_class": error_class,
+        "decision_point": decision_point,
+        "eligible_exposure": eligible_exposure,
+        "entity_refs": entity_refs,
+        "journal_refs": journal_refs,
+        "redacted_summary": redacted_summary,
+        "sensitivity": sensitivity,
+        "recurrence_key": recurrence_key,
+        "session_ref": session_ref,
+        "host": host,
+        "trace_id": trace_id,
+        "attempt_id": attempt_id,
+        "latency_ms": latency_ms,
+        "observed_at": observed_at,
+        "schema_version": schema_version,
+        "taxonomy_version": taxonomy_version,
+        "request_fingerprint": request_fingerprint,
+        "plugin_version": plugin_version,
+        "policy_digest": policy_digest,
+        "mcp_version": mcp_version,
+        "model_id": model_id,
+    }
+    for key, value in optional.items():
+        if value is not None:
+            arguments[key] = value
+    return await _quality_write_with_receipt_reconcile(
+        "record_run_event", arguments, str(id)
+    )
 
 
 async def execute_cypher(query: str, params: dict = None, embed_text: str | None = None) -> list[dict]:

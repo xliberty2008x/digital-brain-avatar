@@ -3,7 +3,7 @@
     "digital-brain-neo4j": {
       "type": "http",
       "url": "http://localhost:8000/api/mcp/",
-      "note": "Local Neo4j Cypher MCP endpoint for avatar_digital_brain. Exposes read/write Cypher plus the server-owned JournalEntry append tools (get_journal_chain_head, append_journal_entry, and get_journal_append_receipt). Literal URL: some hosts do not expand shell-style env defaults in plugin MCP URLs."
+      "note": "Local Neo4j Cypher MCP endpoint for avatar_digital_brain. Exposes read/write Cypher, server-owned JournalEntry append tools (get_journal_chain_head, append_journal_entry, get_journal_append_receipt), and typed quality sensors (get_quality_receipt, get/record_harness_generation, create_feedback, revoke_feedback, record_run_event). Sensors require harness_generation_id; model-facing record_run_event is always model_advisory; reconcile timeouts via get_quality_receipt (never blind-retry). Literal URL: some hosts do not expand shell-style env defaults in plugin MCP URLs."
     }
   }
 }

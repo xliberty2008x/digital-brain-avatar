@@ -52,6 +52,27 @@ def full_access_toolset(url: str | None = None) -> McpToolset:
             'get_journal_chain_head',
             'append_journal_entry',
             'get_journal_append_receipt',
+            'get_quality_receipt',
+            'get_harness_generation',
+            'record_harness_generation',
+            'create_feedback',
+            'revoke_feedback',
+            'record_run_event',
         ],
         url=url
+    )
+
+
+def quality_sensor_toolset(url: str | None = None) -> McpToolset:
+    """Model-facing quality sensor recorder/read tools only."""
+    return create_neo4j_toolset(
+        tools=[
+            'get_quality_receipt',
+            'get_harness_generation',
+            'record_harness_generation',
+            'create_feedback',
+            'revoke_feedback',
+            'record_run_event',
+        ],
+        url=url,
     )

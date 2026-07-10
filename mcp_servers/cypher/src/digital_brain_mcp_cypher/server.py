@@ -451,6 +451,222 @@ def record_harness_generation(
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="Create Feedback",
+        description=(
+            "Idempotently record an Operational:Feedback observation. "
+            "Requires harness_generation_id. Raw text is stored separately "
+            "as QualityPayload for later redaction; never journal-indexed."
+        ),
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+def create_feedback(
+    id: str = Field(..., description="Stable feedback id (client-minted)"),
+    kind: str = Field(
+        ...,
+        description="entity_wrong | claim_false | miss | invent | praise",
+    ),
+    sensitivity: str = Field(
+        ...,
+        description="public_ops | personal | intimate",
+    ),
+    harness_generation_id: str = Field(
+        ...,
+        description="Session-pinned HarnessGeneration id (required)",
+    ),
+    source_turn_ref: str | None = Field(
+        default=None, description="Optional source turn reference"
+    ),
+    redacted_summary: str | None = Field(
+        default=None, description="Bounded redacted summary (max 512 chars)"
+    ),
+    raw_payload: str | None = Field(
+        default=None,
+        description="Optional removable raw text (stored as QualityPayload)",
+    ),
+    schema_version: str | None = Field(default=None, description="Feedback schema version"),
+    taxonomy_version: str | None = Field(
+        default=None, description="Evidence taxonomy version"
+    ),
+    request_fingerprint: str | None = Field(
+        default=None, description="Optional client fingerprint for integrity check"
+    ),
+    created_at: str | None = Field(default=None, description="ISO timestamp; set on create"),
+) -> str:
+    """Quality-plane Feedback create with replay/conflict receipt."""
+    _ensure_quality_schema()
+    feedback: dict[str, Any] = {
+        "id": id,
+        "kind": kind,
+        "sensitivity": sensitivity,
+        "harness_generation_id": harness_generation_id,
+        "source_turn_ref": source_turn_ref,
+        "redacted_summary": redacted_summary,
+        "raw_payload": raw_payload,
+        "schema_version": schema_version,
+        "taxonomy_version": taxonomy_version,
+        "request_fingerprint": request_fingerprint,
+        "created_at": created_at,
+    }
+    payload = _quality_store().create_feedback(feedback)
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Revoke Feedback",
+        description=(
+            "Append a revoked FeedbackLifecycleEvent for an existing Feedback. "
+            "Idempotent by lifecycle event id + request fingerprint."
+        ),
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+def revoke_feedback(
+    id: str = Field(..., description="Stable lifecycle event id (client-minted)"),
+    feedback_id: str = Field(..., description="Target Feedback id"),
+    actor: str = Field(..., description="Actor performing the revocation"),
+    reason_code: str | None = Field(default=None, description="Optional reason code"),
+    request_fingerprint: str | None = Field(
+        default=None, description="Optional client fingerprint for integrity check"
+    ),
+    created_at: str | None = Field(default=None, description="ISO timestamp; set on create"),
+) -> str:
+    """Quality-plane Feedback revocation lifecycle event."""
+    _ensure_quality_schema()
+    revocation: dict[str, Any] = {
+        "id": id,
+        "feedback_id": feedback_id,
+        "actor": actor,
+        "reason_code": reason_code,
+        "request_fingerprint": request_fingerprint,
+        "created_at": created_at,
+    }
+    payload = _quality_store().revoke_feedback(revocation)
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Record Run Event",
+        description=(
+            "Idempotently record an Operational:RunEvent. Model-facing path "
+            "always stores outcome_source=model_advisory (callers cannot claim "
+            "mcp/host/user authority). Requires harness_generation_id."
+        ),
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+def record_run_event(
+    id: str = Field(..., description="Stable run event id (client-minted)"),
+    harness_generation_id: str = Field(
+        ...,
+        description="Session-pinned HarnessGeneration id (required, unchanged)",
+    ),
+    route: str = Field(
+        ...,
+        description="SKIP | READ | WRITE | FEEDBACK | MAINTAIN",
+    ),
+    tool_outcome: str = Field(
+        ...,
+        description="success | fail | empty | conflict | timeout",
+    ),
+    tool: str | None = Field(default=None, description="Tool name when applicable"),
+    outcome_source: str | None = Field(
+        default=None,
+        description=(
+            "Ignored on model-facing path; always forced to model_advisory. "
+            "Deterministic MCP/host outcomes use the trusted internal recorder."
+        ),
+    ),
+    task_outcome: str | None = Field(
+        default=None, description="success | fail | corrected | unknown"
+    ),
+    approach: str | None = Field(default=None, description="Advisory approach label"),
+    error_class: str | None = Field(default=None, description="Stable error class"),
+    decision_point: str | None = Field(default=None, description="Decision point label"),
+    eligible_exposure: bool | None = Field(default=None, description="Exposure eligibility"),
+    entity_refs: list[str] | None = Field(
+        default=None, description="Bounded entity id references (max 16)"
+    ),
+    journal_refs: list[str] | None = Field(
+        default=None, description="Bounded journal id references (max 16)"
+    ),
+    redacted_summary: str | None = Field(
+        default=None, description="Bounded redacted summary (max 512 chars)"
+    ),
+    sensitivity: str | None = Field(
+        default="public_ops",
+        description="public_ops | personal | intimate",
+    ),
+    recurrence_key: str | None = Field(default=None, description="Recurrence grouping key"),
+    session_ref: str | None = Field(default=None, description="Session reference"),
+    host: str | None = Field(default=None, description="Host identifier"),
+    trace_id: str | None = Field(default=None, description="Trace id"),
+    attempt_id: str | None = Field(default=None, description="Attempt id"),
+    latency_ms: int | None = Field(default=None, description="Latency in milliseconds"),
+    observed_at: str | None = Field(default=None, description="Observation timestamp"),
+    schema_version: str | None = Field(default=None, description="RunEvent schema version"),
+    taxonomy_version: str | None = Field(
+        default=None, description="Evidence taxonomy version"
+    ),
+    request_fingerprint: str | None = Field(
+        default=None, description="Optional client fingerprint for integrity check"
+    ),
+    plugin_version: str | None = Field(default=None, description="Denormalized plugin version"),
+    policy_digest: str | None = Field(default=None, description="Denormalized policy digest"),
+    mcp_version: str | None = Field(default=None, description="Denormalized MCP version"),
+    model_id: str | None = Field(default=None, description="Denormalized model id"),
+) -> str:
+    """Model-facing RunEvent recorder — outcome_source forced to model_advisory."""
+    _ensure_quality_schema()
+    # outcome_source from the model is intentionally discarded.
+    _ = outcome_source
+    event: dict[str, Any] = {
+        "id": id,
+        "harness_generation_id": harness_generation_id,
+        "route": route,
+        "tool_outcome": tool_outcome,
+        "tool": tool,
+        "task_outcome": task_outcome,
+        "approach": approach,
+        "error_class": error_class,
+        "decision_point": decision_point,
+        "eligible_exposure": eligible_exposure,
+        "entity_refs": entity_refs,
+        "journal_refs": journal_refs,
+        "redacted_summary": redacted_summary,
+        "sensitivity": sensitivity,
+        "recurrence_key": recurrence_key,
+        "session_ref": session_ref,
+        "host": host,
+        "trace_id": trace_id,
+        "attempt_id": attempt_id,
+        "latency_ms": latency_ms,
+        "observed_at": observed_at,
+        "schema_version": schema_version,
+        "taxonomy_version": taxonomy_version,
+        "request_fingerprint": request_fingerprint,
+        "plugin_version": plugin_version,
+        "policy_digest": policy_digest,
+        "mcp_version": mcp_version,
+        "model_id": model_id,
+    }
+    payload = _quality_store().record_run_event(
+        event,
+        force_outcome_source="model_advisory",
+    )
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Append Journal Entry",
         description="Atomically append one embedded JournalEntry to the primary chain.",
         readOnlyHint=False,

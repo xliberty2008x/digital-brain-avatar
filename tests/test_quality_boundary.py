@@ -30,8 +30,16 @@ def test_model_facing_mcp_exposes_only_recorder_read_quality_tools():
     tools = asyncio.run(server.mcp.list_tools())
     names = {t.name for t in tools}
 
-    # Present recorder/read stubs (Task 2 boundary; full sensors in Task 4).
-    assert "get_quality_receipt" in names
+    # Model-facing quality recorder/read surface (sensors + receipts).
+    for expected in (
+        "get_quality_receipt",
+        "create_feedback",
+        "revoke_feedback",
+        "record_run_event",
+        "record_harness_generation",
+        "get_harness_generation",
+    ):
+        assert expected in names
 
     # Coordinator / operator / activation names must never appear on FastMCP.
     for forbidden in COORDINATOR_FORBIDDEN_MCP_TOOL_NAMES:

@@ -286,3 +286,107 @@ def test_bootstrap_uses_the_dedicated_store_path(monkeypatch: pytest.MonkeyPatch
         "schema",
         "bootstrap:{'head_element_id': 'legacy-element', 'empty': False, 'chain_key': 'primary'}",
     ]
+
+
+def test_quality_sensor_tools_are_registered() -> None:
+    tools = asyncio.run(server.mcp.list_tools())
+    names = {t.name for t in tools}
+    for expected in (
+        "create_feedback",
+        "revoke_feedback",
+        "record_run_event",
+        "get_quality_receipt",
+        "record_harness_generation",
+        "get_harness_generation",
+    ):
+        assert expected in names
+
+
+def test_record_run_event_tool_forces_model_advisory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class Store:
+        def record_run_event(self, event, *, force_outcome_source=None, **_kwargs):
+            captured["event"] = event
+            captured["force_outcome_source"] = force_outcome_source
+            return {
+                "outcome": "created",
+                "run_event_id": event["id"],
+                "outcome_source": force_outcome_source,
+                "harness_generation_id": event["harness_generation_id"],
+            }
+
+    monkeypatch.setattr(server, "_quality_store", lambda: Store())
+    monkeypatch.setattr(server, "_ensure_quality_schema", lambda: None)
+
+    payload = json.loads(
+        _tool_function(server.record_run_event)(
+            id="re-model-1",
+            harness_generation_id="hg-" + ("b" * 64),
+            route="READ",
+            tool_outcome="success",
+            outcome_source="mcp",  # caller claim must be ignored
+            tool="read_neo4j_cypher",
+        )
+    )
+    assert payload["outcome"] == "created"
+    assert captured["force_outcome_source"] == "model_advisory"
+    assert payload["outcome_source"] == "model_advisory"
+
+
+def test_create_feedback_tool_does_not_call_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        server,
+        "generate_embedding",
+        lambda _text: (_ for _ in ()).throw(AssertionError("must not embed")),
+    )
+
+    class Store:
+        def create_feedback(self, feedback):
+            assert feedback["id"] == "fb-1"
+            assert "embedding" not in feedback
+            return {
+                "outcome": "created",
+                "feedback_id": feedback["id"],
+                "harness_generation_id": feedback["harness_generation_id"],
+            }
+
+    monkeypatch.setattr(server, "_quality_store", lambda: Store())
+    monkeypatch.setattr(server, "_ensure_quality_schema", lambda: None)
+
+    payload = json.loads(
+        _tool_function(server.create_feedback)(
+            id="fb-1",
+            kind="miss",
+            sensitivity="public_ops",
+            harness_generation_id="hg-" + ("c" * 64),
+            raw_payload="forgot EPAM Dec",
+        )
+    )
+    assert payload["outcome"] == "created"
+
+
+def test_revoke_feedback_tool_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Store:
+        def revoke_feedback(self, revocation):
+            return {
+                "outcome": "created",
+                "lifecycle_event_id": revocation["id"],
+                "feedback_id": revocation["feedback_id"],
+                "event": "revoked",
+            }
+
+    monkeypatch.setattr(server, "_quality_store", lambda: Store())
+    monkeypatch.setattr(server, "_ensure_quality_schema", lambda: None)
+    payload = json.loads(
+        _tool_function(server.revoke_feedback)(
+            id="fle-1",
+            feedback_id="fb-1",
+            actor="owner",
+        )
+    )
+    assert payload["event"] == "revoked"

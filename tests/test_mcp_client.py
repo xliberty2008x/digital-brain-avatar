@@ -6,9 +6,13 @@ import aiohttp
 from digital_brain.tools.mcp_client import (
     append_journal_entry,
     call_mcp_tool,
+    create_feedback,
     execute_cypher,
     get_journal_append_receipt,
     get_journal_chain_head,
+    get_quality_receipt,
+    record_run_event,
+    revoke_feedback,
     McpWriteOutcomeUnknown,
 )
 
@@ -161,4 +165,195 @@ class McpClientTests(IsolatedAsyncioTestCase):
                     },
                 )
 
+        self.assertEqual(session.calls, 1)
+
+    async def test_create_feedback_passes_stable_payload(self) -> None:
+        response = {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        '{"outcome":"created","feedback_id":"fb-1",'
+                        '"harness_generation_id":"hg-pin"}'
+                    ),
+                }
+            ]
+        }
+        with patch(
+            "digital_brain.tools.mcp_client.call_mcp_tool",
+            new=AsyncMock(return_value=response),
+        ) as mocked_call:
+            receipt = await create_feedback(
+                id="fb-1",
+                kind="entity_wrong",
+                sensitivity="personal",
+                harness_generation_id="hg-pin",
+                redacted_summary="not that",
+                raw_payload="raw note",
+            )
+
+        self.assertEqual(receipt["outcome"], "created")
+        mocked_call.assert_awaited_once_with(
+            "create_feedback",
+            {
+                "id": "fb-1",
+                "kind": "entity_wrong",
+                "sensitivity": "personal",
+                "harness_generation_id": "hg-pin",
+                "redacted_summary": "not that",
+                "raw_payload": "raw note",
+            },
+        )
+
+    async def test_record_run_event_uses_session_env_generation_id(self) -> None:
+        response = {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        '{"outcome":"created","run_event_id":"re-1",'
+                        '"outcome_source":"model_advisory"}'
+                    ),
+                }
+            ]
+        }
+        with patch.dict(
+            "os.environ",
+            {"DIGITAL_BRAIN_HARNESS_GENERATION_ID": "hg-from-env"},
+            clear=False,
+        ):
+            with patch(
+                "digital_brain.tools.mcp_client.call_mcp_tool",
+                new=AsyncMock(return_value=response),
+            ) as mocked_call:
+                receipt = await record_run_event(
+                    id="re-1",
+                    route="WRITE",
+                    tool_outcome="timeout",
+                    tool="append_journal_entry",
+                    outcome_source="mcp",
+                )
+
+        self.assertEqual(receipt["outcome"], "created")
+        args = mocked_call.await_args.args
+        self.assertEqual(args[0], "record_run_event")
+        self.assertEqual(args[1]["harness_generation_id"], "hg-from-env")
+        self.assertEqual(args[1]["outcome_source"], "mcp")
+
+    async def test_quality_write_timeout_reconciles_via_receipt_not_retry(self) -> None:
+        async def side_effect(tool_name, arguments, **_kwargs):
+            if tool_name == "create_feedback":
+                raise McpWriteOutcomeUnknown(tool_name, arguments, TimeoutError("t"))
+            if tool_name == "get_quality_receipt":
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                '{"outcome":"ok","receipt_id":"fb-timeout",'
+                                '"record_type":"Feedback","kind":"miss"}'
+                            ),
+                        }
+                    ]
+                }
+            raise AssertionError(f"unexpected tool {tool_name}")
+
+        with patch(
+            "digital_brain.tools.mcp_client.call_mcp_tool",
+            new=AsyncMock(side_effect=side_effect),
+        ) as mocked_call:
+            receipt = await create_feedback(
+                id="fb-timeout",
+                kind="miss",
+                sensitivity="public_ops",
+                harness_generation_id="hg-pin",
+            )
+
+        self.assertTrue(receipt.get("reconciled"))
+        self.assertEqual(receipt["record_type"], "Feedback")
+        tool_names = [c.args[0] for c in mocked_call.await_args_list]
+        self.assertEqual(tool_names, ["create_feedback", "get_quality_receipt"])
+
+    async def test_quality_write_timeout_without_receipt_reraises(self) -> None:
+        async def side_effect(tool_name, arguments, **_kwargs):
+            if tool_name == "record_run_event":
+                raise McpWriteOutcomeUnknown(tool_name, arguments, TimeoutError("t"))
+            if tool_name == "get_quality_receipt":
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": '{"outcome":"not_found","receipt_id":"re-miss"}',
+                        }
+                    ]
+                }
+            raise AssertionError(tool_name)
+
+        with patch(
+            "digital_brain.tools.mcp_client.call_mcp_tool",
+            new=AsyncMock(side_effect=side_effect),
+        ):
+            with self.assertRaises(McpWriteOutcomeUnknown):
+                await record_run_event(
+                    id="re-miss",
+                    route="READ",
+                    tool_outcome="empty",
+                    harness_generation_id="hg-pin",
+                )
+
+    async def test_get_quality_receipt_and_revoke_decoded(self) -> None:
+        responses = [
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": '{"outcome":"ok","receipt_id":"fb-1","record_type":"Feedback"}',
+                    }
+                ]
+            },
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            '{"outcome":"created","lifecycle_event_id":"fle-1",'
+                            '"event":"revoked"}'
+                        ),
+                    }
+                ]
+            },
+        ]
+        with patch(
+            "digital_brain.tools.mcp_client.call_mcp_tool",
+            new=AsyncMock(side_effect=responses),
+        ) as mocked_call:
+            self.assertEqual(
+                (await get_quality_receipt("fb-1"))["record_type"], "Feedback"
+            )
+            rev = await revoke_feedback(id="fle-1", feedback_id="fb-1", actor="user")
+            self.assertEqual(rev["event"], "revoked")
+
+        self.assertEqual(
+            mocked_call.await_args_list[0].args,
+            ("get_quality_receipt", {"receipt_id": "fb-1"}),
+        )
+
+    async def test_transport_failure_on_create_feedback_is_outcome_unknown_without_retry(
+        self,
+    ) -> None:
+        session = _FailingSession()
+        with patch(
+            "digital_brain.tools.mcp_client.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            with self.assertRaises(McpWriteOutcomeUnknown):
+                await call_mcp_tool(
+                    "create_feedback",
+                    {
+                        "id": "fb-x",
+                        "kind": "praise",
+                        "sensitivity": "public_ops",
+                        "harness_generation_id": "hg-pin",
+                    },
+                )
         self.assertEqual(session.calls, 1)

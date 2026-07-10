@@ -1,10 +1,11 @@
 """Quality/control plane: Operational boundary, constraints, and typed store.
 
-Task 2 establishes the boundary, roles, and idempotent schema bootstrap.
-HarnessGeneration pin/record lands in Task 3; full Feedback/RunEvent sensor
-transactions land in Task 4. This module owns the shared labels, exclusion
-fragments, quality driver store, harness generation receipts, and receipt
-read surface used by model-facing tools.
+Owns shared labels, exclusion fragments, the quality driver store,
+HarnessGeneration receipts, and typed Feedback/RunEvent sensor transactions.
+
+Sensors never call embeddings or journal-chain code. Raw Feedback text lives
+in a separate removable ``QualityPayload`` node so redaction can drop it
+without rewriting immutable observation metadata or the request fingerprint.
 """
 
 from __future__ import annotations
@@ -15,6 +16,50 @@ from typing import Any, Callable, Mapping
 
 # Must match digital_brain.maintenance.models.GENERATION_ID_PREFIX / algorithm.
 _GENERATION_ID_PREFIX = "hg-"
+
+# Sensor schema / taxonomy versions (independent of HarnessGeneration schema).
+FEEDBACK_SCHEMA_VERSION = "1"
+RUN_EVENT_SCHEMA_VERSION = "1"
+SENSOR_TAXONOMY_VERSION = "1"
+
+# Tight enums and length caps for sensor validation.
+FEEDBACK_KINDS: frozenset[str] = frozenset(
+    {"entity_wrong", "claim_false", "miss", "invent", "praise"}
+)
+SENSITIVITIES: frozenset[str] = frozenset({"public_ops", "personal", "intimate"})
+ROUTES: frozenset[str] = frozenset(
+    {"SKIP", "READ", "WRITE", "FEEDBACK", "MAINTAIN"}
+)
+TOOL_OUTCOMES: frozenset[str] = frozenset(
+    {"success", "fail", "empty", "conflict", "timeout"}
+)
+TASK_OUTCOMES: frozenset[str] = frozenset(
+    {"success", "fail", "corrected", "unknown"}
+)
+OUTCOME_SOURCES: frozenset[str] = frozenset(
+    {"mcp", "host", "user", "model_advisory"}
+)
+DETERMINISTIC_OUTCOME_SOURCES: frozenset[str] = frozenset({"mcp", "host", "user"})
+LIFECYCLE_EVENTS: frozenset[str] = frozenset(
+    {"triaged", "closed", "dismissed", "revoked", "redacted", "archived", "purged"}
+)
+
+MAX_SENSOR_ID_LEN = 128
+MAX_SUMMARY_LEN = 512
+MAX_RAW_PAYLOAD_LEN = 8_192
+MAX_REF_COUNT = 16
+MAX_REF_ITEM_LEN = 256
+MAX_APPROACH_LEN = 64
+MAX_TOOL_LEN = 128
+MAX_ERROR_CLASS_LEN = 128
+MAX_SOURCE_TURN_REF_LEN = 256
+MAX_ACTOR_LEN = 128
+MAX_REASON_CODE_LEN = 64
+MAX_TRACE_LEN = 128
+MAX_SESSION_REF_LEN = 128
+MAX_HOST_LEN = 128
+MAX_RECURRENCE_KEY_LEN = 128
+RAW_HMAC_KEY_VERSION = "sha256-v1"
 
 # Every quality/control node carries Operational in addition to its specific
 # label. Generic retrieval excludes Operational centrally.
@@ -66,6 +111,14 @@ QUALITY_CONSTRAINTS = (
     """
     CREATE CONSTRAINT operational_feedback_id_unique IF NOT EXISTS
     FOR (n:Feedback) REQUIRE n.id IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT operational_feedback_lifecycle_id_unique IF NOT EXISTS
+    FOR (n:FeedbackLifecycleEvent) REQUIRE n.id IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT operational_quality_payload_id_unique IF NOT EXISTS
+    FOR (n:QualityPayload) REQUIRE n.id IS UNIQUE
     """,
     """
     CREATE CONSTRAINT operational_run_event_id_unique IF NOT EXISTS
@@ -239,13 +292,15 @@ class QualityStore:
         self._with_session(operation)
 
     def get_receipt(self, receipt_id: str) -> dict[str, Any]:
-        """Look up a quality EffectReceipt (or stub) by stable id."""
-        receipt_id = str(receipt_id or "").strip()
-        if not receipt_id:
-            raise ValueError("receipt_id must be a non-empty string")
+        """Look up a quality record by stable id for write reconciliation.
+
+        Checks EffectReceipt, Feedback, RunEvent, then FeedbackLifecycleEvent.
+        Timeouts must call this instead of blindly retrying a write.
+        """
+        receipt_id = _require_sensor_id(receipt_id, "receipt_id")
 
         def operation(session: Any) -> dict[str, Any]:
-            row = _run_one(
+            effect = _run_one(
                 session,
                 """
                 MATCH (r:Operational:EffectReceipt {id: $receipt_id})
@@ -257,15 +312,103 @@ class QualityStore:
                 """,
                 {"receipt_id": receipt_id},
             )
-            if row is None:
-                return {"outcome": "not_found", "receipt_id": receipt_id}
-            return {
-                "outcome": "ok",
-                "receipt_id": row.get("receipt_id"),
-                "request_fingerprint": row.get("request_fingerprint"),
-                "status": row.get("status"),
-                "created_at": row.get("created_at"),
-            }
+            if effect is not None:
+                return {
+                    "outcome": "ok",
+                    "receipt_id": effect.get("receipt_id"),
+                    "record_type": "EffectReceipt",
+                    "request_fingerprint": effect.get("request_fingerprint"),
+                    "status": effect.get("status"),
+                    "created_at": effect.get("created_at"),
+                }
+
+            feedback = _run_one(
+                session,
+                """
+                MATCH (f:Operational:Feedback {id: $receipt_id})
+                RETURN f.id AS receipt_id,
+                       f.request_fingerprint AS request_fingerprint,
+                       f.kind AS kind,
+                       f.sensitivity AS sensitivity,
+                       f.harness_generation_id AS harness_generation_id,
+                       f.raw_payload_ref AS raw_payload_ref,
+                       f.created_at AS created_at
+                LIMIT 1
+                """,
+                {"receipt_id": receipt_id},
+            )
+            if feedback is not None:
+                return {
+                    "outcome": "ok",
+                    "receipt_id": feedback.get("receipt_id"),
+                    "record_type": "Feedback",
+                    "request_fingerprint": feedback.get("request_fingerprint"),
+                    "kind": feedback.get("kind"),
+                    "sensitivity": feedback.get("sensitivity"),
+                    "harness_generation_id": feedback.get("harness_generation_id"),
+                    "raw_payload_ref": feedback.get("raw_payload_ref"),
+                    "created_at": feedback.get("created_at"),
+                }
+
+            run_event = _run_one(
+                session,
+                """
+                MATCH (e:Operational:RunEvent {id: $receipt_id})
+                RETURN e.id AS receipt_id,
+                       e.request_fingerprint AS request_fingerprint,
+                       e.route AS route,
+                       e.tool AS tool,
+                       e.tool_outcome AS tool_outcome,
+                       e.outcome_source AS outcome_source,
+                       e.harness_generation_id AS harness_generation_id,
+                       e.observed_at AS observed_at,
+                       e.ingested_at AS ingested_at
+                LIMIT 1
+                """,
+                {"receipt_id": receipt_id},
+            )
+            if run_event is not None:
+                return {
+                    "outcome": "ok",
+                    "receipt_id": run_event.get("receipt_id"),
+                    "record_type": "RunEvent",
+                    "request_fingerprint": run_event.get("request_fingerprint"),
+                    "route": run_event.get("route"),
+                    "tool": run_event.get("tool"),
+                    "tool_outcome": run_event.get("tool_outcome"),
+                    "outcome_source": run_event.get("outcome_source"),
+                    "harness_generation_id": run_event.get("harness_generation_id"),
+                    "observed_at": run_event.get("observed_at"),
+                    "created_at": run_event.get("ingested_at"),
+                }
+
+            lifecycle = _run_one(
+                session,
+                """
+                MATCH (l:Operational:FeedbackLifecycleEvent {id: $receipt_id})
+                RETURN l.id AS receipt_id,
+                       l.request_fingerprint AS request_fingerprint,
+                       l.feedback_id AS feedback_id,
+                       l.event AS event,
+                       l.actor AS actor,
+                       l.created_at AS created_at
+                LIMIT 1
+                """,
+                {"receipt_id": receipt_id},
+            )
+            if lifecycle is not None:
+                return {
+                    "outcome": "ok",
+                    "receipt_id": lifecycle.get("receipt_id"),
+                    "record_type": "FeedbackLifecycleEvent",
+                    "request_fingerprint": lifecycle.get("request_fingerprint"),
+                    "feedback_id": lifecycle.get("feedback_id"),
+                    "event": lifecycle.get("event"),
+                    "actor": lifecycle.get("actor"),
+                    "created_at": lifecycle.get("created_at"),
+                }
+
+            return {"outcome": "not_found", "receipt_id": receipt_id}
 
         return self._with_session(operation)
 
@@ -556,3 +699,1033 @@ class QualityStore:
             "request_fingerprint": existing.get("request_fingerprint"),
             "created_at": existing.get("created_at"),
         }
+
+    # ------------------------------------------------------------------
+    # Feedback sensors
+    # ------------------------------------------------------------------
+
+    def create_feedback(self, feedback: dict[str, Any]) -> dict[str, Any]:
+        """Idempotent create of Operational:Feedback (+ optional QualityPayload).
+
+        Same id + same request_fingerprint → ``replayed``.
+        Same id + different fingerprint → ``conflict``.
+        Raw text is stored only on a separate ``QualityPayload`` node.
+        """
+        if not isinstance(feedback, dict):
+            raise TypeError("feedback must be an object")
+
+        feedback_id = _require_sensor_id(feedback.get("id"), "feedback.id")
+        kind = _require_enum(feedback.get("kind"), FEEDBACK_KINDS, "feedback.kind")
+        sensitivity = _require_enum(
+            feedback.get("sensitivity"), SENSITIVITIES, "feedback.sensitivity"
+        )
+        harness_generation_id = _require_generation_id(
+            feedback.get("harness_generation_id")
+        )
+        schema_version = str(
+            feedback.get("schema_version") or FEEDBACK_SCHEMA_VERSION
+        ).strip()
+        taxonomy_version = str(
+            feedback.get("taxonomy_version") or SENSOR_TAXONOMY_VERSION
+        ).strip()
+        source_turn_ref = _optional_bounded_text(
+            feedback.get("source_turn_ref"),
+            "feedback.source_turn_ref",
+            MAX_SOURCE_TURN_REF_LEN,
+        )
+        redacted_summary = _optional_bounded_text(
+            feedback.get("redacted_summary"),
+            "feedback.redacted_summary",
+            MAX_SUMMARY_LEN,
+        )
+        raw_payload = feedback.get("raw_payload")
+        if raw_payload is not None and not isinstance(raw_payload, str):
+            raise TypeError("feedback.raw_payload must be a string or null")
+        if isinstance(raw_payload, str) and len(raw_payload) > MAX_RAW_PAYLOAD_LEN:
+            raise ValueError(
+                f"feedback.raw_payload exceeds max length {MAX_RAW_PAYLOAD_LEN}"
+            )
+        if isinstance(raw_payload, str) and not raw_payload:
+            raw_payload = None
+
+        raw_hmac: str | None = None
+        raw_payload_ref: str | None = None
+        hmac_key_version: str | None = None
+        if raw_payload is not None:
+            raw_hmac = compute_raw_hmac(raw_payload)
+            hmac_key_version = RAW_HMAC_KEY_VERSION
+            raw_payload_ref = f"qp-{feedback_id}"
+
+        identity = feedback_identity_payload(
+            kind=kind,
+            sensitivity=sensitivity,
+            source_turn_ref=source_turn_ref,
+            redacted_summary=redacted_summary,
+            harness_generation_id=harness_generation_id,
+            schema_version=schema_version,
+            taxonomy_version=taxonomy_version,
+            raw_hmac=raw_hmac,
+        )
+        request_fingerprint = compute_sensor_request_fingerprint(identity)
+        _assert_client_fingerprint(
+            feedback.get("request_fingerprint"),
+            request_fingerprint,
+            "feedback.request_fingerprint",
+        )
+
+        created_at = feedback.get("created_at")
+        if created_at is not None:
+            created_at = str(created_at)
+
+        props = {
+            "id": feedback_id,
+            "kind": kind,
+            "sensitivity": sensitivity,
+            "source_turn_ref": source_turn_ref,
+            "redacted_summary": redacted_summary,
+            "harness_generation_id": harness_generation_id,
+            "schema_version": schema_version,
+            "taxonomy_version": taxonomy_version,
+            "raw_payload_ref": raw_payload_ref,
+            "raw_hmac": raw_hmac,
+            "hmac_key_version": hmac_key_version,
+            "request_fingerprint": request_fingerprint,
+            "created_at": created_at,
+        }
+
+        def operation(session: Any) -> dict[str, Any]:
+            try:
+                return _execute_write(
+                    session,
+                    lambda tx: self._create_feedback_tx(
+                        tx,
+                        props=props,
+                        feedback_id=feedback_id,
+                        request_fingerprint=request_fingerprint,
+                        raw_payload=raw_payload,
+                        raw_payload_ref=raw_payload_ref,
+                    ),
+                )
+            except Exception as exc:
+                if not _is_uniqueness_constraint_error(exc):
+                    raise
+                raced = _execute_write(
+                    session,
+                    lambda tx: self._read_feedback_row(tx, feedback_id),
+                )
+                if raced is None:
+                    raise RuntimeError(
+                        "Feedback uniqueness race but node not found on re-read"
+                    ) from exc
+                return self._sensor_replay_or_conflict(
+                    raced,
+                    request_fingerprint=request_fingerprint,
+                    id_key="feedback_id",
+                    reused_reason="feedback_id_reused",
+                )
+
+        return self._with_session(operation)
+
+    def _create_feedback_tx(
+        self,
+        tx: Any,
+        *,
+        props: dict[str, Any],
+        feedback_id: str,
+        request_fingerprint: str,
+        raw_payload: str | None,
+        raw_payload_ref: str | None,
+    ) -> dict[str, Any]:
+        existing = self._read_feedback_row(tx, feedback_id)
+        if existing is not None:
+            return self._sensor_replay_or_conflict(
+                existing,
+                request_fingerprint=request_fingerprint,
+                id_key="feedback_id",
+                reused_reason="feedback_id_reused",
+            )
+
+        write_props = dict(props)
+        if not write_props.get("created_at"):
+            write_props["created_at"] = _now_iso(tx)
+
+        created = _run_one(
+            tx,
+            """
+            CREATE (f:Operational:Feedback)
+            SET f += $props
+            RETURN f.id AS id,
+                   f.request_fingerprint AS request_fingerprint,
+                   f.kind AS kind,
+                   f.sensitivity AS sensitivity,
+                   f.harness_generation_id AS harness_generation_id,
+                   f.raw_payload_ref AS raw_payload_ref,
+                   f.created_at AS created_at
+            """,
+            {"props": write_props},
+        )
+        if created is None:
+            raise RuntimeError("Feedback create returned no row")
+
+        if raw_payload is not None and raw_payload_ref is not None:
+            payload_props = {
+                "id": raw_payload_ref,
+                "owner_evidence_id": feedback_id,
+                "payload_text": raw_payload,
+                "sensitivity": write_props["sensitivity"],
+                "created_at": write_props["created_at"],
+            }
+            _consume(
+                tx.run(
+                    """
+                    MATCH (f:Operational:Feedback {id: $feedback_id})
+                    CREATE (p:Operational:QualityPayload)
+                    SET p += $payload_props
+                    CREATE (f)-[:HAS_RAW_PAYLOAD]->(p)
+                    """,
+                    {
+                        "feedback_id": feedback_id,
+                        "payload_props": payload_props,
+                    },
+                )
+            )
+
+        return {
+            "outcome": "created",
+            "feedback_id": created.get("id"),
+            "request_fingerprint": created.get("request_fingerprint"),
+            "kind": created.get("kind"),
+            "sensitivity": created.get("sensitivity"),
+            "harness_generation_id": created.get("harness_generation_id"),
+            "raw_payload_ref": created.get("raw_payload_ref"),
+            "created_at": created.get("created_at"),
+        }
+
+    def revoke_feedback(self, revocation: dict[str, Any]) -> dict[str, Any]:
+        """Append a revoked FeedbackLifecycleEvent (idempotent by lifecycle id)."""
+        if not isinstance(revocation, dict):
+            raise TypeError("revocation must be an object")
+
+        lifecycle_id = _require_sensor_id(revocation.get("id"), "revocation.id")
+        feedback_id = _require_sensor_id(
+            revocation.get("feedback_id"), "revocation.feedback_id"
+        )
+        actor = _require_bounded_text(
+            revocation.get("actor"), "revocation.actor", MAX_ACTOR_LEN
+        )
+        reason_code = _optional_bounded_text(
+            revocation.get("reason_code"),
+            "revocation.reason_code",
+            MAX_REASON_CODE_LEN,
+        )
+        event = "revoked"
+        identity = lifecycle_identity_payload(
+            feedback_id=feedback_id,
+            event=event,
+            actor=actor,
+            reason_code=reason_code,
+        )
+        request_fingerprint = compute_sensor_request_fingerprint(identity)
+        _assert_client_fingerprint(
+            revocation.get("request_fingerprint"),
+            request_fingerprint,
+            "revocation.request_fingerprint",
+        )
+
+        created_at = revocation.get("created_at")
+        if created_at is not None:
+            created_at = str(created_at)
+
+        props = {
+            "id": lifecycle_id,
+            "feedback_id": feedback_id,
+            "event": event,
+            "actor": actor,
+            "reason_code": reason_code,
+            "request_fingerprint": request_fingerprint,
+            "created_at": created_at,
+        }
+
+        def operation(session: Any) -> dict[str, Any]:
+            try:
+                return _execute_write(
+                    session,
+                    lambda tx: self._revoke_feedback_tx(
+                        tx,
+                        props=props,
+                        lifecycle_id=lifecycle_id,
+                        feedback_id=feedback_id,
+                        request_fingerprint=request_fingerprint,
+                    ),
+                )
+            except Exception as exc:
+                if not _is_uniqueness_constraint_error(exc):
+                    raise
+                raced = _execute_write(
+                    session,
+                    lambda tx: self._read_lifecycle_row(tx, lifecycle_id),
+                )
+                if raced is None:
+                    raise RuntimeError(
+                        "FeedbackLifecycleEvent uniqueness race but node not found"
+                    ) from exc
+                return self._sensor_replay_or_conflict(
+                    raced,
+                    request_fingerprint=request_fingerprint,
+                    id_key="lifecycle_event_id",
+                    reused_reason="lifecycle_event_id_reused",
+                )
+
+        return self._with_session(operation)
+
+    def _revoke_feedback_tx(
+        self,
+        tx: Any,
+        *,
+        props: dict[str, Any],
+        lifecycle_id: str,
+        feedback_id: str,
+        request_fingerprint: str,
+    ) -> dict[str, Any]:
+        existing = self._read_lifecycle_row(tx, lifecycle_id)
+        if existing is not None:
+            return self._sensor_replay_or_conflict(
+                existing,
+                request_fingerprint=request_fingerprint,
+                id_key="lifecycle_event_id",
+                reused_reason="lifecycle_event_id_reused",
+            )
+
+        parent = self._read_feedback_row(tx, feedback_id)
+        if parent is None:
+            return {
+                "outcome": "not_found",
+                "reason": "feedback_missing",
+                "feedback_id": feedback_id,
+                "lifecycle_event_id": lifecycle_id,
+            }
+
+        write_props = dict(props)
+        if not write_props.get("created_at"):
+            write_props["created_at"] = _now_iso(tx)
+
+        created = _run_one(
+            tx,
+            """
+            MATCH (f:Operational:Feedback {id: $feedback_id})
+            CREATE (l:Operational:FeedbackLifecycleEvent)
+            SET l += $props
+            CREATE (f)-[:HAS_LIFECYCLE_EVENT]->(l)
+            RETURN l.id AS id,
+                   l.feedback_id AS feedback_id,
+                   l.event AS event,
+                   l.actor AS actor,
+                   l.request_fingerprint AS request_fingerprint,
+                   l.created_at AS created_at
+            """,
+            {"feedback_id": feedback_id, "props": write_props},
+        )
+        if created is None:
+            raise RuntimeError("FeedbackLifecycleEvent create returned no row")
+        return {
+            "outcome": "created",
+            "lifecycle_event_id": created.get("id"),
+            "feedback_id": created.get("feedback_id"),
+            "event": created.get("event"),
+            "actor": created.get("actor"),
+            "request_fingerprint": created.get("request_fingerprint"),
+            "created_at": created.get("created_at"),
+        }
+
+    # ------------------------------------------------------------------
+    # RunEvent sensors
+    # ------------------------------------------------------------------
+
+    def record_run_event(
+        self,
+        event: dict[str, Any],
+        *,
+        force_outcome_source: str | None = None,
+        allowed_outcome_sources: frozenset[str] | None = None,
+    ) -> dict[str, Any]:
+        """Idempotent create of Operational:RunEvent with replay/conflict.
+
+        Model-facing callers pass ``force_outcome_source='model_advisory'``.
+        Trusted host/MCP recorders use :meth:`record_deterministic_run_event`.
+        """
+        if not isinstance(event, dict):
+            raise TypeError("event must be an object")
+
+        event_id = _require_sensor_id(event.get("id"), "event.id")
+        harness_generation_id = _require_generation_id(
+            event.get("harness_generation_id")
+        )
+        route = _require_enum(event.get("route"), ROUTES, "event.route")
+        tool_outcome = _require_enum(
+            event.get("tool_outcome"), TOOL_OUTCOMES, "event.tool_outcome"
+        )
+        sensitivity = _require_enum(
+            event.get("sensitivity") or "public_ops",
+            SENSITIVITIES,
+            "event.sensitivity",
+        )
+
+        if force_outcome_source is not None:
+            outcome_source = _require_enum(
+                force_outcome_source, OUTCOME_SOURCES, "outcome_source"
+            )
+        else:
+            outcome_source = _require_enum(
+                event.get("outcome_source"),
+                OUTCOME_SOURCES,
+                "event.outcome_source",
+            )
+        allowed = allowed_outcome_sources or OUTCOME_SOURCES
+        if outcome_source not in allowed:
+            raise ValueError(
+                f"event.outcome_source {outcome_source!r} not allowed "
+                f"(allowed={sorted(allowed)})"
+            )
+
+        task_outcome = event.get("task_outcome")
+        if task_outcome is not None:
+            task_outcome = _require_enum(
+                task_outcome, TASK_OUTCOMES, "event.task_outcome"
+            )
+
+        schema_version = str(
+            event.get("schema_version") or RUN_EVENT_SCHEMA_VERSION
+        ).strip()
+        taxonomy_version = str(
+            event.get("taxonomy_version") or SENSOR_TAXONOMY_VERSION
+        ).strip()
+        tool = _optional_bounded_text(event.get("tool"), "event.tool", MAX_TOOL_LEN)
+        approach = _optional_bounded_text(
+            event.get("approach"), "event.approach", MAX_APPROACH_LEN
+        )
+        error_class = _optional_bounded_text(
+            event.get("error_class"), "event.error_class", MAX_ERROR_CLASS_LEN
+        )
+        decision_point = _optional_bounded_text(
+            event.get("decision_point"), "event.decision_point", MAX_APPROACH_LEN
+        )
+        redacted_summary = _optional_bounded_text(
+            event.get("redacted_summary"), "event.redacted_summary", MAX_SUMMARY_LEN
+        )
+        trace_id = _optional_bounded_text(
+            event.get("trace_id"), "event.trace_id", MAX_TRACE_LEN
+        )
+        attempt_id = _optional_bounded_text(
+            event.get("attempt_id"), "event.attempt_id", MAX_TRACE_LEN
+        )
+        session_ref = _optional_bounded_text(
+            event.get("session_ref"), "event.session_ref", MAX_SESSION_REF_LEN
+        )
+        host = _optional_bounded_text(event.get("host"), "event.host", MAX_HOST_LEN)
+        recurrence_key = _optional_bounded_text(
+            event.get("recurrence_key"), "event.recurrence_key", MAX_RECURRENCE_KEY_LEN
+        )
+        entity_refs = _normalize_ref_list(event.get("entity_refs"), "event.entity_refs")
+        journal_refs = _normalize_ref_list(
+            event.get("journal_refs"), "event.journal_refs"
+        )
+        latency_ms = _optional_non_negative_int(event.get("latency_ms"), "event.latency_ms")
+        eligible_exposure = event.get("eligible_exposure")
+        if eligible_exposure is not None and not isinstance(eligible_exposure, bool):
+            raise TypeError("event.eligible_exposure must be a bool or null")
+
+        observed_at = event.get("observed_at")
+        if observed_at is not None:
+            observed_at = str(observed_at)
+        ingested_at = event.get("ingested_at")
+        if ingested_at is not None:
+            ingested_at = str(ingested_at)
+
+        # Optional denormalized diagnostics (not part of identity fingerprint).
+        plugin_version = _optional_bounded_text(
+            event.get("plugin_version"), "event.plugin_version", MAX_TOOL_LEN
+        )
+        policy_digest = _optional_bounded_text(
+            event.get("policy_digest"), "event.policy_digest", 128
+        )
+        mcp_version = _optional_bounded_text(
+            event.get("mcp_version"), "event.mcp_version", MAX_TOOL_LEN
+        )
+        model_id = _optional_bounded_text(
+            event.get("model_id"), "event.model_id", MAX_TOOL_LEN
+        )
+
+        identity = run_event_identity_payload(
+            schema_version=schema_version,
+            taxonomy_version=taxonomy_version,
+            harness_generation_id=harness_generation_id,
+            route=route,
+            tool=tool,
+            tool_outcome=tool_outcome,
+            task_outcome=task_outcome,
+            outcome_source=outcome_source,
+            approach=approach,
+            error_class=error_class,
+            decision_point=decision_point,
+            eligible_exposure=eligible_exposure,
+            entity_refs=entity_refs,
+            journal_refs=journal_refs,
+            redacted_summary=redacted_summary,
+            sensitivity=sensitivity,
+            recurrence_key=recurrence_key,
+            session_ref=session_ref,
+            host=host,
+            trace_id=trace_id,
+            attempt_id=attempt_id,
+            latency_ms=latency_ms,
+            observed_at=observed_at,
+        )
+        request_fingerprint = compute_sensor_request_fingerprint(identity)
+        _assert_client_fingerprint(
+            event.get("request_fingerprint"),
+            request_fingerprint,
+            "event.request_fingerprint",
+        )
+
+        props = {
+            "id": event_id,
+            "schema_version": schema_version,
+            "taxonomy_version": taxonomy_version,
+            "harness_generation_id": harness_generation_id,
+            "route": route,
+            "tool": tool,
+            "tool_outcome": tool_outcome,
+            "task_outcome": task_outcome,
+            "outcome_source": outcome_source,
+            "approach": approach,
+            "error_class": error_class,
+            "decision_point": decision_point,
+            "eligible_exposure": eligible_exposure,
+            "entity_refs": entity_refs,
+            "journal_refs": journal_refs,
+            "redacted_summary": redacted_summary,
+            "sensitivity": sensitivity,
+            "recurrence_key": recurrence_key,
+            "session_ref": session_ref,
+            "host": host,
+            "trace_id": trace_id,
+            "attempt_id": attempt_id,
+            "latency_ms": latency_ms,
+            "observed_at": observed_at,
+            "ingested_at": ingested_at,
+            "plugin_version": plugin_version,
+            "policy_digest": policy_digest,
+            "mcp_version": mcp_version,
+            "model_id": model_id,
+            "request_fingerprint": request_fingerprint,
+        }
+
+        def operation(session: Any) -> dict[str, Any]:
+            try:
+                return _execute_write(
+                    session,
+                    lambda tx: self._record_run_event_tx(
+                        tx,
+                        props=props,
+                        event_id=event_id,
+                        request_fingerprint=request_fingerprint,
+                    ),
+                )
+            except Exception as exc:
+                if not _is_uniqueness_constraint_error(exc):
+                    raise
+                raced = _execute_write(
+                    session,
+                    lambda tx: self._read_run_event_row(tx, event_id),
+                )
+                if raced is None:
+                    raise RuntimeError(
+                        "RunEvent uniqueness race but node not found on re-read"
+                    ) from exc
+                return self._sensor_replay_or_conflict(
+                    raced,
+                    request_fingerprint=request_fingerprint,
+                    id_key="run_event_id",
+                    reused_reason="run_event_id_reused",
+                )
+
+        return self._with_session(operation)
+
+    def record_deterministic_run_event(
+        self, event: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Trusted internal recorder for MCP/host/user tool outcomes.
+
+        Not model-facing: rejects ``model_advisory`` and requires an explicit
+        deterministic ``outcome_source`` (``mcp`` | ``host`` | ``user``).
+        """
+        if not isinstance(event, dict):
+            raise TypeError("event must be an object")
+        source = event.get("outcome_source")
+        if source is None or str(source).strip() == "":
+            raise ValueError(
+                "deterministic RunEvent requires outcome_source in "
+                f"{sorted(DETERMINISTIC_OUTCOME_SOURCES)}"
+            )
+        source = str(source).strip()
+        if source not in DETERMINISTIC_OUTCOME_SOURCES:
+            raise ValueError(
+                "deterministic RunEvent outcome_source must be one of "
+                f"{sorted(DETERMINISTIC_OUTCOME_SOURCES)}; got {source!r}"
+            )
+        return self.record_run_event(
+            event,
+            allowed_outcome_sources=DETERMINISTIC_OUTCOME_SOURCES,
+        )
+
+    def _record_run_event_tx(
+        self,
+        tx: Any,
+        *,
+        props: dict[str, Any],
+        event_id: str,
+        request_fingerprint: str,
+    ) -> dict[str, Any]:
+        existing = self._read_run_event_row(tx, event_id)
+        if existing is not None:
+            return self._sensor_replay_or_conflict(
+                existing,
+                request_fingerprint=request_fingerprint,
+                id_key="run_event_id",
+                reused_reason="run_event_id_reused",
+            )
+
+        write_props = dict(props)
+        if not write_props.get("ingested_at"):
+            write_props["ingested_at"] = _now_iso(tx)
+        if not write_props.get("observed_at"):
+            write_props["observed_at"] = write_props["ingested_at"]
+
+        created = _run_one(
+            tx,
+            """
+            CREATE (e:Operational:RunEvent)
+            SET e += $props
+            RETURN e.id AS id,
+                   e.request_fingerprint AS request_fingerprint,
+                   e.route AS route,
+                   e.tool AS tool,
+                   e.tool_outcome AS tool_outcome,
+                   e.outcome_source AS outcome_source,
+                   e.harness_generation_id AS harness_generation_id,
+                   e.observed_at AS observed_at,
+                   e.ingested_at AS ingested_at
+            """,
+            {"props": write_props},
+        )
+        if created is None:
+            raise RuntimeError("RunEvent create returned no row")
+        return {
+            "outcome": "created",
+            "run_event_id": created.get("id"),
+            "request_fingerprint": created.get("request_fingerprint"),
+            "route": created.get("route"),
+            "tool": created.get("tool"),
+            "tool_outcome": created.get("tool_outcome"),
+            "outcome_source": created.get("outcome_source"),
+            "harness_generation_id": created.get("harness_generation_id"),
+            "observed_at": created.get("observed_at"),
+            "created_at": created.get("ingested_at"),
+        }
+
+    @staticmethod
+    def _read_feedback_row(runner: Any, feedback_id: str) -> dict[str, Any] | None:
+        row = _run_one(
+            runner,
+            """
+            MATCH (f:Operational:Feedback {id: $feedback_id})
+            RETURN f.id AS id,
+                   f.request_fingerprint AS request_fingerprint,
+                   f.kind AS kind,
+                   f.sensitivity AS sensitivity,
+                   f.harness_generation_id AS harness_generation_id,
+                   f.raw_payload_ref AS raw_payload_ref,
+                   f.created_at AS created_at
+            LIMIT 1
+            """,
+            {"feedback_id": feedback_id},
+        )
+        if row is None:
+            return None
+        return {
+            "id": row.get("id"),
+            "request_fingerprint": row.get("request_fingerprint"),
+            "kind": row.get("kind"),
+            "sensitivity": row.get("sensitivity"),
+            "harness_generation_id": row.get("harness_generation_id"),
+            "raw_payload_ref": row.get("raw_payload_ref"),
+            "created_at": row.get("created_at"),
+        }
+
+    @staticmethod
+    def _read_lifecycle_row(runner: Any, lifecycle_id: str) -> dict[str, Any] | None:
+        row = _run_one(
+            runner,
+            """
+            MATCH (l:Operational:FeedbackLifecycleEvent {id: $lifecycle_id})
+            RETURN l.id AS id,
+                   l.feedback_id AS feedback_id,
+                   l.event AS event,
+                   l.actor AS actor,
+                   l.request_fingerprint AS request_fingerprint,
+                   l.created_at AS created_at
+            LIMIT 1
+            """,
+            {"lifecycle_id": lifecycle_id},
+        )
+        if row is None:
+            return None
+        return {
+            "id": row.get("id"),
+            "feedback_id": row.get("feedback_id"),
+            "event": row.get("event"),
+            "actor": row.get("actor"),
+            "request_fingerprint": row.get("request_fingerprint"),
+            "created_at": row.get("created_at"),
+        }
+
+    @staticmethod
+    def _read_run_event_row(runner: Any, event_id: str) -> dict[str, Any] | None:
+        row = _run_one(
+            runner,
+            """
+            MATCH (e:Operational:RunEvent {id: $event_id})
+            RETURN e.id AS id,
+                   e.request_fingerprint AS request_fingerprint,
+                   e.route AS route,
+                   e.tool AS tool,
+                   e.tool_outcome AS tool_outcome,
+                   e.outcome_source AS outcome_source,
+                   e.harness_generation_id AS harness_generation_id,
+                   e.observed_at AS observed_at,
+                   e.ingested_at AS ingested_at
+            LIMIT 1
+            """,
+            {"event_id": event_id},
+        )
+        if row is None:
+            return None
+        return {
+            "id": row.get("id"),
+            "request_fingerprint": row.get("request_fingerprint"),
+            "route": row.get("route"),
+            "tool": row.get("tool"),
+            "tool_outcome": row.get("tool_outcome"),
+            "outcome_source": row.get("outcome_source"),
+            "harness_generation_id": row.get("harness_generation_id"),
+            "observed_at": row.get("observed_at"),
+            "created_at": row.get("ingested_at"),
+        }
+
+    @staticmethod
+    def _sensor_replay_or_conflict(
+        existing: dict[str, Any],
+        *,
+        request_fingerprint: str,
+        id_key: str,
+        reused_reason: str,
+    ) -> dict[str, Any]:
+        record_id = existing.get("id")
+        if existing.get("request_fingerprint") == request_fingerprint:
+            payload: dict[str, Any] = {
+                "outcome": "replayed",
+                id_key: record_id,
+                "request_fingerprint": existing.get("request_fingerprint"),
+                "created_at": existing.get("created_at"),
+            }
+            for key in (
+                "kind",
+                "sensitivity",
+                "harness_generation_id",
+                "raw_payload_ref",
+                "route",
+                "tool",
+                "tool_outcome",
+                "outcome_source",
+                "observed_at",
+                "feedback_id",
+                "event",
+                "actor",
+            ):
+                if key in existing and existing[key] is not None:
+                    payload[key] = existing[key]
+            return payload
+        return {
+            "outcome": "conflict",
+            "reason": reused_reason,
+            id_key: record_id,
+            "request_fingerprint": existing.get("request_fingerprint"),
+            "created_at": existing.get("created_at"),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Sensor validation + fingerprint helpers (no embeddings / journal imports)
+# ---------------------------------------------------------------------------
+
+
+def compute_raw_hmac(payload_text: str, *, key_version: str = RAW_HMAC_KEY_VERSION) -> str:
+    """Content-binding digest for removable raw payload (not a secret MAC)."""
+    return hashlib.sha256(
+        f"{key_version}\0{payload_text}".encode("utf-8")
+    ).hexdigest()
+
+
+def compute_sensor_request_fingerprint(identity: Mapping[str, Any]) -> str:
+    """Canonical request fingerprint for sensor replay-vs-conflict."""
+    return hashlib.sha256(
+        _canonical_json(identity).encode("utf-8")
+    ).hexdigest()
+
+
+def feedback_identity_payload(
+    *,
+    kind: str,
+    sensitivity: str,
+    source_turn_ref: str | None,
+    redacted_summary: str | None,
+    harness_generation_id: str,
+    schema_version: str,
+    taxonomy_version: str,
+    raw_hmac: str | None,
+) -> dict[str, Any]:
+    """Immutable Feedback fields that define the request fingerprint.
+
+    Raw payload text is intentionally excluded so redaction of QualityPayload
+    cannot change the observation fingerprint.
+    """
+    return {
+        "harness_generation_id": harness_generation_id,
+        "kind": kind,
+        "raw_hmac": raw_hmac,
+        "redacted_summary": redacted_summary,
+        "schema_version": schema_version,
+        "sensitivity": sensitivity,
+        "source_turn_ref": source_turn_ref,
+        "taxonomy_version": taxonomy_version,
+    }
+
+
+def lifecycle_identity_payload(
+    *,
+    feedback_id: str,
+    event: str,
+    actor: str,
+    reason_code: str | None,
+) -> dict[str, Any]:
+    return {
+        "actor": actor,
+        "event": event,
+        "feedback_id": feedback_id,
+        "reason_code": reason_code,
+    }
+
+
+def run_event_identity_payload(
+    *,
+    schema_version: str,
+    taxonomy_version: str,
+    harness_generation_id: str,
+    route: str,
+    tool: str | None,
+    tool_outcome: str,
+    task_outcome: str | None,
+    outcome_source: str,
+    approach: str | None,
+    error_class: str | None,
+    decision_point: str | None,
+    eligible_exposure: bool | None,
+    entity_refs: list[str],
+    journal_refs: list[str],
+    redacted_summary: str | None,
+    sensitivity: str,
+    recurrence_key: str | None,
+    session_ref: str | None,
+    host: str | None,
+    trace_id: str | None,
+    attempt_id: str | None,
+    latency_ms: int | None,
+    observed_at: str | None,
+) -> dict[str, Any]:
+    """Identity fields for RunEvent (ingested_at is bookkeeping only)."""
+    return {
+        "approach": approach,
+        "attempt_id": attempt_id,
+        "decision_point": decision_point,
+        "eligible_exposure": eligible_exposure,
+        "entity_refs": entity_refs,
+        "error_class": error_class,
+        "harness_generation_id": harness_generation_id,
+        "host": host,
+        "journal_refs": journal_refs,
+        "latency_ms": latency_ms,
+        "observed_at": observed_at,
+        "outcome_source": outcome_source,
+        "recurrence_key": recurrence_key,
+        "redacted_summary": redacted_summary,
+        "route": route,
+        "schema_version": schema_version,
+        "sensitivity": sensitivity,
+        "session_ref": session_ref,
+        "task_outcome": task_outcome,
+        "taxonomy_version": taxonomy_version,
+        "tool": tool,
+        "tool_outcome": tool_outcome,
+        "trace_id": trace_id,
+    }
+
+
+def build_tool_outcome_run_event(
+    *,
+    event_id: str,
+    harness_generation_id: str,
+    tool: str,
+    tool_outcome: str,
+    route: str,
+    outcome_source: str,
+    error_class: str | None = None,
+    approach: str | None = None,
+    redacted_summary: str | None = None,
+    latency_ms: int | None = None,
+    entity_refs: list[str] | None = None,
+    journal_refs: list[str] | None = None,
+    sensitivity: str = "public_ops",
+    session_ref: str | None = None,
+    observed_at: str | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic tool-outcome RunEvent payload (host/MCP use).
+
+    Used to instrument meaningful READ empty/fail and WRITE conflict/timeout
+    paths without relying on model prose.
+    """
+    return {
+        "id": event_id,
+        "harness_generation_id": harness_generation_id,
+        "route": route,
+        "tool": tool,
+        "tool_outcome": tool_outcome,
+        "outcome_source": outcome_source,
+        "error_class": error_class,
+        "approach": approach,
+        "redacted_summary": redacted_summary,
+        "latency_ms": latency_ms,
+        "entity_refs": entity_refs or [],
+        "journal_refs": journal_refs or [],
+        "sensitivity": sensitivity,
+        "session_ref": session_ref,
+        "observed_at": observed_at,
+        "schema_version": RUN_EVENT_SCHEMA_VERSION,
+        "taxonomy_version": SENSOR_TAXONOMY_VERSION,
+    }
+
+
+def _now_iso(runner: Any) -> str:
+    row = _run_one(runner, "RETURN toString(datetime()) AS ts")
+    return (row or {}).get("ts") or "unknown"
+
+
+def _require_sensor_id(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    cleaned = value.strip()
+    if len(cleaned) > MAX_SENSOR_ID_LEN:
+        raise ValueError(f"{field_name} exceeds max length {MAX_SENSOR_ID_LEN}")
+    return cleaned
+
+
+def _require_generation_id(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            "harness_generation_id is required (session pin "
+            "DIGITAL_BRAIN_HARNESS_GENERATION_ID)"
+        )
+    cleaned = value.strip()
+    if len(cleaned) > MAX_SENSOR_ID_LEN:
+        raise ValueError(
+            f"harness_generation_id exceeds max length {MAX_SENSOR_ID_LEN}"
+        )
+    return cleaned
+
+
+def _require_enum(value: Any, allowed: frozenset[str], field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be one of {sorted(allowed)}")
+    cleaned = value.strip()
+    if cleaned not in allowed:
+        raise ValueError(f"{field_name} must be one of {sorted(allowed)}; got {cleaned!r}")
+    return cleaned
+
+
+def _require_bounded_text(value: Any, field_name: str, max_len: int) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    cleaned = value.strip()
+    if len(cleaned) > max_len:
+        raise ValueError(f"{field_name} exceeds max length {max_len}")
+    return cleaned
+
+
+def _optional_bounded_text(
+    value: Any, field_name: str, max_len: int
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string or null")
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > max_len:
+        raise ValueError(f"{field_name} exceeds max length {max_len}")
+    return cleaned
+
+
+def _normalize_ref_list(value: Any, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise TypeError(f"{field_name} must be a list of strings")
+    if len(value) > MAX_REF_COUNT:
+        raise ValueError(f"{field_name} exceeds max count {MAX_REF_COUNT}")
+    out: list[str] = []
+    for idx, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{field_name}[{idx}] must be a non-empty string")
+        cleaned = item.strip()
+        if len(cleaned) > MAX_REF_ITEM_LEN:
+            raise ValueError(
+                f"{field_name}[{idx}] exceeds max length {MAX_REF_ITEM_LEN}"
+            )
+        out.append(cleaned)
+    # Stable order for fingerprinting without losing multiset semantics.
+    return sorted(out)
+
+
+def _optional_non_negative_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer or null")
+    if value < 0:
+        raise ValueError(f"{field_name} must be non-negative")
+    return value
+
+
+def _assert_client_fingerprint(
+    client_value: Any, server_value: str, field_name: str
+) -> None:
+    if client_value is None:
+        return
+    client = str(client_value).strip()
+    if not client:
+        return
+    if client != server_value:
+        raise ValueError(
+            f"{field_name} does not match identity fields "
+            f"(server={server_value[:16]}… client={client[:16]}…)"
+        )
