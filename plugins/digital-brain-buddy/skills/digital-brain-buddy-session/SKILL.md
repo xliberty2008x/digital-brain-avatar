@@ -74,9 +74,28 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    to avoid duplicate people, stale relationship assumptions, and narrow
    single-turn interpretation.
 
-7. Read `references/subagent-prompts.md` and reuse the canonical reader/writer prompt shapes instead of improvising them whenever delegated execution is available.
+7. After the mandatory BOOTSTRAP pack on a new buddy conversation, derive
+   initiation evidence and status using
+   `references/initiate-protocol.md` (rules must match
+   `../../scripts/initiation_status.py`).
 
-8. Treat delegated memory I/O as the default internal execution pattern for this skill:
+   Evidence includes: SOUL language + overlay fields; self Person
+   (`relation = "self"`); non-self people; Topics; JournalEntry with
+   `kind = "initiation_complete"`.
+
+8. If status is not `complete`, set session mode to `INITIATE` (or
+   `INITIATE_RESUME` when any seed already exists). Do **not** open with
+   normal buddy “thin memory” chat. Follow `references/initiate-protocol.md`:
+   language → intro (or one-line re-orient) → next missing Q&A → seed writes →
+   receipt. Only after `complete` switch to SKIP/READ/WRITE.
+
+9. If status is `complete`, use normal Routing below. When
+   `soft_hooks_allowed` / graph is thin, at most one soft progressive
+   question per session on SKIP/low-stakes turns (see initiate-protocol).
+
+10. Read `references/subagent-prompts.md` and reuse the canonical reader/writer prompt shapes instead of improvising them whenever delegated execution is available.
+
+11. Treat delegated memory I/O as the default internal execution pattern for this skill:
 - keep the main agent focused on conversation, judgment, and final phrasing
 - delegate bounded graph retrieval to `../digital-brain-buddy-read-memory/SKILL.md` — on hosts with native subagents (Claude Code, Cowork), invoke `digital-brain-reader` directly instead of improvising the delegation
 - delegate persistence to `../digital-brain-buddy-write-memory/SKILL.md` — on hosts with native subagents, invoke `digital-brain-writer` directly
@@ -103,6 +122,8 @@ Your job:
 
 Classify each turn before acting:
 
+- `INITIATE`: empty or incomplete initiation (see `references/initiate-protocol.md`).
+  Takes priority over SKIP/READ/WRITE until status is `complete`.
 - `SKIP`: greetings, filler, tiny acknowledgements, trivial chat.
 - `READ`: the user asks about prior events, people, patterns, or wants context-aware advice.
 - `WRITE`: the user shares a meaningful event, emotion, realization, relationship change, fear, goal, or decision that should be remembered.
@@ -194,12 +215,15 @@ server-side capability separation for maintenance.
 - Main session agent owns:
   - reading `SOUL.MD`
   - running the mandatory `BOOTSTRAP` read before the first user-facing response
-  - deciding whether the turn is `SKIP`, `READ`, `WRITE`, or `FEEDBACK`
+  - computing initiation_status after BOOTSTRAP and running INITIATE dialogue
+  - light SOUL User overlay edits (identity-bootstrap rules)
+  - deciding whether the turn is `INITIATE`, `SKIP`, `READ`, `WRITE`, or `FEEDBACK`
   - running the FEEDBACK evidence path (`create_feedback`) and review cards
   - separating fact from inference
   - the final buddy-facing response
 - Reader subagent owns:
   - mandatory `BOOTSTRAP` evidence pack on the first turn of a new buddy conversation
+  - initiation evidence fields in BOOTSTRAP: self flag, initiation_complete receipt, non-self person count, topic count
   - recent entries
   - core entities / heavy nodes
   - people map: names, ids, relations to the user, and recurring sensitive themes
@@ -232,7 +256,7 @@ When spawning delegated reader or writer workers, use the canonical prompt templ
 Do not hand-wave the task. Pass:
 
 - exact user turn or distilled write payload
-- whether the task is `BOOTSTRAP`, `READ`, `WRITE`, or `FEEDBACK`
+- whether the task is `BOOTSTRAP`, `INITIATE`, `READ`, `WRITE`, or `FEEDBACK`
 - relevant entity names already known
 - hard output expectations
 - the rule that writer tasks must not overlap
@@ -249,6 +273,8 @@ For `BOOTSTRAP` / first buddy turn:
 4. top 20 weighted core nodes, using graph degree as `weight`
 5. node label/type weight summary, using graph degree summed by label/type
 6. recent valid journal entries only to fill gaps and orient the current period
+7. `initiation_evidence`: self Person (`relation = "self"`), non-self person
+   count, topic count, and any `JournalEntry` with `kind = "initiation_complete"`
 
 For `READ`:
 
