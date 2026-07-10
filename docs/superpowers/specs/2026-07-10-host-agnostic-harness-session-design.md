@@ -602,8 +602,9 @@ for quality; memory MCP may still work.
 3. **Multi-user machines** — state dir is per OS user; host label in session_id
    is enough for rev 1.
 4. **MCP open in-container** — defer until digest fidelity proven.
-5. **active/ tightening** — H3 may break dual-process auto-emit if mounts lag;
-   measure before enforcing session_id match.
+5. **active/ tightening** — Resolved in rev 1.1: foreign sessions never match;
+   MCP dual-process uses last-writer only with
+   `DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN=1` on the mcp-cypher service.
 
 ---
 
