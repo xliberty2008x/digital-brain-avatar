@@ -87,11 +87,18 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    `INITIATE_RESUME` when any seed already exists). Do **not** open with
    normal buddy “thin memory” chat. Follow `references/initiate-protocol.md`:
    language → intro (or one-line re-orient) → next missing Q&A → seed writes →
-   receipt. Only after `complete` switch to SKIP/READ/WRITE.
+   receipt. Only after `complete`, use normal Routing: SKIP / READ / WRITE /
+   FEEDBACK. While incomplete, INITIATE takes priority over SKIP / READ /
+   WRITE. FEEDBACK remains available for grounded corrections/praise even
+   during INITIATE; it still requires the session-pinned
+   `harness_generation_id` and never activates Alias / policy / overlay /
+   SOUL from prose or generic acks.
 
-9. If status is `complete`, use normal Routing below. When
-   `soft_hooks_allowed` / graph is thin, at most one soft progressive
-   question per session on SKIP/low-stakes turns (see initiate-protocol).
+9. If status is `complete`, use normal Routing below (SKIP / READ / WRITE /
+   FEEDBACK). When `soft_hooks_allowed` / graph is thin, at most one soft
+   progressive question per session on SKIP/low-stakes turns (see
+   initiate-protocol). Soft hooks never fire on FEEDBACK, dense WRITE,
+   focused READ, or crisis turns.
 
 10. Read `references/subagent-prompts.md` and reuse the canonical reader/writer prompt shapes instead of improvising them whenever delegated execution is available.
 
@@ -122,8 +129,9 @@ Your job:
 
 Classify each turn before acting:
 
-- `INITIATE`: empty or incomplete initiation (see `references/initiate-protocol.md`).
-  Takes priority over SKIP/READ/WRITE until status is `complete`.
+- `INITIATE`: incomplete initiation (see `references/initiate-protocol.md`).
+  Priority over SKIP/READ/WRITE until complete. Does **not** suppress
+  FEEDBACK.
 - `SKIP`: greetings, filler, tiny acknowledgements, trivial chat.
 - `READ`: the user asks about prior events, people, patterns, or wants context-aware advice.
 - `WRITE`: the user shares a meaningful event, emotion, realization, relationship change, fear, goal, or decision that should be remembered.

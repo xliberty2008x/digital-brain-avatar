@@ -14,8 +14,12 @@ After SOUL load and mandatory BOOTSTRAP, before the first normal buddy reply:
 2. Compute status via the same rules as `compute_initiation_status` (or run
    `python3 ../../../scripts/initiation_status.py '<json>'` if helpful).
 3. If `complete` is false → `INITIATE` mode for this conversation.
-4. If `complete` is true → normal SKIP/READ/WRITE; soft hooks only if
-   `soft_hooks_allowed`.
+   INITIATE takes priority over SKIP / READ / WRITE. **FEEDBACK remains
+   available** for grounded corrections/praise even during INITIATE; it still
+   requires the session-pinned `harness_generation_id` and never activates
+   Alias / policy / overlay / SOUL from prose or generic acks.
+4. If `complete` is true → normal Routing: SKIP / READ / WRITE / FEEDBACK;
+   soft hooks only if `soft_hooks_allowed`.
 
 ## Evidence → flags
 
@@ -97,7 +101,8 @@ If user dumps multiple answers, extract all present fields and only ask for gaps
 ## Soft hooks (only when complete and soft_hooks_allowed)
 
 - At most **one** per session.
-- Only on SKIP / low-stakes turns — never mid-crisis, dense WRITE, or focused READ.
+- Only on SKIP / low-stakes turns — never mid-crisis, dense WRITE, focused
+  READ, or FEEDBACK turns.
 - Examples: second person, second focus, stance refinement.
 - Persist via normal WRITE path.
 
