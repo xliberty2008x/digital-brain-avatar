@@ -205,6 +205,48 @@ except ImportError:  # pragma: no cover - container without app package
         return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+try:
+    from digital_brain.maintenance.evaluation import (  # type: ignore
+        STATUSES_REQUIRING_EVALUATION,
+        EvaluationGateError,
+        assert_evaluation_present_for_transition,
+    )
+except ImportError:  # pragma: no cover - container without app package
+    STATUSES_REQUIRING_EVALUATION = frozenset(
+        {"validated", "review_pending", "approved"}
+    )
+
+    class EvaluationGateError(ValueError):
+        """Raised when evaluation preconditions fail for a proposal transition."""
+
+    def assert_evaluation_present_for_transition(
+        *,
+        target_status: str,
+        evaluation_receipt: Mapping[str, Any] | None,
+    ) -> None:
+        if target_status not in STATUSES_REQUIRING_EVALUATION:
+            return
+        if evaluation_receipt is None:
+            raise EvaluationGateError(
+                f"evaluation_required_for_status:{target_status}"
+            )
+        outcome = str(evaluation_receipt.get("outcome") or "")
+        inv = str(evaluation_receipt.get("invariant_result") or "")
+        priv = str(evaluation_receipt.get("privacy_result") or "")
+        if outcome not in EVALUATION_OUTCOMES:
+            raise EvaluationGateError("evaluation_receipt_missing_outcome")
+        if target_status in {"review_pending", "approved", "validated"}:
+            if priv in {"failed", "fail"} or inv in {"failed", "fail"}:
+                raise EvaluationGateError(
+                    f"hard_gate_blocks_transition:{target_status}"
+                    f":privacy={priv}:invariant={inv}"
+                )
+            if outcome == "failed":
+                raise EvaluationGateError(
+                    f"failed_evaluation_blocks_transition:{target_status}"
+                )
+
+
 DEFAULT_LEASE_KEY = "maintenance"
 DEFAULT_LEASE_TTL_SECONDS = 300
 MAX_ID_LEN = 128
@@ -350,6 +392,97 @@ def _json_field(value: Any, field: str, *, default: str) -> str:
     if len(encoded) > MAX_JSON_FIELD_LEN:
         raise ValueError(f"{field} exceeds max length {MAX_JSON_FIELD_LEN}")
     return encoded
+
+
+def _normalize_evaluation_receipt_view(
+    row: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "id": row.get("id"),
+        "outcome": row.get("outcome"),
+        "privacy_result": row.get("privacy_result"),
+        "invariant_result": row.get("invariant_result"),
+        "proposal_id": row.get("proposal_id"),
+    }
+
+
+def _load_evaluation_receipt_for_gate(
+    tx: Any,
+    *,
+    proposal_id: str | None = None,
+    evaluation_receipt_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Load the best EvaluationReceipt for a proposal status transition gate."""
+    if evaluation_receipt_id:
+        row = _run_one(
+            tx,
+            """
+            MATCH (e:Operational:EvaluationReceipt {id: $id})
+            RETURN e.id AS id,
+                   e.outcome AS outcome,
+                   e.privacy_result AS privacy_result,
+                   e.invariant_result AS invariant_result,
+                   e.proposal_id AS proposal_id
+            LIMIT 1
+            """,
+            {"id": evaluation_receipt_id},
+        )
+        return _normalize_evaluation_receipt_view(row)
+
+    if not proposal_id:
+        return None
+
+    # Prefer HAS_EVALUATION edge when present.
+    row = _run_one(
+        tx,
+        """
+        MATCH (p:Operational:Proposal {id: $proposal_id})
+              -[:HAS_EVALUATION]->(e:Operational:EvaluationReceipt)
+        RETURN e.id AS id,
+               e.outcome AS outcome,
+               e.privacy_result AS privacy_result,
+               e.invariant_result AS invariant_result,
+               e.proposal_id AS proposal_id
+        ORDER BY e.created_at DESC
+        LIMIT 1
+        """,
+        {"proposal_id": proposal_id},
+    )
+    if row is not None and row.get("id") is not None:
+        return _normalize_evaluation_receipt_view(row)
+
+    # Fall back to receipts keyed by proposal_id (pre-link create).
+    row = _run_one(
+        tx,
+        """
+        MATCH (e:Operational:EvaluationReceipt {proposal_id: $proposal_id})
+        RETURN e.id AS id,
+               e.outcome AS outcome,
+               e.privacy_result AS privacy_result,
+               e.invariant_result AS invariant_result,
+               e.proposal_id AS proposal_id
+        ORDER BY e.created_at DESC
+        LIMIT 1
+        """,
+        {"proposal_id": proposal_id},
+    )
+    if row is None or row.get("id") is None:
+        return None
+    return _normalize_evaluation_receipt_view(row)
+
+
+def _assert_evaluation_gate(
+    *,
+    target_status: str,
+    evaluation_receipt: Mapping[str, Any] | None,
+) -> None:
+    """Raise EvaluationGateError when evaluation is missing or hard-failed."""
+    assert_evaluation_present_for_transition(
+        target_status=target_status,
+        evaluation_receipt=evaluation_receipt,
+    )
 
 
 class MaintenanceStore:
@@ -1704,6 +1837,35 @@ class MaintenanceStore:
             PROPOSAL_STATUS_PROJECTIONS,
             "status_projection",
         )
+        evaluation_receipt_id = _optional_text(
+            payload.get("evaluation_receipt_id"),
+            "evaluation_receipt_id",
+            MAX_ID_LEN,
+        )
+        evaluation_receipt_embed = payload.get("evaluation_receipt") or payload.get(
+            "evaluation"
+        )
+        if evaluation_receipt_embed is not None and not isinstance(
+            evaluation_receipt_embed, Mapping
+        ):
+            raise TypeError("evaluation_receipt must be an object")
+        # Advanced statuses require a non-failed EvaluationReceipt at create time.
+        if status_projection in STATUSES_REQUIRING_EVALUATION:
+            if evaluation_receipt_embed is not None:
+                _assert_evaluation_gate(
+                    target_status=status_projection,
+                    evaluation_receipt=dict(evaluation_receipt_embed),
+                )
+                if evaluation_receipt_id is None:
+                    embedded_id = evaluation_receipt_embed.get("id")
+                    if embedded_id is not None:
+                        evaluation_receipt_id = _require_id(
+                            str(embedded_id), "evaluation_receipt.id"
+                        )
+            elif evaluation_receipt_id is None:
+                raise EvaluationGateError(
+                    f"evaluation_required_for_status:{status_projection}"
+                )
         target_ref = _require_id(payload.get("target_ref"), "target_ref")
         scope = _optional_text(payload.get("scope") or "local", "scope", MAX_REF_LEN) or "local"
         risk_tier = _optional_text(
@@ -1808,6 +1970,12 @@ class MaintenanceStore:
                     epoch=epoch,
                     run_id=run_id,
                     lease_key=lease_key,
+                    evaluation_receipt_id=evaluation_receipt_id,
+                    evaluation_receipt_embed=(
+                        dict(evaluation_receipt_embed)
+                        if evaluation_receipt_embed is not None
+                        else None
+                    ),
                 ),
             )
 
@@ -1840,12 +2008,51 @@ class MaintenanceStore:
         epoch: int,
         run_id: str,
         lease_key: str,
+        evaluation_receipt_id: str | None = None,
+        evaluation_receipt_embed: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         fence_err = self._assert_fence(
             tx, lease_key=lease_key, run_id=run_id, epoch=epoch
         )
         if fence_err is not None:
             return fence_err
+
+        # Re-check evaluation gate inside the transaction against durable receipts.
+        if status_projection in STATUSES_REQUIRING_EVALUATION:
+            receipt_view = None
+            if evaluation_receipt_id:
+                receipt_view = _load_evaluation_receipt_for_gate(
+                    tx, evaluation_receipt_id=evaluation_receipt_id
+                )
+            if receipt_view is None and evaluation_receipt_embed is not None:
+                receipt_view = {
+                    "id": evaluation_receipt_embed.get("id"),
+                    "outcome": evaluation_receipt_embed.get("outcome"),
+                    "privacy_result": evaluation_receipt_embed.get("privacy_result"),
+                    "invariant_result": evaluation_receipt_embed.get(
+                        "invariant_result"
+                    ),
+                    "proposal_id": evaluation_receipt_embed.get("proposal_id")
+                    or proposal_id,
+                }
+            if receipt_view is None:
+                receipt_view = _load_evaluation_receipt_for_gate(
+                    tx, proposal_id=proposal_id
+                )
+            _assert_evaluation_gate(
+                target_status=status_projection,
+                evaluation_receipt=receipt_view,
+            )
+            # If receipt is durable, require it to target this proposal (when set).
+            if (
+                receipt_view is not None
+                and receipt_view.get("proposal_id")
+                and str(receipt_view["proposal_id"]) != proposal_id
+            ):
+                raise EvaluationGateError(
+                    f"evaluation_receipt_proposal_mismatch:"
+                    f"{receipt_view.get('id')}:{proposal_id}"
+                )
 
         existing = _run_one(
             tx,
@@ -1943,7 +2150,16 @@ class MaintenanceStore:
                 {"proposal_id": proposal_id, "finding_id": fid},
             )
 
-        return {
+        linked_eval_id: str | None = None
+        if status_projection in STATUSES_REQUIRING_EVALUATION:
+            linked_eval_id = self._link_or_create_evaluation_for_proposal(
+                tx,
+                proposal_id=proposal_id,
+                evaluation_receipt_id=evaluation_receipt_id,
+                evaluation_receipt_embed=evaluation_receipt_embed,
+            )
+
+        result = {
             "outcome": "created",
             "proposal_id": created["id"],
             "status_projection": created["status_projection"],
@@ -1951,6 +2167,171 @@ class MaintenanceStore:
             "request_fingerprint": request_fingerprint,
             "created_at": created.get("created_at"),
         }
+        if linked_eval_id is not None:
+            result["evaluation_receipt_id"] = linked_eval_id
+        return result
+
+    def _link_or_create_evaluation_for_proposal(
+        self,
+        tx: Any,
+        *,
+        proposal_id: str,
+        evaluation_receipt_id: str | None,
+        evaluation_receipt_embed: dict[str, Any] | None,
+    ) -> str | None:
+        """Ensure a durable EvaluationReceipt is linked via HAS_EVALUATION."""
+        receipt_id = evaluation_receipt_id
+        if receipt_id is None and evaluation_receipt_embed is not None:
+            raw_id = evaluation_receipt_embed.get("id")
+            if raw_id:
+                receipt_id = _require_id(str(raw_id), "evaluation_receipt.id")
+
+        if receipt_id:
+            existing = _load_evaluation_receipt_for_gate(
+                tx, evaluation_receipt_id=receipt_id
+            )
+            if existing is None and evaluation_receipt_embed is not None:
+                # Materialize embedded receipt so later transitions stay gated.
+                self._create_embedded_evaluation_receipt(
+                    tx,
+                    proposal_id=proposal_id,
+                    receipt=evaluation_receipt_embed,
+                    receipt_id=receipt_id,
+                )
+            elif existing is None:
+                raise EvaluationGateError(
+                    f"evaluation_receipt_not_found:{receipt_id}"
+                )
+            _run_one(
+                tx,
+                """
+                MATCH (p:Operational:Proposal {id: $proposal_id})
+                MATCH (e:Operational:EvaluationReceipt {id: $evaluation_id})
+                MERGE (p)-[:HAS_EVALUATION]->(e)
+                RETURN e.id AS id
+                """,
+                {"proposal_id": proposal_id, "evaluation_id": receipt_id},
+            )
+            return receipt_id
+
+        if evaluation_receipt_embed is not None:
+            receipt_id = _require_id(
+                str(
+                    evaluation_receipt_embed.get("id")
+                    or f"eval-{_digest_text(proposal_id)[:16]}"
+                ),
+                "evaluation_receipt.id",
+            )
+            self._create_embedded_evaluation_receipt(
+                tx,
+                proposal_id=proposal_id,
+                receipt=evaluation_receipt_embed,
+                receipt_id=receipt_id,
+            )
+            _run_one(
+                tx,
+                """
+                MATCH (p:Operational:Proposal {id: $proposal_id})
+                MATCH (e:Operational:EvaluationReceipt {id: $evaluation_id})
+                MERGE (p)-[:HAS_EVALUATION]->(e)
+                RETURN e.id AS id
+                """,
+                {"proposal_id": proposal_id, "evaluation_id": receipt_id},
+            )
+            return receipt_id
+        return None
+
+    def _create_embedded_evaluation_receipt(
+        self,
+        tx: Any,
+        *,
+        proposal_id: str,
+        receipt: Mapping[str, Any],
+        receipt_id: str,
+    ) -> None:
+        outcome = _require_enum(
+            receipt.get("outcome"), EVALUATION_OUTCOMES, "evaluation_receipt.outcome"
+        )
+        privacy_result = _require_id(
+            str(receipt.get("privacy_result") or "passed"),
+            "evaluation_receipt.privacy_result",
+        )
+        invariant_result = _require_id(
+            str(receipt.get("invariant_result") or "passed"),
+            "evaluation_receipt.invariant_result",
+        )
+        evaluator_version = _require_id(
+            str(receipt.get("evaluator_version") or "1"),
+            "evaluation_receipt.evaluator_version",
+        )
+        baseline_ref = _require_id(
+            str(receipt.get("baseline_ref") or "baseline:embedded"),
+            "evaluation_receipt.baseline_ref",
+        )
+        candidate_ref = _require_id(
+            str(receipt.get("candidate_ref") or f"candidate:{proposal_id}"),
+            "evaluation_receipt.candidate_ref",
+        )
+        fixture_snapshot = _json_field(
+            receipt.get("fixture_snapshot") or "{}",
+            "evaluation_receipt.fixture_snapshot",
+            default="{}",
+        )
+        target_results = _json_field(
+            receipt.get("target_results") or "{}",
+            "evaluation_receipt.target_results",
+            default="{}",
+        )
+        guardrail_results = _json_field(
+            receipt.get("guardrail_results") or "{}",
+            "evaluation_receipt.guardrail_results",
+            default="{}",
+        )
+        identity = {
+            "baseline_ref": baseline_ref,
+            "candidate_ref": candidate_ref,
+            "evaluator_version": evaluator_version,
+            "id": receipt_id,
+            "outcome": outcome,
+            "proposal_id": proposal_id,
+        }
+        fp = _digest_text(_canonical_json(identity))
+        created = _run_one(
+            tx,
+            """
+            CREATE (e:Operational:EvaluationReceipt)
+            SET e.id = $id,
+                e.proposal_id = $proposal_id,
+                e.evaluator_version = $evaluator_version,
+                e.baseline_ref = $baseline_ref,
+                e.candidate_ref = $candidate_ref,
+                e.fixture_snapshot = $fixture_snapshot,
+                e.target_results = $target_results,
+                e.guardrail_results = $guardrail_results,
+                e.privacy_result = $privacy_result,
+                e.invariant_result = $invariant_result,
+                e.outcome = $outcome,
+                e.request_fingerprint = $fp,
+                e.created_at = datetime()
+            RETURN e.id AS id
+            """,
+            {
+                "id": receipt_id,
+                "proposal_id": proposal_id,
+                "evaluator_version": evaluator_version,
+                "baseline_ref": baseline_ref,
+                "candidate_ref": candidate_ref,
+                "fixture_snapshot": fixture_snapshot,
+                "target_results": target_results,
+                "guardrail_results": guardrail_results,
+                "privacy_result": privacy_result,
+                "invariant_result": invariant_result,
+                "outcome": outcome,
+                "fp": fp,
+            },
+        )
+        if created is None:
+            raise RuntimeError("embedded EvaluationReceipt create returned no row")
 
     # ------------------------------------------------------------------
     # Evaluation + Decision (separate records)
@@ -2267,6 +2648,16 @@ class MaintenanceStore:
             "withdrawn": "withdrawn",
         }
         projection = status_map[decision]
+
+        # Approval / defer-to-review cannot skip evaluation.
+        if projection in STATUSES_REQUIRING_EVALUATION:
+            receipt_view = _load_evaluation_receipt_for_gate(
+                tx, proposal_id=proposal_id
+            )
+            _assert_evaluation_gate(
+                target_status=projection,
+                evaluation_receipt=receipt_view,
+            )
 
         created = _run_one(
             tx,

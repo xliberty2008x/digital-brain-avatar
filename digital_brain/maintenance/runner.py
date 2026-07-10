@@ -21,6 +21,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
+from digital_brain.maintenance.evaluation import (
+    evaluate,
+    receipt_to_store_payload,
+)
 from digital_brain.maintenance.models import (
     DREAM_PIPELINE_STAGES,
     MAINTENANCE_SCHEMA_VERSION,
@@ -467,37 +471,80 @@ class DreamRunner:
                 finding_ids.append(fid)
 
                 pid = f"prop-{rid}-memory"
-                proposal = self.store.create_proposal(
-                    {
-                        "id": pid,
-                        "kind": "memory_suggestion",
-                        "title": "Memory signals awaiting owner",
-                        "target_ref": f"dream:{rid}:memory",
-                        "status_projection": "review_pending",
-                        "scope": "local",
-                        "risk_tier": "low",
-                        "reversibility": "n/a",
-                        "evidence_snapshot_id": frozen.snapshot_id,
-                        "evidence_strength": (
-                            "moderate" if len(waiting) >= 2 else "tentative"
-                        ),
-                        "dream_id": rid,
-                        "finding_ids": [fid],
-                        "evidence_summary_json": _canonical_json(
-                            {"ids": waiting, "count": len(waiting)}
-                        ),
-                        "counterevidence_json": _canonical_json(
-                            frozen.counterevidence_ids
-                        ),
-                        "sensitivity_max": frozen.sensitivity_max,
-                        "run_id": rid,
-                        "epoch": epoch,
-                        "lease_key": self.lease_key,
-                    }
-                )
+                # Evaluation cannot be skipped for review_pending / validated.
+                # Create as draft first; advance only via a non-failed receipt.
+                proposal_payload = {
+                    "id": pid,
+                    "kind": "memory_suggestion",
+                    "title": "Memory signals awaiting owner",
+                    "target_ref": f"dream:{rid}:memory",
+                    "status_projection": "draft",
+                    "scope": "local",
+                    "risk_tier": "low",
+                    "reversibility": "n/a",
+                    "evidence_snapshot_id": frozen.snapshot_id,
+                    "evidence_strength": (
+                        "moderate" if len(waiting) >= 2 else "tentative"
+                    ),
+                    "dream_id": rid,
+                    "finding_ids": [fid],
+                    "evidence_summary_json": _canonical_json(
+                        {"ids": waiting, "count": len(waiting)}
+                    ),
+                    "counterevidence_json": _canonical_json(
+                        frozen.counterevidence_ids
+                    ),
+                    "sensitivity_max": frozen.sensitivity_max,
+                    "run_id": rid,
+                    "epoch": epoch,
+                    "lease_key": self.lease_key,
+                }
+                proposal = self.store.create_proposal(proposal_payload)
                 if proposal.get("outcome") not in {"created", "replayed"}:
                     raise RuntimeError(f"create_proposal_failed:{proposal!r}")
                 proposal_ids.append(pid)
+
+                # Leakage-safe evaluate when holdout is present; refuse to
+                # promote to review_pending without a non-failed receipt.
+                holdout = list(frozen.holdout_ids)
+                if holdout and hasattr(self.store, "record_evaluation"):
+                    receipt = evaluate(
+                        {
+                            "id": pid,
+                            "kind": "memory_suggestion",
+                            "title": "Memory signals awaiting owner",
+                            "lane": "memory",
+                            "effect_type": "memory_suggestion",
+                            "evidence_ids": waiting,
+                            "status_projection": "draft",
+                        },
+                        {
+                            "text": (
+                                "Memory signals need owner review; do not invent "
+                                "facts or append journal corrections unattended."
+                            ),
+                            "effect_type": "memory_suggestion",
+                        },
+                        holdout=holdout,
+                        generation_evidence_ids=waiting,
+                        baseline_ref=f"baseline:{frozen.snapshot_id}",
+                        candidate_ref=f"candidate:{pid}",
+                        evaluation_id=f"eval-{pid}",
+                    )
+                    eval_payload = receipt_to_store_payload(
+                        receipt,
+                        run_id=rid,
+                        epoch=epoch,
+                        lease_key=self.lease_key,
+                    )
+                    eval_result = self.store.record_evaluation(eval_payload)
+                    if eval_result.get("outcome") not in {"created", "replayed"}:
+                        raise RuntimeError(
+                            f"record_evaluation_failed:{eval_result!r}"
+                        )
+                    # Passed receipt advances draft → validated in store.
+                    # Failed/inconclusive leaves draft/invalid. Never promote
+                    # to review_pending without a non-failed evaluation gate.
 
             # Housekeeping digest finding (report only — no auto retention).
             hk_id = f"find-{rid}-housekeeping"

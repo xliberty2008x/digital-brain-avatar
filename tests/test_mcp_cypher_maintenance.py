@@ -36,6 +36,7 @@ from digital_brain.maintenance.models import (  # noqa: E402
     stage_idempotency_key,
 )
 from digital_brain_mcp_cypher.maintenance import (  # noqa: E402
+    EvaluationGateError,
     MaintenanceStore,
 )
 from digital_brain_mcp_cypher.quality import PROTECTED_QUALITY_LABELS  # noqa: E402
@@ -187,6 +188,8 @@ class _FakeMaintSession:
         self.uses_evidence: set[tuple[str, str]] = set()
         # (proposal_id, finding_id)
         self.supported_by: set[tuple[str, str]] = set()
+        # (proposal_id, evaluation_id)
+        self.has_evaluation: set[tuple[str, str]] = set()
         self.calls: list[str] = []
 
     def execute_write(self, fn):  # noqa: ANN001
@@ -431,10 +434,15 @@ class _FakeMaintSession:
             self.evaluations[eid] = {
                 "id": eid,
                 "outcome": params["outcome"],
+                "proposal_id": params.get("proposal_id"),
+                "privacy_result": params.get("privacy_result") or "passed",
+                "invariant_result": params.get("invariant_result") or "passed",
                 "request_fingerprint": params["fp"],
+                "created_at": self._ts(),
             }
-            prop = self.proposals.get(params["proposal_id"])
+            prop = self.proposals.get(params.get("proposal_id"))
             if prop is not None:
+                self.has_evaluation.add((params["proposal_id"], eid))
                 if params["outcome"] == "passed" and prop.get("status_projection") == "draft":
                     prop["status_projection"] = "validated"
                 elif params["outcome"] == "failed":
@@ -442,6 +450,15 @@ class _FakeMaintSession:
             return _Result(
                 {"id": eid, "outcome": params["outcome"], "created_at": self._ts()}
             )
+
+        if "MERGE (p)-[:HAS_EVALUATION]->(e)" in q and "MATCH (e:Operational:EvaluationReceipt {id:" in q:
+            # Link existing evaluation to proposal (create_proposal advanced path).
+            pid = params.get("proposal_id")
+            eid = params.get("evaluation_id")
+            if pid and eid and eid in self.evaluations:
+                self.has_evaluation.add((pid, eid))
+                return _Result({"id": eid})
+            return _Result(None)
 
         if "CREATE (d:Operational:Decision)" in q:
             did = params["id"]
@@ -517,13 +534,55 @@ class _FakeMaintSession:
             node = self.findings.get(params["id"])
             return _Result(None if node is None else dict(node))
 
-        if "MATCH (p:Operational:Proposal {id:" in q:
+        if "HAS_EVALUATION" in q and "EvaluationReceipt" in q and "RETURN e.id AS id" in q:
+            pid = params.get("proposal_id")
+            for (prop_id, eid) in self.has_evaluation:
+                if prop_id == pid and eid in self.evaluations:
+                    node = self.evaluations[eid]
+                    return _Result(
+                        {
+                            "id": node["id"],
+                            "outcome": node.get("outcome"),
+                            "privacy_result": node.get("privacy_result"),
+                            "invariant_result": node.get("invariant_result"),
+                            "proposal_id": node.get("proposal_id"),
+                        }
+                    )
+            return _Result(None)
+
+        if "MATCH (p:Operational:Proposal {id:" in q and "HAS_EVALUATION" not in q:
             node = self.proposals.get(params["id"])
             return _Result(None if node is None else dict(node))
 
+        if "MATCH (e:Operational:EvaluationReceipt {proposal_id:" in q:
+            pid = params.get("proposal_id")
+            for node in self.evaluations.values():
+                if node.get("proposal_id") == pid:
+                    return _Result(
+                        {
+                            "id": node["id"],
+                            "outcome": node.get("outcome"),
+                            "privacy_result": node.get("privacy_result"),
+                            "invariant_result": node.get("invariant_result"),
+                            "proposal_id": node.get("proposal_id"),
+                        }
+                    )
+            return _Result(None)
+
         if "MATCH (e:Operational:EvaluationReceipt {id:" in q:
             node = self.evaluations.get(params["id"])
-            return _Result(None if node is None else dict(node))
+            if node is None:
+                return _Result(None)
+            return _Result(
+                {
+                    "id": node["id"],
+                    "outcome": node.get("outcome"),
+                    "privacy_result": node.get("privacy_result"),
+                    "invariant_result": node.get("invariant_result"),
+                    "proposal_id": node.get("proposal_id"),
+                    "request_fingerprint": node.get("request_fingerprint"),
+                }
+            )
 
         if "MATCH (d:Operational:Decision {id:" in q:
             node = self.decisions.get(params["id"])
@@ -949,6 +1008,240 @@ def test_record_retention_effect_is_fenced_and_idempotent():
         }
     )
     assert r2["outcome"] == "replayed"
+
+
+def _seed_draft_proposal(
+    session: _FakeMaintSession, store: MaintenanceStore, *, run_id: str, prop_id: str
+) -> int:
+    lease = _acquire(store, run_id=run_id)
+    epoch = lease["epoch"]
+    session.proposals[prop_id] = {
+        "id": prop_id,
+        "status_projection": "draft",
+        "request_fingerprint": "seed",
+    }
+    return epoch
+
+
+def test_create_proposal_rejects_advanced_status_without_evaluation():
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    lease = _acquire(store, run_id="run-gate-create")
+    epoch = lease["epoch"]
+
+    for status in ("validated", "review_pending", "approved"):
+        with pytest.raises(EvaluationGateError, match="evaluation_required"):
+            store.create_proposal(
+                {
+                    "id": f"prop-{status}",
+                    "kind": "overlay",
+                    "title": "needs eval",
+                    "target_ref": "skill:x",
+                    "status_projection": status,
+                    "evidence_snapshot_id": "snap-1",
+                    "run_id": "run-gate-create",
+                    "epoch": epoch,
+                }
+            )
+        assert f"prop-{status}" not in session.proposals
+
+
+def test_create_proposal_advanced_status_accepts_embedded_passed_receipt():
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    lease = _acquire(store, run_id="run-gate-embed")
+    epoch = lease["epoch"]
+
+    result = store.create_proposal(
+        {
+            "id": "prop-reviewed",
+            "kind": "overlay",
+            "title": "reviewed",
+            "target_ref": "skill:x",
+            "status_projection": "review_pending",
+            "evidence_snapshot_id": "snap-1",
+            "run_id": "run-gate-embed",
+            "epoch": epoch,
+            "evaluation_receipt": {
+                "id": "eval-embed-1",
+                "outcome": "passed",
+                "privacy_result": "passed",
+                "invariant_result": "passed",
+                "evaluator_version": "1",
+                "baseline_ref": "baseline:x",
+                "candidate_ref": "candidate:prop-reviewed",
+            },
+        }
+    )
+    assert result["outcome"] == "created"
+    assert result["status_projection"] == "review_pending"
+    assert result["evaluation_receipt_id"] == "eval-embed-1"
+    assert "eval-embed-1" in session.evaluations
+    assert ("prop-reviewed", "eval-embed-1") in session.has_evaluation
+
+
+def test_create_proposal_rejects_hard_failed_evaluation_for_transition():
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    lease = _acquire(store, run_id="run-gate-fail")
+    epoch = lease["epoch"]
+
+    with pytest.raises(EvaluationGateError, match="blocks_transition|failed_evaluation"):
+        store.create_proposal(
+            {
+                "id": "prop-bad-eval",
+                "kind": "overlay",
+                "title": "blocked",
+                "target_ref": "skill:x",
+                "status_projection": "approved",
+                "evidence_snapshot_id": "snap-1",
+                "run_id": "run-gate-fail",
+                "epoch": epoch,
+                "evaluation_receipt": {
+                    "id": "eval-fail-1",
+                    "outcome": "failed",
+                    "privacy_result": "failed",
+                    "invariant_result": "failed",
+                },
+            }
+        )
+    assert "prop-bad-eval" not in session.proposals
+
+
+def test_record_decision_approve_without_evaluation_is_blocked():
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    epoch = _seed_draft_proposal(
+        session, store, run_id="run-gate-dec", prop_id="prop-no-eval"
+    )
+
+    with pytest.raises(EvaluationGateError, match="evaluation_required"):
+        store.record_decision(
+            {
+                "id": "dec-skip",
+                "proposal_id": "prop-no-eval",
+                "decision": "approved",
+                "proposal_hash": "ph",
+                "target_ref": "t",
+                "before_fingerprint": "bf",
+                "artifact_or_effect_hash": "eh",
+                "decided_by": "owner",
+                "run_id": "run-gate-dec",
+                "epoch": epoch,
+            }
+        )
+    assert session.proposals["prop-no-eval"]["status_projection"] == "draft"
+    assert "dec-skip" not in session.decisions
+
+
+def test_record_decision_approve_blocked_by_hard_failed_evaluation():
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    epoch = _seed_draft_proposal(
+        session, store, run_id="run-gate-hard", prop_id="prop-hard"
+    )
+
+    # Seed a failed evaluation linked to the proposal (status becomes invalid).
+    session.proposals["prop-hard"]["status_projection"] = "draft"
+    failed = store.record_evaluation(
+        {
+            "id": "eval-hard-fail",
+            "proposal_id": "prop-hard",
+            "evaluator_version": "1",
+            "baseline_ref": "b",
+            "candidate_ref": "c",
+            "outcome": "failed",
+            "privacy_result": "failed",
+            "invariant_result": "failed",
+            "run_id": "run-gate-hard",
+            "epoch": epoch,
+        }
+    )
+    assert failed["outcome"] == "created"
+    assert session.proposals["prop-hard"]["status_projection"] == "invalid"
+
+    with pytest.raises(EvaluationGateError, match="blocks_transition|failed_evaluation"):
+        store.record_decision(
+            {
+                "id": "dec-hard",
+                "proposal_id": "prop-hard",
+                "decision": "approved",
+                "proposal_hash": "ph",
+                "target_ref": "t",
+                "before_fingerprint": "bf",
+                "artifact_or_effect_hash": "eh",
+                "decided_by": "owner",
+                "run_id": "run-gate-hard",
+                "epoch": epoch,
+            }
+        )
+    assert session.proposals["prop-hard"]["status_projection"] == "invalid"
+
+
+def test_unvalidated_to_approved_without_evaluation_rejected():
+    """Store/coordinator gate: draft → approved requires evaluation."""
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    epoch = _seed_draft_proposal(
+        session, store, run_id="run-gate-u2a", prop_id="prop-u2a"
+    )
+
+    with pytest.raises(EvaluationGateError, match="evaluation_required"):
+        store.record_decision(
+            {
+                "id": "dec-u2a",
+                "proposal_id": "prop-u2a",
+                "decision": "approved",
+                "proposal_hash": "ph",
+                "target_ref": "t",
+                "before_fingerprint": "bf",
+                "artifact_or_effect_hash": "eh",
+                "decided_by": "owner",
+                "run_id": "run-gate-u2a",
+                "epoch": epoch,
+            }
+        )
+
+
+def test_passed_evaluation_allows_approval_decision():
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    epoch = _seed_draft_proposal(
+        session, store, run_id="run-gate-ok", prop_id="prop-ok"
+    )
+    ev = store.record_evaluation(
+        {
+            "id": "eval-ok",
+            "proposal_id": "prop-ok",
+            "evaluator_version": "1",
+            "baseline_ref": "b",
+            "candidate_ref": "c",
+            "outcome": "passed",
+            "privacy_result": "passed",
+            "invariant_result": "passed",
+            "run_id": "run-gate-ok",
+            "epoch": epoch,
+        }
+    )
+    assert ev["outcome"] == "created"
+    assert session.proposals["prop-ok"]["status_projection"] == "validated"
+
+    dec = store.record_decision(
+        {
+            "id": "dec-ok",
+            "proposal_id": "prop-ok",
+            "decision": "approved",
+            "proposal_hash": "ph",
+            "target_ref": "t",
+            "before_fingerprint": "bf",
+            "artifact_or_effect_hash": "eh",
+            "decided_by": "owner",
+            "run_id": "run-gate-ok",
+            "epoch": epoch,
+        }
+    )
+    assert dec["outcome"] == "created"
+    assert session.proposals["prop-ok"]["status_projection"] == "approved"
 
 
 def test_maintenance_module_not_registered_as_fastmcp_tools():
