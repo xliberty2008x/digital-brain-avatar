@@ -12,7 +12,7 @@ load_dotenv('.env')
 
 from digital_brain.tools.mcp_client import execute_cypher
 
-async def test():
+async def main():
     # Розширена кверя: всі Person, Organization, Topic + інші з >= 3 зв'язками
     query = """
     MATCH (n)
@@ -55,4 +55,4 @@ async def test():
         print(f"ERROR: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(test())
+    asyncio.run(main())

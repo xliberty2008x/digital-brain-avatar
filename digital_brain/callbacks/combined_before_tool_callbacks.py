@@ -17,7 +17,7 @@ async def combined_before_tool_callback(
     tool_context: ToolContext,
 ) -> Optional[Dict[str, Any]]:
     """
-    Run MISSING-id DETACH DELETE sanitizer, then JournalEntry chain guard.
+    Run MISSING-id DETACH DELETE sanitizer, then block raw JournalEntry writes.
 
     Either callback may return an error tool response (isError=True) to block
     the underlying write. Returning None means the write may proceed.

@@ -1,52 +1,50 @@
 ---
 name: digital-brain-buddy-write-memory
-description: Persist one buddy-memory update into the `avatar_digital_brain` graph using the repo's chain-safe JournalEntry write rules. Use when the main session agent wants a subagent to resolve entities and write memory without carrying the whole mutation workflow in the main context.
+description: Persist one buddy-memory update through the server-owned, idempotent JournalEntry append protocol.
 ---
 
 # Digital Brain Buddy Write Memory
 
-Use this skill for delegated graph writes.
+Use this skill for one bounded persistence task. Read
+`../digital-brain-buddy-graph-mcp/references/runtime-patterns.md` first.
 
-## Start Here
+## Required workflow
 
-1. Read `../digital-brain-buddy-graph-mcp/references/runtime-patterns.md`.
+1. Resolve entities alias-first and inspect live relation names when needed.
+2. Mint one UUID `append_key` before the first append attempt; never replace it
+   while reconciling the same memory.
+3. Immediately before mutation, call `get_journal_chain_head()`.
+4. Call `append_journal_entry(append_key, content, timestamp, mood,
+   expected_version, properties?)` exactly once.
+5. On timeout or transport uncertainty, call `get_journal_append_receipt` with
+   the same key. Receipt outcomes are only:
+   - `found` — entry exists for this key (success; use its `journal_id`)
+   - `not_found` — safe to retry the **same** append payload and key once
+   Append tool outcomes (`created` / `replayed` / `conflict`) are separate.
+6. Conflict recovery for `append_journal_entry`:
+   - `stale_version` / `chain_changed`: re-read head; retry **same** key +
+     same content/timestamp/mood/properties with the new `expected_version`.
+     `journal_id` is null on these conflicts; do not post-link using the head.
+   - `append_key_reused`: stop; only mint a new key for a truly different entry.
+7. Only after append `created`/`replayed` (or receipt `found`), create entity
+   links with idempotent `MATCH`/`MERGE` Cypher using that `journal_id`. Never
+   create a JournalEntry or `FOLLOWS` through `write_neo4j_cypher`.
 
-2. Treat runtime code and live schema as the source of truth.
-
-3. Before any write:
-- fetch the latest valid `JournalEntry.id`
-- resolve entities alias-first
-- check live relation names if they matter
-
-## Scope
-
-This worker owns one bounded persistence task:
-
-- create one `JournalEntry`
-- chain-link it to the previous journal entry
-- reuse existing entities when possible
-- create minimal new nodes only after resolution fails
-- return the created journal id and any canonical ids used
-
-## Write Rules
-
-- Every `JournalEntry` must include explicit `id`.
-- Prefer `FOLLOWS` for chain linking.
-- Every `JournalEntry` write must pass `embed_text` — the MCP server hard-rejects a `JournalEntry` create/merge with no `embed_text`, so this is mandatory, not a preference.
-- Keep the query serial and deterministic.
-- When the parent session is running multiple tasks, writer invocations must still be serialized.
-
-## Output Shape
+## Output
 
 Return a compact mutation report:
 
-- created journal id
-- previous journal id used
-- entities reused vs created
-- any uncertainty or schema caveat
+- append outcome (`created`, `replayed`, or `conflict`) or receipt (`found` /
+  `not_found`)
+- journal id and append key
+- chain version and previous journal id when supplied
+- entities reused/created and any incomplete post-append links
 
-## Do Not
+## Do not
 
-- Do not write more than one `JournalEntry` unless the parent explicitly asks.
+- Do not create more than one JournalEntry unless explicitly asked.
+- Do not use `embed_text`, raw `CREATE (:JournalEntry)`, or raw `FOLLOWS`.
+- Do not mint a new append key after timeout.
+- Do not treat receipt `found` as `created`/`replayed` vocabulary.
+- Do not run unresolved writer tasks in parallel.
 - Do not answer the user in buddy voice.
-- Do not run in parallel with another unresolved writer task.

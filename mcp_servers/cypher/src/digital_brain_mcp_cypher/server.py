@@ -2,17 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import threading
 from typing import Any
 
 from fastmcp.server import FastMCP
 from mcp.types import ToolAnnotations
 from neo4j import GraphDatabase
 from pydantic import Field
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-from .embeddings import embed_text as generate_embedding
+from .embeddings import (
+    EmbeddingConfig,
+    EmbeddingRequestError,
+    embed_text as generate_embedding,
+)
+from .journal import (
+    PRIMARY_JOURNAL_CHAIN_KEY,
+    JournalStore,
+    build_append_request,
+    replay_or_key_conflict,
+)
 from .query_tools import (
+    assert_general_write_allowed,
     assert_read_only,
     serialize_records,
     validate_embedding_usage,
@@ -21,6 +36,10 @@ from .query_tools import (
 
 
 mcp = FastMCP("digital-brain-mcp-cypher")
+
+_JOURNAL_SCHEMA_LOCK = threading.Lock()
+_journal_schema_ready = False
+JOURNAL_EMBEDDING_DIMENSIONS = 1024
 
 
 def _neo4j_uri() -> str:
@@ -67,6 +86,73 @@ def _run_cypher(query: str, params: dict[str, Any] | None, write: bool) -> list[
                     }
                 ]
             return records
+
+
+def _journal_store() -> JournalStore:
+    return JournalStore(_driver, _neo4j_database())
+
+
+def _ensure_journal_schema() -> None:
+    """Create only the new safe uniqueness constraints once per process."""
+    global _journal_schema_ready
+    if _journal_schema_ready:
+        return
+    with _JOURNAL_SCHEMA_LOCK:
+        if _journal_schema_ready:
+            return
+        _journal_store().ensure_constraints()
+        _journal_schema_ready = True
+
+
+def _readiness() -> tuple[bool, dict[str, str]]:
+    """Check both required dependencies without exposing upstream diagnostics."""
+    try:
+        rows = _run_cypher("RETURN 1 AS ok", None, write=False)
+        if not rows or rows[0].get("ok") != 1:
+            return False, {"status": "not_ready", "reason": "neo4j_unavailable"}
+    except Exception:  # Neo4j errors can include credentials and host details.
+        return False, {"status": "not_ready", "reason": "neo4j_unavailable"}
+
+    try:
+        embedding = generate_embedding("digital-brain readiness probe")
+        config = EmbeddingConfig.from_env()
+        if (
+            config.dimensions != JOURNAL_EMBEDDING_DIMENSIONS
+            or embedding is None
+            or len(embedding) != JOURNAL_EMBEDDING_DIMENSIONS
+        ):
+            return False, {"status": "not_ready", "reason": "embedding_invalid"}
+    except EmbeddingRequestError as exc:
+        reason = {
+            "timeout": "embedding_timeout",
+            "oom": "embedding_oom",
+            "network": "embedding_unavailable",
+            "http_error": "embedding_unavailable",
+            "response_error": "embedding_unavailable",
+            "invalid_response": "embedding_invalid",
+        }.get(exc.reason, "embedding_unavailable")
+        return False, {"status": "not_ready", "reason": reason}
+    except (TimeoutError, ValueError):
+        return False, {"status": "not_ready", "reason": "embedding_invalid"}
+    except Exception:
+        return False, {"status": "not_ready", "reason": "embedding_unavailable"}
+
+    return True, {"status": "ready"}
+
+
+@mcp.custom_route("/livez", methods=["GET"], include_in_schema=False)
+async def livez(_: Request) -> JSONResponse:
+    """Return success once the MCP process itself has started."""
+    return JSONResponse({"status": "live"})
+
+
+@mcp.custom_route("/readyz", methods=["GET"], include_in_schema=False)
+async def readyz(_: Request) -> JSONResponse:
+    """Return success only when Neo4j and the configured embedder are usable."""
+    # Both the Neo4j driver and urllib-based Ollama client are synchronous.
+    # Keep their bounded (20s by default) probe off FastMCP's event loop.
+    ready, payload = await asyncio.to_thread(_readiness)
+    return JSONResponse(payload, status_code=200 if ready else 503)
 
 
 @mcp.tool(
@@ -121,14 +207,142 @@ def read_neo4j_cypher(
     )
 )
 def write_neo4j_cypher(
-    query: str = Field(..., description="Write Cypher query"),
+    query: str = Field(
+        ...,
+        description=(
+            "Write Cypher for post-append graph links only (MATCH/MERGE). "
+            "Cannot create JournalEntry/FOLLOWS/HEAD/JournalChain or mutate "
+            "protected journal fields; use append_journal_entry for the chain."
+        ),
+    ),
     params: dict[str, Any] | None = Field(default=None, description="Cypher parameters"),
     embed_text: str | None = Field(default=None, description="Text to embed into `$embedding`"),
 ) -> str:
+    assert_general_write_allowed(query)
     validate_embedding_usage(query, embed_text)
     embedding = generate_embedding(embed_text)
     rows = _run_cypher(query, with_embedding_param(params, embedding), write=True)
     return json.dumps(rows, ensure_ascii=False, default=str)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Journal Chain Head",
+        description="Read the current primary JournalChain version and head metadata.",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+def get_journal_chain_head() -> str:
+    """Return the current chain version without exposing journal content."""
+    payload = _journal_store().get_chain_head(PRIMARY_JOURNAL_CHAIN_KEY)
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Journal Append Receipt",
+        description="Look up a journal append by its UUID idempotency key.",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+def get_journal_append_receipt(
+    append_key: str = Field(..., description="UUID generated once for the append operation"),
+) -> str:
+    """Return a receipt that callers can use after an ambiguous timeout."""
+    payload = _journal_store().get_receipt(append_key)
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Bootstrap Journal Chain",
+        description="Initialize the protected primary JournalChain from a reviewed legacy head or an empty graph.",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+def bootstrap_journal_chain(
+    head_element_id: str | None = Field(
+        default=None,
+        description="Reviewed legacy JournalEntry elementId; required unless empty=True",
+    ),
+    empty: bool = Field(
+        default=False,
+        description="Only for a graph that contains no JournalEntry nodes",
+    ),
+) -> str:
+    """Bootstrap the chain through a dedicated, non-generic mutation path."""
+    _ensure_journal_schema()
+    payload = _journal_store().bootstrap(
+        head_element_id=head_element_id,
+        empty=empty,
+        chain_key=PRIMARY_JOURNAL_CHAIN_KEY,
+    )
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Append Journal Entry",
+        description="Atomically append one embedded JournalEntry to the primary chain.",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+def append_journal_entry(
+    append_key: str = Field(..., description="UUID generated once before the first attempt"),
+    content: str = Field(..., description="Non-empty journal entry content to embed"),
+    timestamp: str = Field(..., description="Entry timestamp"),
+    expected_version: int = Field(..., ge=0, description="Version returned by get_journal_chain_head"),
+    mood: str | None = Field(default=None, description="Optional entry mood"),
+    properties: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional additional flat Neo4j properties; reserved journal fields are rejected",
+    ),
+) -> str:
+    """Append with compare-and-swap and idempotency semantics.
+
+    A receipt lookup happens before embedding, and the embedding happens before
+    entering the Neo4j write transaction. This keeps retry reconciliation fast
+    and never holds a JournalChain lock while Ollama is running.
+    """
+    request = build_append_request(
+        append_key=append_key,
+        content=content,
+        timestamp=timestamp,
+        mood=mood,
+        expected_version=expected_version,
+        properties=properties,
+    )
+    store = _journal_store()
+
+    existing_receipt = store.find_receipt(request.append_key)
+    if existing_receipt is not None:
+        return json.dumps(
+            replay_or_key_conflict(existing_receipt, request),
+            ensure_ascii=False,
+            default=str,
+        )
+
+    chain = store.get_chain_head(PRIMARY_JOURNAL_CHAIN_KEY)
+    if chain["outcome"] != "ok":
+        chain["append_key"] = request.append_key
+        return json.dumps(chain, ensure_ascii=False, default=str)
+
+    _ensure_journal_schema()
+    embedding = generate_embedding(request.content)
+    if embedding is None:
+        # build_append_request already rejects blank content; this protects the
+        # invariant if an embedding provider is replaced in-process.
+        raise RuntimeError("Journal append did not receive an embedding")
+    payload = store.append(request.with_embedding(embedding), PRIMARY_JOURNAL_CHAIN_KEY)
+    return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def main() -> None:

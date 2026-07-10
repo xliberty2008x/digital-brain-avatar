@@ -123,21 +123,21 @@ Known entities to reuse when possible:
 <optional names or ids>
 
 What I need from you:
-- fetch the latest valid JournalEntry.id
+- mint one stable append key and fetch the JournalChain head immediately before append
 - resolve entities alias-first
-- create one chain-safe JournalEntry
+- append one JournalEntry through append_journal_entry, then create idempotent links
 - reuse existing entities where possible
 - return the created journal id plus reused or created entity ids
 
 Output contract:
 - created journal id
-- previous journal id used for FOLLOWS
+- append key, outcome, and chain version returned by the receipt
 - entities reused vs created
 - uncertainty or schema caveats
 
 Constraints:
 - one JournalEntry only unless explicitly told otherwise
-- writer tasks must be serialized; do not assume another writer is not running
+- writer tasks must be serialized; on timeout reconcile the same append key rather than retrying blindly
 - do not produce buddy-tone prose for the user
 ```
 

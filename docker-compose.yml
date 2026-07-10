@@ -12,6 +12,11 @@ services:
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
       NEO4J_dbms_security_procedures_allowlist: "apoc.*"
+      # Keep the local graph within a predictable budget so Ollama has enough
+      # Docker Desktop memory for real bge-m3 embedding requests.
+      NEO4J_server_memory_heap_initial__size: "${NEO4J_HEAP_INITIAL_SIZE:-512M}"
+      NEO4J_server_memory_heap_max__size: "${NEO4J_HEAP_MAX_SIZE:-1G}"
+      NEO4J_server_memory_pagecache_size: "${NEO4J_PAGECACHE_SIZE:-512M}"
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs
@@ -20,6 +25,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 20s
 
   mcp-cypher:
     build:
@@ -28,6 +34,8 @@ services:
         EMBEDDING_EXTRAS: "${EMBEDDING_EXTRAS:-}"
     depends_on:
       neo4j:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
     ports:
       - "${MCP_CYPHER_PORT:-8000}:8000"
@@ -43,10 +51,22 @@ services:
       EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-ollama}"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-bge-m3}"
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
-      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
+      OLLAMA_EMBEDDING_TIMEOUT_SECONDS: "${OLLAMA_EMBEDDING_TIMEOUT_SECONDS:-20}"
+      # Always the compose service name inside the network. Host .env may use
+      # localhost for host-side tools; that must not leak into this container.
+      OLLAMA_BASE_URL: "http://ollama:11434"
       HF_HOME: "/models/huggingface"
     volumes:
       - hf-cache:/models/huggingface
+    # /readyz verifies both Neo4j and a real bge-m3 embedding (1024 dims), so
+    # a healthy container is safe for JournalEntry writes rather than merely
+    # accepting TCP connections.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=25).getcode() == 200 else 1)"]
+      interval: 15s
+      timeout: 30s
+      retries: 4
+      start_period: 15s
 
   mcp-memory:
     profiles: ["memory"]
@@ -69,11 +89,18 @@ services:
 
   ollama:
     image: ollama/ollama:latest
-    profiles: ["ollama"]
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama-data:/root/.ollama
+    # This only proves that the Ollama API is accepting requests. The
+    # mcp-cypher /readyz check below verifies the configured bge-m3 model.
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
 volumes:
   neo4j-data:

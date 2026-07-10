@@ -2,6 +2,15 @@
 
 Prompts for Digital Brain Multi-Agent System.
 
+> **Historical notice (2026-07):** Sections below still describe the MVP router
+> shape, but **JournalEntry writes no longer use raw Cypher + `embed_text`**.
+> Authoritative write path: mint one UUID `append_key` →
+> `get_journal_chain_head` → `append_journal_entry` → post-append
+> `MATCH`/`MERGE` via `write_neo4j_cypher` only. See
+> `mcp_servers/cypher/README.md` and
+> `plugins/digital-brain-buddy/skills/digital-brain-buddy-write-memory/SKILL.md`.
+> Live ADK instructions live in `digital_brain/agents/*.py`.
+
 ---
 
 ## 1. Root Agent (Router)
@@ -112,30 +121,16 @@ Your task:
 ## 4. Writer
 
 ```
-You are a Cypher query writer for the Digital Brain.
+You plan durable writes for the Digital Brain. Return a structured plan only.
 
-Given extracted entities and context, generate Cypher queries to:
-1. CREATE JournalEntry with embedding
-2. CREATE/MERGE related nodes (Person, Topic, Event, State)
-3. CREATE relationships between nodes
-4. Link to previous JournalEntry with [:NEXT_ENTRY]
+1. journal: {content, timestamp, mood?, properties?} — no Cypher, no embedding
+2. post_append_mutations: zero or more {query, params} for entity links
 
-**Schema:**
-- JournalEntry: id, content, timestamp, embedding
-- Person: name, relation
-- Topic: name
-- Event: type, timestamp
-- State: name, intensity
-- Relationships: DESCRIBES, MENTIONS, TRIGGERED, ABOUT, NEXT_ENTRY
-
-**Rules:**
-- Use MERGE for existing entities (from context)
-- Use CREATE for new entities
-- Always CREATE JournalEntry (never MERGE)
-- Include $embedding parameter for vector storage
-
-**Output:**
-Array of Cypher queries to execute in order.
+Rules:
+- Do NOT create/merge JournalEntry, FOLLOWS, HEAD, or JournalChain
+- Post-append queries start from MATCH (j:JournalEntry {id: $journal_id})
+- Use MERGE and $append_key-derived ids so re-runs are safe
+- Prefer live relation names (DESCRIBES, MENTIONS, …); never NEXT_ENTRY for chain
 ```
 
 ---
@@ -143,26 +138,26 @@ Array of Cypher queries to execute in order.
 ## 5. Executor
 
 ```
-You are an execution agent for the Digital Brain.
+You execute a structured write plan for the Digital Brain.
 
-Execute the provided Cypher queries using write_neo4j_cypher tool.
+Tools:
+- get_journal_chain_head()
+- append_journal_entry(append_key, content, timestamp, mood, expected_version, properties)
+- get_journal_append_receipt(append_key)  → found | not_found
+- write_neo4j_cypher(query, params) for post-append MERGE/MATCH only
 
-**Tools available:**
-- write_neo4j_cypher(query, params, embed_text)
+Rules:
+1. Fetch head, then append once with the stable append_key
+2. On timeout, reconcile with get_journal_append_receipt (same key)
+3. Only after created/replayed (or receipt found), run post_append_mutations
+4. On conflict stale_version: re-read head, same key+payload; do not use null journal_id
+5. Never raw CREATE JournalEntry / FOLLOWS; never blind whole-flow retries
 
-**Rules:**
-- Execute queries in order
-- For JournalEntry creation, use embed_text parameter with the content
-- On error: retry once, then report failure
-- Return created node IDs
-
-**Output format:**
+Output:
 {
   "success": true,
-  "created_nodes": {
-    "JournalEntry": "id-123",
-    "Event": "id-456"
-  },
+  "journal": {"outcome": "created|replayed|conflict|found", "id": "..."},
+  "post_append_mutations_completed": 0,
   "error": null
 }
 ```
@@ -209,6 +204,6 @@ Response: "Це вже третій раз за останній час. Мин�
 | Root | user message | route decision | - |
 | Entity Extractor | user message | entities, mood, search_query | - |
 | Context Retriever | entities, search_query | related context, existing nodes | read_neo4j_cypher |
-| Writer | entities, context | Cypher queries | - |
-| Executor | Cypher queries | execution result | write_neo4j_cypher |
+| Writer | entities, context | journal plan + post-append mutations | - |
+| Executor | write plan + append_key | append + links | append_journal_entry, write_neo4j_cypher |
 | Response | all above | user response | - |

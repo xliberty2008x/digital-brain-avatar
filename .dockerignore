@@ -1,0 +1,9 @@
+# Keep local credentials and generated files out of root-context image builds.
+.git
+.env
+.env.*
+.DS_Store
+__pycache__/
+**/__pycache__/
+*.py[co]
+digital_brain/vertex-credentials.json

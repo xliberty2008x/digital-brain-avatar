@@ -102,9 +102,9 @@ skill's `agents/openai.yaml` plus the prompt templates in
   - verifying whether a new/existing entity name resembling a known core entity shares real graph connections
   - returning an authorized/not-authorized merge decision, never a guess
 - Writer subagent owns:
-  - latest valid `JournalEntry.id`
+  - a stable append key and current JournalChain version
   - alias-first entity resolution
-  - one chain-safe `JournalEntry` write with `embed_text` always set
+  - one server-owned JournalEntry append and idempotent post-append links
   - returning the created id plus resolved entity ids
 
 Rules:
@@ -112,7 +112,7 @@ Rules:
 - Do not offload the final interpretation of the user's situation to the reader, entity-check, or writer.
 - Prefer running the reader in parallel with local drafting when retrieval is not blocking.
 - Before the writer runs on a new/existing entity that resembles a known core entity, run the entity-check subagent first and only authorize a merge on an "authorized" result; otherwise create a new entity.
-- Run writer tasks serially. Never have two unresolved writer tasks race for the latest journal id.
+- Run writer tasks serially. A concurrent append must be reconciled through its append key, never by blind retry.
 - If subagents are unavailable, fall back to the same workflow locally.
 - If the host runtime requires explicit user approval for subagents, treat this mode as the preferred plan and switch to it as soon as that approval exists.
 
@@ -152,10 +152,10 @@ For `READ`:
 
 For `WRITE`:
 
-1. fetch latest valid `JournalEntry.id`
+1. mint a stable append key and fetch the chain head immediately before append
 2. resolve entities via alias-first lookup
 3. inspect live schema if relation names are unclear
-4. write one new `JournalEntry` plus linked nodes and relations
+4. append one new `JournalEntry`, then link entities with idempotent MERGE
 
 In subagent mode, steps 1-4 belong to the writer worker, not the main session agent.
 
@@ -178,10 +178,9 @@ Do not store:
 
 ## Write Rules
 
-- Every new `JournalEntry` must have explicit `id`.
-- If a previous journal id is known, chain-link to it in the same query.
-- Prefer `FOLLOWS` for new writes.
-- Always pass `embed_text` when writing `JournalEntry`; the MCP server hard-rejects `JournalEntry` creates or merges without it.
+- Use `append_journal_entry` for every JournalEntry. It creates the explicit id, embedding and FOLLOWS atomically.
+- On timeout, reconcile only through `get_journal_append_receipt` with the same append key.
+- Use generic Cypher only for idempotent post-append entity links; never create JournalEntry or FOLLOWS there.
 - Reuse existing entities whenever resolution finds them.
 - If evidence is weak, ask or lower certainty instead of fabricating structure.
 
