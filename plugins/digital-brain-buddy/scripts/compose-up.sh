@@ -314,4 +314,19 @@ else
   echo "$PLUGIN_NAME: harness generation pin completed but id env not visible in this shell (checked $ENV_FILE)"
 fi
 
+# Pin validated active overlay manifest once per session (Task 11).
+# Fail-closed load if digests mismatch; mid-session live edits do not change pin.
+echo "$PLUGIN_NAME: pinning session active overlays for session=${DIGITAL_BRAIN_SESSION_ID}..."
+if ! "${PIN_CMD[@]}" -c "
+from digital_brain.maintenance.active_overlays import pin_session_active_overlays
+import os
+m = pin_session_active_overlays(
+    state_dir=os.environ.get('DIGITAL_BRAIN_STATE_DIR'),
+    session_id=os.environ['DIGITAL_BRAIN_SESSION_ID'],
+)
+print(f'overlay_pin entries={len(m.loadable_entries())} fail_closed={m.fail_closed}')
+"; then
+  echo "$PLUGIN_NAME: session overlay pin failed; continuing (fail-closed default on next load)" >&2
+fi
+
 exit 0

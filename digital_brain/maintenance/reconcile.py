@@ -184,14 +184,116 @@ def reconcile_overlay_activation(
             "expected_manifest_digest": expected_manifest_digest,
         }
 
-    # pre_manifest: FS should still be prior; drop pending (no effect applied).
+    # pre_manifest: crash window includes "manifest replaced but post_manifest
+    # marker not written". If live FS already matches expected new digest,
+    # complete the graph side (treat as post_manifest). Otherwise abandon only
+    # when FS is still prior; restore on unexpected mismatch.
     if phase == "pre_manifest":
+        if expected_manifest_digest and live_digest == expected_manifest_digest:
+            # Fall through by re-running post_manifest logic inline.
+            bundle = effect_store.record_activation_bundle(
+                {
+                    "request_hash": str(req),
+                    "effect_key": pending.get("effect_key")
+                    or f"overlay-reconcile:{pending.get('proposal_id')}",
+                    "effect_type": "activate_overlay_trial",
+                    "proposal_id": pending.get("proposal_id") or "unknown",
+                    "actor": actor,
+                    "before_ref": prior_digest,
+                    "after_ref": expected_manifest_digest,
+                    "undo_ref": prior_digest,
+                    "generation_id": (
+                        (prior_manifest or {}).get("rollback_generation")
+                        if isinstance(prior_manifest, Mapping)
+                        else EMPTY_DIGEST
+                    )
+                    or EMPTY_DIGEST,
+                    "deployment_status": "trial_active",
+                    "decision_point": "reconcile",
+                    "eligible_target": 0,
+                    "receipt_id": pending.get("receipt_id"),
+                    "deployment_id": pending.get("deployment_id"),
+                    "window_id": pending.get("window_id"),
+                    "create_window": True,
+                    "guardrail_json": {
+                        "reconciled": True,
+                        "recovered_from": "pre_manifest_crash_window",
+                    },
+                }
+            )
+            if bundle["outcome"] in {"applied", "replayed"}:
+                auth_id = pending.get("authority_id")
+                if auth_id and bundle.get("effect_receipt"):
+                    effect_store.consume_authority(
+                        authority_id=str(auth_id),
+                        receipt_id=str(bundle["effect_receipt"]["id"]),
+                    )
+                clear_activation_pending(state_dir)
+                return {
+                    "outcome": bundle["outcome"],
+                    "reason": "completed_graph_receipt_from_pre_manifest",
+                    "effect_receipt": bundle.get("effect_receipt"),
+                    "deployment": bundle.get("deployment"),
+                    "exposure_window": bundle.get("exposure_window"),
+                    "duplicate_activation": False,
+                }
+            if prior_manifest is not None:
+                restore_prior_manifest(
+                    state_dir=state_dir,
+                    prior_manifest=prior_manifest
+                    if isinstance(prior_manifest, Mapping)
+                    else empty_active_manifest(),
+                    expected_prior_digest=prior_digest
+                    if prior_digest != EMPTY_DIGEST
+                    else compute_manifest_digest(
+                        prior_manifest
+                        if isinstance(prior_manifest, Mapping)
+                        else manifest_to_public_dict(empty_active_manifest())
+                    ),
+                )
+            clear_activation_pending(state_dir)
+            return {
+                "outcome": "restored",
+                "reason": "pre_manifest_graph_conflict_restored_prior",
+                "bundle": bundle,
+            }
+        # Live FS still prior (or empty) → safe abandon without restore needed.
+        if live_digest is None or live_digest == prior_digest:
+            clear_activation_pending(state_dir)
+            return {
+                "outcome": "idle",
+                "reason": "pre_manifest_abandoned",
+                "request_hash": req,
+                "duplicate_activation": False,
+            }
+        # Unexpected live digest: restore prior if available.
+        if prior_manifest is not None:
+            try:
+                restore_prior_manifest(
+                    state_dir=state_dir,
+                    prior_manifest=prior_manifest
+                    if isinstance(prior_manifest, Mapping)
+                    else empty_active_manifest(),
+                    expected_prior_digest=prior_digest
+                    if prior_digest != EMPTY_DIGEST
+                    else compute_manifest_digest(
+                        prior_manifest
+                        if isinstance(prior_manifest, Mapping)
+                        else manifest_to_public_dict(empty_active_manifest())
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "outcome": "failed",
+                    "reason": "pre_manifest_restore_failed",
+                    "error": str(exc),
+                }
         clear_activation_pending(state_dir)
         return {
-            "outcome": "idle",
-            "reason": "pre_manifest_abandoned",
-            "request_hash": req,
-            "duplicate_activation": False,
+            "outcome": "restored",
+            "reason": "pre_manifest_unexpected_fs_restored_prior",
+            "live_digest": live_digest,
+            "expected_manifest_digest": expected_manifest_digest,
         }
 
     return {

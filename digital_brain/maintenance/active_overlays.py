@@ -118,10 +118,34 @@ class ActiveManifest:
     fail_closed: bool = False
     fail_reason: str | None = None
 
-    def loadable_entries(self) -> tuple[ActiveOverlayEntry, ...]:
+    def loadable_entries(
+        self, *, now: datetime | None = None
+    ) -> tuple[ActiveOverlayEntry, ...]:
+        """Entries safe to load at runtime.
+
+        Expired trials (``trial_expires_at`` in the past) are **not** loadable
+        even if status is still ``trial_active`` — expire need not have run yet.
+        """
         if self.fail_closed:
             return ()
-        return tuple(e for e in self.entries if e.status in LOADABLE_ENTRY_STATUSES)
+        clock = now or datetime.now(timezone.utc)
+        out: list[ActiveOverlayEntry] = []
+        for e in self.entries:
+            if e.status not in LOADABLE_ENTRY_STATUSES:
+                continue
+            try:
+                exp = datetime.fromisoformat(
+                    str(e.trial_expires_at).replace("Z", "+00:00")
+                )
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if clock > exp:
+                    continue
+            except (TypeError, ValueError):
+                # Unparseable expiry → fail closed for that entry.
+                continue
+            out.append(e)
+        return tuple(out)
 
 
 def empty_active_manifest(
@@ -327,15 +351,63 @@ def atomic_replace_manifest(
     *,
     state_dir: str | Path | None,
     manifest: ActiveManifest,
+    expected_prior_digest: str | None = None,
 ) -> str:
-    """Atomically replace the active manifest (tmp + fsync + rename)."""
+    """Atomically replace the active manifest (tmp + fsync + rename).
+
+    When ``expected_prior_digest`` is provided, refuse the write if the live
+    manifest digest does not match (compare-and-set against concurrent ops).
+    """
+    path = manifest_path(state_dir)
+    if expected_prior_digest is not None:
+        raw = load_raw_manifest(state_dir)
+        if raw is None:
+            live = EMPTY_DIGEST
+        else:
+            try:
+                live = compute_manifest_digest(raw)
+            except Exception as exc:  # noqa: BLE001
+                raise ActiveOverlayError(
+                    f"manifest_digest_unreadable:{exc}"
+                ) from exc
+        if live != expected_prior_digest:
+            raise ActiveOverlayError(
+                f"manifest_cas_conflict:expected={expected_prior_digest}:live={live}"
+            )
     public = manifest_to_public_dict(manifest)
     # Never persist fail_closed flags into the live file as truth; those are
     # load-time outcomes. On-disk empty entries mean known-good empty.
     data = (_canonical_json(public) + "\n").encode("utf-8")
-    path = manifest_path(state_dir)
     _write_private_file_fsync(path, data)
     return compute_manifest_digest(public)
+
+
+def activation_lock_path(state_dir: str | Path | None = None) -> Path:
+    return active_overlays_root(state_dir) / ".activation.lock"
+
+
+def acquire_activation_lock(state_dir: str | Path | None = None):
+    """Exclusive flock for concurrent activation serialization.
+
+    Returns an open file object that must remain open for the critical section
+    (caller closes to release). Raises :class:`ActiveOverlayError` if the lock
+    cannot be acquired.
+    """
+    import fcntl
+
+    root = active_overlays_root(state_dir)
+    root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    path = activation_lock_path(state_dir)
+    handle = open(path, "a+", encoding="utf-8")  # noqa: SIM115
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise ActiveOverlayError("activation_lock_held") from exc
+    except OSError as exc:
+        handle.close()
+        raise ActiveOverlayError(f"activation_lock_failed:{exc}") from exc
+    return handle
 
 
 def load_raw_manifest(state_dir: str | Path | None = None) -> dict[str, Any] | None:

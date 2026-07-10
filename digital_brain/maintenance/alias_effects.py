@@ -1573,21 +1573,23 @@ class AliasEffectStore:
         alias_id = f"alias-{uuid.uuid4()}"
         now = _now_iso()
 
+        # CAS-consume authority BEFORE any Alias/LearningLog mutation so a
+        # concurrent loser cannot leave partial graph writes.
+        cas = self._cas_consume_authority(
+            tx,
+            authority_id=authority_id,
+            receipt_id=effect_id,
+        )
+        if cas.get("outcome") == "stale_consume":
+            return {
+                "outcome": "replayed",
+                "reason": "authority_already_consumed",
+                "authority_id": authority_id,
+                "replacement_minted": False,
+            }
+
         if effect_type == "apply_alias" and already_active:
-            # No-op mapping already present: still single-use consume authority
-            # with a verified receipt so the nonce cannot be reused.
-            cas = self._cas_consume_authority(
-                tx,
-                authority_id=authority_id,
-                receipt_id=effect_id,
-            )
-            if cas.get("outcome") == "stale_consume":
-                return {
-                    "outcome": "replayed",
-                    "reason": "authority_already_consumed",
-                    "authority_id": authority_id,
-                    "replacement_minted": False,
-                }
+            # No-op mapping already present: receipt + already-consumed authority.
             _run_one(
                 tx,
                 """
@@ -1796,19 +1798,7 @@ class AliasEffectStore:
             },
         )
 
-        # Consume authority with compare-and-set (single-use under concurrency).
-        cas = self._cas_consume_authority(
-            tx,
-            authority_id=authority_id,
-            receipt_id=effect_id if receipt is None else str(receipt["id"]),
-        )
-        if cas.get("outcome") == "stale_consume":
-            return {
-                "outcome": "replayed",
-                "reason": "authority_already_consumed",
-                "authority_id": authority_id,
-                "replacement_minted": False,
-            }
+        # Authority already CAS-consumed before mutations; receipt id is effect_id.
 
         if prop_row is not None:
             _run_one(
@@ -2073,9 +2063,26 @@ class AliasEffectStore:
             """,
             {"id": entity_id},
         )
+        if effect_type != "set_entity_protection" and active is None:
+            return {"outcome": "failed", "reason": "no_active_protection"}
+
         next_revision = int((active or {}).get("revision") or 0) + 1
         now = _now_iso()
         effect_id = f"eff-{uuid.uuid4()}"
+
+        # CAS-consume authority before any EntityProtection mutation.
+        cas = self._cas_consume_authority(
+            tx,
+            authority_id=authority_id,
+            receipt_id=effect_id,
+        )
+        if cas.get("outcome") == "stale_consume":
+            return {
+                "outcome": "replayed",
+                "reason": "authority_already_consumed",
+                "authority_id": authority_id,
+                "replacement_minted": False,
+            }
 
         if effect_type == "set_entity_protection":
             if active is not None:
@@ -2113,8 +2120,6 @@ class AliasEffectStore:
                 },
             )
         else:
-            if active is None:
-                return {"outcome": "failed", "reason": "no_active_protection"}
             _run_one(
                 tx,
                 """
@@ -2187,18 +2192,6 @@ class AliasEffectStore:
                 "now": now,
             },
         )
-        cas = self._cas_consume_authority(
-            tx,
-            authority_id=authority_id,
-            receipt_id=effect_id,
-        )
-        if cas.get("outcome") == "stale_consume":
-            return {
-                "outcome": "replayed",
-                "reason": "authority_already_consumed",
-                "authority_id": authority_id,
-                "replacement_minted": False,
-            }
         return {
             "outcome": "applied",
             "effect_id": effect_id,

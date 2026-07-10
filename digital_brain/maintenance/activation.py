@@ -21,6 +21,7 @@ from digital_brain.maintenance.active_overlays import (
     ActiveManifest,
     ActiveOverlayEntry,
     ActiveOverlayError,
+    acquire_activation_lock,
     atomic_replace_manifest,
     build_manifest_with_entry,
     compute_manifest_digest,
@@ -908,6 +909,45 @@ def activate_overlay_trial(
     if not isinstance(trial_policy, TrialPolicy):
         raise TrialPolicyError("trial_policy required")
 
+    # Serialize concurrent operator activations (exclusive flock).
+    lock_handle = acquire_activation_lock(state_dir)
+    try:
+        return _activate_overlay_trial_locked(
+            state_dir=state_dir,
+            alias_store=alias_store,
+            effect_store=effect_store,
+            authority_id=authority_id,
+            nonce=nonce,
+            binding=binding,
+            trial_policy=trial_policy,
+            artifact_md=artifact_md,
+            actor=actor,
+            rollback_generation=rollback_generation,
+            request_hash=request_hash,
+            now=now,
+        )
+    finally:
+        try:
+            lock_handle.close()
+        except OSError:
+            pass
+
+
+def _activate_overlay_trial_locked(
+    *,
+    state_dir: str | Path | None,
+    alias_store: AliasEffectStore,
+    effect_store: OverlayEffectStore,
+    authority_id: str,
+    nonce: str,
+    binding: OverlayActivationBinding,
+    trial_policy: TrialPolicy,
+    artifact_md: str,
+    actor: str,
+    rollback_generation: str,
+    request_hash: str | None,
+    now: datetime | None,
+) -> dict[str, Any]:
     # Idempotent replay by request_hash when provided/computed after prior known.
     prior = load_validated_active_overlays(state_dir)
     if prior.fail_closed:
@@ -1097,7 +1137,19 @@ def activate_overlay_trial(
         },
     )
 
-    atomic_replace_manifest(state_dir=state_dir, manifest=new_manifest)
+    try:
+        atomic_replace_manifest(
+            state_dir=state_dir,
+            manifest=new_manifest,
+            expected_prior_digest=prior_digest,
+        )
+    except ActiveOverlayError as exc:
+        clear_activation_pending(state_dir)
+        return {
+            "outcome": "conflict",
+            "reason": str(exc),
+            "prior_manifest_digest": prior_digest,
+        }
 
     write_activation_pending(
         state_dir,

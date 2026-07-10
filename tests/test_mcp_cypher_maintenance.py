@@ -469,24 +469,38 @@ class _FakeMaintSession:
 
         if "CREATE (e:Operational:EvaluationReceipt)" in q:
             eid = params["id"]
+            privacy = params.get("privacy_result") or "passed"
+            invariant = params.get("invariant_result") or "passed"
+            outcome = params["outcome"]
             self.evaluations[eid] = {
                 "id": eid,
-                "outcome": params["outcome"],
+                "outcome": outcome,
                 "proposal_id": params.get("proposal_id"),
-                "privacy_result": params.get("privacy_result") or "passed",
-                "invariant_result": params.get("invariant_result") or "passed",
+                "privacy_result": privacy,
+                "invariant_result": invariant,
+                "evaluator_version": params.get("evaluator_version"),
+                "fixture_snapshot": params.get("fixture_snapshot"),
                 "request_fingerprint": params["fp"],
                 "created_at": self._ts(),
             }
             prop = self.proposals.get(params.get("proposal_id"))
             if prop is not None:
                 self.has_evaluation.add((params["proposal_id"], eid))
-                if params["outcome"] == "passed" and prop.get("status_projection") == "draft":
+                if (
+                    outcome == "passed"
+                    and privacy == "passed"
+                    and invariant == "passed"
+                    and prop.get("status_projection") == "draft"
+                ):
                     prop["status_projection"] = "validated"
-                elif params["outcome"] == "failed":
+                elif (
+                    outcome == "failed"
+                    or privacy == "failed"
+                    or invariant == "failed"
+                ):
                     prop["status_projection"] = "invalid"
             return _Result(
-                {"id": eid, "outcome": params["outcome"], "created_at": self._ts()}
+                {"id": eid, "outcome": outcome, "created_at": self._ts()}
             )
 
         if "MERGE (p)-[:HAS_EVALUATION]->(e)" in q and "MATCH (e:Operational:EvaluationReceipt {id:" in q:
@@ -572,20 +586,23 @@ class _FakeMaintSession:
             node = self.findings.get(params["id"])
             return _Result(None if node is None else dict(node))
 
+        def _eval_view(node: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "id": node["id"],
+                "outcome": node.get("outcome"),
+                "privacy_result": node.get("privacy_result"),
+                "invariant_result": node.get("invariant_result"),
+                "proposal_id": node.get("proposal_id"),
+                "evaluator_version": node.get("evaluator_version"),
+                "fixture_snapshot": node.get("fixture_snapshot"),
+                "request_fingerprint": node.get("request_fingerprint"),
+            }
+
         if "HAS_EVALUATION" in q and "EvaluationReceipt" in q and "RETURN e.id AS id" in q:
             pid = params.get("proposal_id")
             for (prop_id, eid) in self.has_evaluation:
                 if prop_id == pid and eid in self.evaluations:
-                    node = self.evaluations[eid]
-                    return _Result(
-                        {
-                            "id": node["id"],
-                            "outcome": node.get("outcome"),
-                            "privacy_result": node.get("privacy_result"),
-                            "invariant_result": node.get("invariant_result"),
-                            "proposal_id": node.get("proposal_id"),
-                        }
-                    )
+                    return _Result(_eval_view(self.evaluations[eid]))
             return _Result(None)
 
         if "MATCH (p:Operational:Proposal {id:" in q and "HAS_EVALUATION" not in q:
@@ -596,31 +613,14 @@ class _FakeMaintSession:
             pid = params.get("proposal_id")
             for node in self.evaluations.values():
                 if node.get("proposal_id") == pid:
-                    return _Result(
-                        {
-                            "id": node["id"],
-                            "outcome": node.get("outcome"),
-                            "privacy_result": node.get("privacy_result"),
-                            "invariant_result": node.get("invariant_result"),
-                            "proposal_id": node.get("proposal_id"),
-                        }
-                    )
+                    return _Result(_eval_view(node))
             return _Result(None)
 
         if "MATCH (e:Operational:EvaluationReceipt {id:" in q:
             node = self.evaluations.get(params["id"])
             if node is None:
                 return _Result(None)
-            return _Result(
-                {
-                    "id": node["id"],
-                    "outcome": node.get("outcome"),
-                    "privacy_result": node.get("privacy_result"),
-                    "invariant_result": node.get("invariant_result"),
-                    "proposal_id": node.get("proposal_id"),
-                    "request_fingerprint": node.get("request_fingerprint"),
-                }
-            )
+            return _Result(_eval_view(node))
 
         if "MATCH (d:Operational:Decision {id:" in q:
             node = self.decisions.get(params["id"])
@@ -890,10 +890,10 @@ def test_evaluation_and_decision_are_separate_from_application():
             {
                 "id": "eval-missing-fence",
                 "proposal_id": "prop-x",
-                "evaluator_version": "ev-1",
                 "baseline_ref": "base",
                 "candidate_ref": "cand",
                 "outcome": "passed",
+                **_valid_eval_fields(evaluator_version="ev-1"),
             }
         )
 
@@ -901,12 +901,12 @@ def test_evaluation_and_decision_are_separate_from_application():
         {
             "id": "eval-1",
             "proposal_id": "prop-x",
-            "evaluator_version": "ev-1",
             "baseline_ref": "base",
             "candidate_ref": "cand",
             "outcome": "passed",
             "run_id": "run-eval",
             "epoch": epoch,
+            **_valid_eval_fields(evaluator_version="ev-1"),
         }
     )
     assert ev["outcome"] == "created"
@@ -916,12 +916,12 @@ def test_evaluation_and_decision_are_separate_from_application():
         {
             "id": "eval-1",
             "proposal_id": "prop-x",
-            "evaluator_version": "ev-1",
             "baseline_ref": "base",
             "candidate_ref": "cand",
             "outcome": "passed",
             "run_id": "run-eval",
             "epoch": epoch,
+            **_valid_eval_fields(evaluator_version="ev-1"),
         }
     )["outcome"] == "replayed"
 
@@ -1071,6 +1071,20 @@ def _seed_draft_proposal(
     return epoch
 
 
+def _valid_eval_fields(**extra: Any) -> dict[str, Any]:
+    """Holdout-backed evaluation fields that pass the anti-self-attestation gate."""
+    base = {
+        "evaluator_version": "1",
+        "privacy_result": "passed",
+        "invariant_result": "passed",
+        "fixture_snapshot": json.dumps(
+            {"holdout_ids": ["hold-1", "hold-2"], "evaluator_version": "1"}
+        ),
+    }
+    base.update(extra)
+    return base
+
+
 def test_create_proposal_rejects_advanced_status_without_evaluation():
     session = _FakeMaintSession()
     store = _store_with(session)
@@ -1113,11 +1127,9 @@ def test_create_proposal_advanced_status_accepts_embedded_passed_receipt():
             "evaluation_receipt": {
                 "id": "eval-embed-1",
                 "outcome": "passed",
-                "privacy_result": "passed",
-                "invariant_result": "passed",
-                "evaluator_version": "1",
                 "baseline_ref": "baseline:x",
                 "candidate_ref": "candidate:prop-reviewed",
+                **_valid_eval_fields(),
             },
         }
     )
@@ -1127,6 +1139,22 @@ def test_create_proposal_advanced_status_accepts_embedded_passed_receipt():
     assert "eval-embed-1" in session.evaluations
     assert ("prop-reviewed", "eval-embed-1") in session.has_evaluation
 
+    # Self-attested empty embed (outcome=passed only) is rejected.
+    with pytest.raises(EvaluationGateError, match="holdout_proof|hard_results|evaluator"):
+        store.create_proposal(
+            {
+                "id": "prop-self-attest",
+                "kind": "overlay",
+                "title": "self",
+                "target_ref": "skill:x",
+                "status_projection": "review_pending",
+                "evidence_snapshot_id": "snap-1",
+                "run_id": "run-gate-embed",
+                "epoch": epoch,
+                "evaluation_receipt": {"id": "eval-self", "outcome": "passed"},
+            }
+        )
+
 
 def test_create_proposal_rejects_hard_failed_evaluation_for_transition():
     session = _FakeMaintSession()
@@ -1134,7 +1162,10 @@ def test_create_proposal_rejects_hard_failed_evaluation_for_transition():
     lease = _acquire(store, run_id="run-gate-fail")
     epoch = lease["epoch"]
 
-    with pytest.raises(EvaluationGateError, match="blocks_transition|failed_evaluation"):
+    with pytest.raises(
+        EvaluationGateError,
+        match="blocks_transition|failed_evaluation|evaluator|holdout",
+    ):
         store.create_proposal(
             {
                 "id": "prop-bad-eval",
@@ -1150,6 +1181,8 @@ def test_create_proposal_rejects_hard_failed_evaluation_for_transition():
                     "outcome": "failed",
                     "privacy_result": "failed",
                     "invariant_result": "failed",
+                    "evaluator_version": "1",
+                    "fixture_snapshot": json.dumps({"holdout_ids": ["h1"]}),
                 },
             }
         )
@@ -1195,14 +1228,15 @@ def test_record_decision_approve_blocked_by_hard_failed_evaluation():
         {
             "id": "eval-hard-fail",
             "proposal_id": "prop-hard",
-            "evaluator_version": "1",
             "baseline_ref": "b",
             "candidate_ref": "c",
             "outcome": "failed",
-            "privacy_result": "failed",
-            "invariant_result": "failed",
             "run_id": "run-gate-hard",
             "epoch": epoch,
+            **_valid_eval_fields(
+                privacy_result="failed",
+                invariant_result="failed",
+            ),
         }
     )
     assert failed["outcome"] == "created"
@@ -1261,14 +1295,12 @@ def test_passed_evaluation_allows_approval_decision():
         {
             "id": "eval-ok",
             "proposal_id": "prop-ok",
-            "evaluator_version": "1",
             "baseline_ref": "b",
             "candidate_ref": "c",
             "outcome": "passed",
-            "privacy_result": "passed",
-            "invariant_result": "passed",
             "run_id": "run-gate-ok",
             "epoch": epoch,
+            **_valid_eval_fields(),
         }
     )
     assert ev["outcome"] == "created"

@@ -134,7 +134,13 @@ def assert_evaluation_present_for_transition(
     target_status: str,
     evaluation_receipt: Mapping[str, Any] | EvaluationReceipt | None,
 ) -> None:
-    """Gate: evaluation cannot be skipped for validated/review_pending/approved."""
+    """Gate: evaluation cannot be skipped for validated/review_pending/approved.
+
+    Self-attested receipts (outcome=passed with empty holdout / missing privacy
+    and invariant results) are rejected. Advanced status requires a non-failed
+    outcome with explicit privacy_result + invariant_result == passed and a
+    non-empty holdout fixture proof.
+    """
     if target_status not in STATUSES_REQUIRING_EVALUATION:
         return
     if evaluation_receipt is None:
@@ -145,12 +151,55 @@ def assert_evaluation_present_for_transition(
         outcome = evaluation_receipt.outcome
         inv = evaluation_receipt.invariant_result
         priv = evaluation_receipt.privacy_result
+        evaluator_version = str(evaluation_receipt.evaluator_version or "")
+        fixture_snapshot = str(evaluation_receipt.fixture_snapshot or "")
+        fixture_digest = digest_text(fixture_snapshot) if fixture_snapshot else ""
+        holdout_ids: list[str] = []
+        if fixture_snapshot:
+            try:
+                parsed_fs = json.loads(fixture_snapshot)
+                if isinstance(parsed_fs, Mapping):
+                    ids = parsed_fs.get("holdout_ids") or parsed_fs.get("ids")
+                    if isinstance(ids, (list, tuple)):
+                        holdout_ids = [str(x) for x in ids]
+            except json.JSONDecodeError:
+                pass
     else:
         outcome = str(evaluation_receipt.get("outcome") or "")
         inv = str(evaluation_receipt.get("invariant_result") or "")
         priv = str(evaluation_receipt.get("privacy_result") or "")
+        # holdout proof: holdout_ids list or fixture_snapshot.ids / fixture_digest
+        holdout_ids = []
+        raw_holdout = evaluation_receipt.get("holdout_ids")
+        if isinstance(raw_holdout, (list, tuple)):
+            holdout_ids = [str(x) for x in raw_holdout]
+        fixture = evaluation_receipt.get("fixture_snapshot")
+        if not holdout_ids and fixture is not None:
+            if isinstance(fixture, str):
+                try:
+                    fixture = json.loads(fixture)
+                except json.JSONDecodeError:
+                    fixture = None
+            if isinstance(fixture, Mapping):
+                ids = fixture.get("ids") or fixture.get("holdout_ids")
+                if isinstance(ids, (list, tuple)):
+                    holdout_ids = [str(x) for x in ids]
+        fixture_digest = str(
+            evaluation_receipt.get("fixture_digest")
+            or evaluation_receipt.get("fixture_snapshot_digest")
+            or ""
+        )
+        evaluator_version = str(evaluation_receipt.get("evaluator_version") or "")
     if outcome not in EVALUATION_OUTCOMES:
         raise EvaluationGateError("evaluation_receipt_missing_outcome")
+    if not evaluator_version:
+        raise EvaluationGateError("evaluation_receipt_missing_evaluator_version")
+    # Explicit privacy/invariant results required (no silent default-to-passed).
+    if not priv or not inv:
+        raise EvaluationGateError("evaluation_receipt_missing_hard_results")
+    # Holdout-backed evaluation: non-empty holdout or non-empty fixture digest.
+    if not holdout_ids and not fixture_digest:
+        raise EvaluationGateError("evaluation_receipt_missing_holdout_proof")
     # Hard privacy/invariant failures block review/approval transitions.
     if target_status in {"review_pending", "approved", "validated"}:
         if priv in {"failed", "fail"} or inv in {"failed", "fail"}:
@@ -160,6 +209,10 @@ def assert_evaluation_present_for_transition(
         if outcome == "failed":
             raise EvaluationGateError(
                 f"failed_evaluation_blocks_transition:{target_status}"
+            )
+        if outcome != "passed":
+            raise EvaluationGateError(
+                f"evaluation_outcome_blocks_transition:{target_status}:{outcome}"
             )
 
 

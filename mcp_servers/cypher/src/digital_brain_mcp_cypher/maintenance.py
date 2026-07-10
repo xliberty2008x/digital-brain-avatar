@@ -405,6 +405,10 @@ def _normalize_evaluation_receipt_view(
         "privacy_result": row.get("privacy_result"),
         "invariant_result": row.get("invariant_result"),
         "proposal_id": row.get("proposal_id"),
+        "evaluator_version": row.get("evaluator_version"),
+        "fixture_snapshot": row.get("fixture_snapshot"),
+        "holdout_ids": row.get("holdout_ids"),
+        "fixture_digest": row.get("fixture_digest"),
     }
 
 
@@ -424,7 +428,9 @@ def _load_evaluation_receipt_for_gate(
                    e.outcome AS outcome,
                    e.privacy_result AS privacy_result,
                    e.invariant_result AS invariant_result,
-                   e.proposal_id AS proposal_id
+                   e.proposal_id AS proposal_id,
+                   e.evaluator_version AS evaluator_version,
+                   e.fixture_snapshot AS fixture_snapshot
             LIMIT 1
             """,
             {"id": evaluation_receipt_id},
@@ -444,7 +450,9 @@ def _load_evaluation_receipt_for_gate(
                e.outcome AS outcome,
                e.privacy_result AS privacy_result,
                e.invariant_result AS invariant_result,
-               e.proposal_id AS proposal_id
+               e.proposal_id AS proposal_id,
+               e.evaluator_version AS evaluator_version,
+               e.fixture_snapshot AS fixture_snapshot
         ORDER BY e.created_at DESC
         LIMIT 1
         """,
@@ -462,7 +470,9 @@ def _load_evaluation_receipt_for_gate(
                e.outcome AS outcome,
                e.privacy_result AS privacy_result,
                e.invariant_result AS invariant_result,
-               e.proposal_id AS proposal_id
+               e.proposal_id AS proposal_id,
+               e.evaluator_version AS evaluator_version,
+               e.fixture_snapshot AS fixture_snapshot
         ORDER BY e.created_at DESC
         LIMIT 1
         """,
@@ -2034,6 +2044,14 @@ class MaintenanceStore:
                     ),
                     "proposal_id": evaluation_receipt_embed.get("proposal_id")
                     or proposal_id,
+                    "evaluator_version": evaluation_receipt_embed.get(
+                        "evaluator_version"
+                    ),
+                    "fixture_snapshot": evaluation_receipt_embed.get(
+                        "fixture_snapshot"
+                    ),
+                    "holdout_ids": evaluation_receipt_embed.get("holdout_ids"),
+                    "fixture_digest": evaluation_receipt_embed.get("fixture_digest"),
                 }
             if receipt_view is None:
                 receipt_view = _load_evaluation_receipt_for_gate(
@@ -2249,19 +2267,32 @@ class MaintenanceStore:
         receipt: Mapping[str, Any],
         receipt_id: str,
     ) -> None:
+        # No silent defaults for hard results — self-attestation must include them.
+        if receipt.get("privacy_result") in (None, ""):
+            raise EvaluationGateError(
+                "evaluation_receipt_missing_hard_results:privacy_result"
+            )
+        if receipt.get("invariant_result") in (None, ""):
+            raise EvaluationGateError(
+                "evaluation_receipt_missing_hard_results:invariant_result"
+            )
+        if receipt.get("evaluator_version") in (None, ""):
+            raise EvaluationGateError(
+                "evaluation_receipt_missing_evaluator_version"
+            )
         outcome = _require_enum(
             receipt.get("outcome"), EVALUATION_OUTCOMES, "evaluation_receipt.outcome"
         )
         privacy_result = _require_id(
-            str(receipt.get("privacy_result") or "passed"),
+            str(receipt.get("privacy_result")),
             "evaluation_receipt.privacy_result",
         )
         invariant_result = _require_id(
-            str(receipt.get("invariant_result") or "passed"),
+            str(receipt.get("invariant_result")),
             "evaluation_receipt.invariant_result",
         )
         evaluator_version = _require_id(
-            str(receipt.get("evaluator_version") or "1"),
+            str(receipt.get("evaluator_version")),
             "evaluation_receipt.evaluator_version",
         )
         baseline_ref = _require_id(
@@ -2272,11 +2303,38 @@ class MaintenanceStore:
             str(receipt.get("candidate_ref") or f"candidate:{proposal_id}"),
             "evaluation_receipt.candidate_ref",
         )
+        # Holdout proof required: non-empty fixture_snapshot with holdout_ids or
+        # explicit holdout_ids / fixture_digest on the embed.
         fixture_snapshot = _json_field(
             receipt.get("fixture_snapshot") or "{}",
             "evaluation_receipt.fixture_snapshot",
             default="{}",
         )
+        holdout_ok = False
+        try:
+            parsed_fs = json.loads(fixture_snapshot) if fixture_snapshot else {}
+            if isinstance(parsed_fs, dict):
+                ids = parsed_fs.get("holdout_ids") or parsed_fs.get("ids")
+                if isinstance(ids, list) and len(ids) > 0:
+                    holdout_ok = True
+        except (TypeError, json.JSONDecodeError):
+            parsed_fs = {}
+        if not holdout_ok:
+            raw_h = receipt.get("holdout_ids")
+            if isinstance(raw_h, (list, tuple)) and len(raw_h) > 0:
+                holdout_ok = True
+                fixture_snapshot = _json_field(
+                    {
+                        "holdout_ids": [str(x) for x in raw_h],
+                        "evaluator_version": evaluator_version,
+                    },
+                    "evaluation_receipt.fixture_snapshot",
+                    default="{}",
+                )
+            elif str(receipt.get("fixture_digest") or "").strip():
+                holdout_ok = True
+        if not holdout_ok:
+            raise EvaluationGateError("evaluation_receipt_missing_holdout_proof")
         target_results = _json_field(
             receipt.get("target_results") or "{}",
             "evaluation_receipt.target_results",
@@ -2349,11 +2407,30 @@ class MaintenanceStore:
         )
         baseline_ref = _require_id(payload.get("baseline_ref"), "baseline_ref")
         candidate_ref = _require_id(payload.get("candidate_ref"), "candidate_ref")
+        if payload.get("privacy_result") in (None, ""):
+            raise EvaluationGateError(
+                "evaluation_receipt_missing_hard_results:privacy_result"
+            )
+        if payload.get("invariant_result") in (None, ""):
+            raise EvaluationGateError(
+                "evaluation_receipt_missing_hard_results:invariant_result"
+            )
         fixture_snapshot = _json_field(
             payload.get("fixture_snapshot") or "{}",
             "fixture_snapshot",
             default="{}",
         )
+        holdout_ok = False
+        try:
+            parsed_fs = json.loads(fixture_snapshot) if fixture_snapshot else {}
+            if isinstance(parsed_fs, dict):
+                ids = parsed_fs.get("holdout_ids") or parsed_fs.get("ids")
+                if isinstance(ids, list) and len(ids) > 0:
+                    holdout_ok = True
+        except (TypeError, json.JSONDecodeError):
+            pass
+        if not holdout_ok and not str(payload.get("fixture_digest") or "").strip():
+            raise EvaluationGateError("evaluation_receipt_missing_holdout_proof")
         target_results = _json_field(
             payload.get("target_results") or "{}", "target_results", default="{}"
         )
@@ -2363,12 +2440,18 @@ class MaintenanceStore:
             default="{}",
         )
         privacy_result = _require_id(
-            payload.get("privacy_result") or "pass", "privacy_result"
+            str(payload.get("privacy_result")), "privacy_result"
         )
         invariant_result = _require_id(
-            payload.get("invariant_result") or "pass", "invariant_result"
+            str(payload.get("invariant_result")), "invariant_result"
         )
         outcome = _require_enum(payload.get("outcome"), EVALUATION_OUTCOMES, "outcome")
+        # Self-attested "passed" with hard failures is inconsistent — force failed.
+        if outcome == "passed" and (
+            privacy_result in {"failed", "fail"}
+            or invariant_result in {"failed", "fail"}
+        ):
+            outcome = "failed"
 
         epoch = _require_int(
             payload.get("epoch")
@@ -2490,9 +2573,15 @@ class MaintenanceStore:
             FOREACH (_ IN CASE WHEN p IS NULL THEN [] ELSE [1] END |
                 MERGE (p)-[:HAS_EVALUATION]->(e)
                 SET p.status_projection = CASE
-                    WHEN $outcome = 'passed' AND p.status_projection = 'draft'
+                    WHEN $outcome = 'passed'
+                         AND $privacy_result = 'passed'
+                         AND $invariant_result = 'passed'
+                         AND p.status_projection = 'draft'
                     THEN 'validated'
-                    WHEN $outcome = 'failed' THEN 'invalid'
+                    WHEN $outcome = 'failed'
+                         OR $privacy_result = 'failed'
+                         OR $invariant_result = 'failed'
+                    THEN 'invalid'
                     ELSE p.status_projection
                 END
             )

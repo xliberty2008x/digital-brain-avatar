@@ -191,6 +191,9 @@ def test_expired_holder_cannot_commit_after_new_epoch():
             "baseline_ref": "b",
             "candidate_ref": "c",
             "outcome": "passed",
+            "privacy_result": "passed",
+            "invariant_result": "passed",
+            "fixture_snapshot": '{"holdout_ids":["h1"]}',
             "run_id": "run-a",
             "epoch": 1,
         }
