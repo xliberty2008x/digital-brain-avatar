@@ -8,8 +8,8 @@
     {
       "name": "digital-brain-buddy",
       "source": "./plugins/digital-brain-buddy",
-      "description": "Buddy persona with Neo4j memory, quality sensors, and guided report-only maintenance (v0.3).",
-      "version": "0.3.0"
+      "description": "Buddy persona with Neo4j memory, initiate-on-first-run, quality sensors, and guided report-only maintenance (v0.4).",
+      "version": "0.4.0"
     }
   ]
 }
