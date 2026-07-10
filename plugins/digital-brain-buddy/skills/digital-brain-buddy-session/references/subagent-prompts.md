@@ -35,6 +35,8 @@ What I need from you:
 - fetch the top 20 weighted core nodes using graph degree as weight
 - fetch a compact node label/type weight summary
 - include only the recent valid JournalEntry rows needed to orient the current period
+- include initiation_evidence: self Person (relation=self), non-self people,
+  topics, JournalEntry kind=initiation_complete if any, and counts
 
 Output contract:
 - people_map
@@ -42,6 +44,7 @@ Output contract:
 - top_weighted_nodes
 - node_type_weight_summary
 - recent_baseline
+- initiation_evidence
 - thin/conflicting areas
 - reusable ids or canonical names for later writes
 

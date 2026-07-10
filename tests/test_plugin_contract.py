@@ -1,7 +1,9 @@
-"""Static plugin package contract tests for v0.3 maintenance surface.
+"""Static plugin package contract tests for v0.4 initiate + maintenance surface.
 
 Locks:
 - version sync across host/cache manifests (incl. .agents marketplace)
+- initiate protocol surface (status helper, protocol ref, session gate, SOUL overlay)
+- INITIATE gate coexists with FEEDBACK / harness pin
 - maintenance skill + maintainer agent presence and tool allowlists
 - skill never directs unattended identity/policy/overlay/code/SOUL/journal
 - exact-token APPLY intent is not authorization
@@ -48,6 +50,15 @@ SESSION_SKILL = (
 READ_SKILL = PLUGIN / "skills" / "digital-brain-buddy-read-memory" / "SKILL.md"
 WRITE_SKILL = PLUGIN / "skills" / "digital-brain-buddy-write-memory" / "SKILL.md"
 CHANGELOG = PLUGIN / "CHANGELOG.md"
+INITIATE_PROTOCOL = (
+    PLUGIN
+    / "skills"
+    / "digital-brain-buddy-session"
+    / "references"
+    / "initiate-protocol.md"
+)
+INITIATION_STATUS = PLUGIN / "scripts" / "initiation_status.py"
+SOUL_TEMPLATE = PLUGIN / "assets" / "SOUL.template.md"
 
 
 def _read(path: pathlib.Path) -> str:
@@ -60,9 +71,9 @@ def _load_json(path: pathlib.Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_plugin_version_is_0_3_0():
+def test_plugin_version_is_0_4_0():
     raw = _load_json(VERSION_JSON)
-    assert raw == "0.3.0"
+    assert raw == "0.4.0"
 
 
 def test_host_manifests_share_base_version():
@@ -106,8 +117,9 @@ def test_maintenance_surface_files_exist():
         assert path.is_file(), path
 
 
-def test_changelog_mentions_0_3_0():
+def test_changelog_mentions_0_4_0():
     text = _read(CHANGELOG)
+    assert "## 0.4.0" in text
     assert "## 0.3.0" in text
     assert "maintenance" in text.lower() or "DreamRun" in text
 
@@ -258,3 +270,40 @@ def test_mcp_json_is_valid():
     mcp = _load_json(PLUGIN / ".mcp.json")
     assert "mcpServers" in mcp
     assert "digital-brain-neo4j" in mcp["mcpServers"]
+
+
+def test_initiate_surface_files_exist():
+    assert INITIATION_STATUS.is_file()
+    assert INITIATE_PROTOCOL.is_file()
+
+
+def test_session_skill_initiate_gate_and_feedback_coexist():
+    session = _read(SESSION_SKILL)
+    protocol = _read(INITIATE_PROTOCOL)
+    for text in (session, protocol):
+        assert "INITIATE" in text
+        assert "initiation_complete" in text
+    # Gate must not erase 0.3 FEEDBACK surface
+    assert re.search(r"`FEEDBACK`", session)
+    assert "## FEEDBACK Route" in session
+    assert "harness_generation_id" in session or "HARNESS_GENERATION" in session
+    # Explicit coexistence after INITIATE handoff wording
+    combined = session + "\n" + protocol
+    assert re.search(
+        r"FEEDBACK remains|does not suppress FEEDBACK|"
+        r"Does \*\*not\*\* suppress FEEDBACK|SKIP / READ / WRITE / FEEDBACK",
+        combined,
+        re.I,
+    )
+
+
+def test_soul_template_has_user_overlay():
+    text = _read(SOUL_TEMPLATE)
+    assert "## User overlay" in text
+    assert "Preferred language" in text
+
+
+def test_bootstrap_requires_initiation_evidence():
+    read = _read(READ_SKILL)
+    assert "initiation_evidence" in read
+    assert "initiation_complete" in read

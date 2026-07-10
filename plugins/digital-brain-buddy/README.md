@@ -7,7 +7,7 @@ a SessionStart compose hook, and Neo4j Cypher MCP config.
 **Personal identity:** `SOUL.MD` in the plugin root is created per user (from
 `assets/SOUL.template.md`) and is **gitignored**. Do not commit a personal SOUL.
 
-**Version:** see `version.json` (currently `0.3.0`).  
+**Version:** see `version.json` (currently `0.4.0`).  
 **License:** MIT (same as the repository root).
 
 ## What you get
@@ -41,6 +41,23 @@ From the **repository root** (this checkout is the marketplace source):
 
 MCP URL (literal, loopback): `http://localhost:8000/api/mcp/`  
 Configured in `.mcp.json`. Hosts that do not expand env vars need the literal URL.
+
+## First run (initiate)
+
+On a fresh install the graph is empty and `SOUL.MD` starts from the neutral
+template. The **first buddy session auto-enters initiate mode**:
+
+1. Language preference
+2. Short intro in that language
+3. Seed: you (self), one important person, one current focus
+4. Light SOUL User overlay
+5. Initiation receipt in the journal (`kind: initiation_complete`)
+
+Later sessions are normal buddy mode. If the graph is still thin, the buddy may
+ask at most one soft gap question per session. Incomplete meetings **resume**
+from the next missing piece (no wipe in this version).
+
+Details: skill `digital-brain-buddy-session` → `references/initiate-protocol.md`.
 
 ## Journal write contract (0.2.0+)
 

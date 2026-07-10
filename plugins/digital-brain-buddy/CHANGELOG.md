@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — 2026-07-10
+
+Initiate protocol for empty buddy first run.
+
+- Auto-detect incomplete initiation after BOOTSTRAP; session mode `INITIATE`
+- Progressive meeting: language → intro → self + anchor person + focus + light SOUL
+- Graph markers + `JournalEntry.kind = initiation_complete` receipt
+- Resume from next missing piece; soft progressive hooks when graph is thin
+- Pure status helper: `scripts/initiation_status.py`
+- SOUL template `## User overlay` section
+
 ## 0.3.0 — 2026-07-10
 
 Quality sensors, harness generation pins, and guided report-only maintenance.
@@ -13,7 +24,7 @@ Quality sensors, harness generation pins, and guided report-only maintenance.
   undo/history/privacy) — report-only default; try/apply operator-gated
 - Capability ceiling matches `MAINTAINER_ALLOWED_OPERATIONS`; exact-token
   `APPLY alias:…` is intent only, not authorization
-- No scheduled run, no heartbeat, no private proposal queue in shared sessions
+- No scheduled run, no heartbeat, no private proposal dump in shared sessions
 - Fresh Codex cache suffix (`0.3.0+codex.…`); marketplace entries at `0.3.0`
 
 ## 0.2.0 — 2026-07-10

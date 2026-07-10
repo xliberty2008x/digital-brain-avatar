@@ -5,6 +5,13 @@
 - Public release hygiene: product README, SECURITY.md, MIT LICENSE, loopback
   Compose binds, personal dump removal, documentation redaction.
 
+## Plugin 0.4.0 — 2026-07-10
+
+See [plugins/digital-brain-buddy/CHANGELOG.md](plugins/digital-brain-buddy/CHANGELOG.md).
+
+Initiate protocol: guided first-run setup with status reporting, quality sensors,
+and maintenance surface alignment. Details live in the plugin changelog.
+
 ## Plugin 0.3.0 — 2026-07-10
 
 See [plugins/digital-brain-buddy/CHANGELOG.md](plugins/digital-brain-buddy/CHANGELOG.md).

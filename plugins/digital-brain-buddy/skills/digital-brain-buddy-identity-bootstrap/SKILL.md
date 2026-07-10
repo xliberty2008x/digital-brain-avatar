@@ -45,6 +45,18 @@ Shipped neutral defaults live in `../../assets/SOUL.template.md` only.
 - short-term fears unless they became a repeated identity pattern
 - raw event history that belongs in graph memory
 
+## User overlay (initiate)
+
+During first-run initiate, prefer filling `## User overlay` only:
+
+- Preferred language
+- How hard to push
+- What to protect (user-specific)
+- Hard boundaries (never)
+
+Do not rewrite Core/Tone sections unless the user explicitly asks for a full
+identity redesign. Template ships with an empty User overlay section.
+
 ## Editing Rules
 
 - Preserve the section structure unless the user explicitly wants a redesign.
