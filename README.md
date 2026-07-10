@@ -82,8 +82,8 @@ Details: [SECURITY.md](SECURITY.md).
 ## Tests
 
 ```bash
-# Unit / focused suites (from repo root, with project venv)
-pytest tests/ -q
+# Unit / focused suites (repo-owned env; Python 3.12 + dev group)
+uv run --group dev python -m pytest tests/ -q
 
 # Optional isolated journal e2e (stop the normal stack first; needs ≥6 GiB Docker)
 bash scripts/run-journal-e2e.sh

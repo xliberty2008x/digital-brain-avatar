@@ -8,3 +8,18 @@ requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.9.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    # Match mcp_servers/cypher runtime pins so importorskip-gated server suites collect.
+    "fastmcp>=2.10.0",
+    "neo4j>=5.26.0",
+    # Needed to import digital_brain.callbacks under the hermetic interpreter.
+    "structlog>=24.0",
+    "google-adk>=1.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
