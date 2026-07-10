@@ -13,15 +13,35 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    from the template with `python3 ../../scripts/init_soul.py ../../SOUL.MD`
    (or identity-bootstrap). `SOUL.MD` is local/per-user, not shipped personal data.
 
-2. Confirm the SessionStart-pinned harness generation id is available
-   (`DIGITAL_BRAIN_HARNESS_GENERATION_ID` or the pin under
-   `$DIGITAL_BRAIN_STATE_DIR/sessions/<session>/harness_generation.json`).
-   Every session that can emit quality sensors (Feedback/RunEvent) — private
-   buddy or otherwise — must pass **that same pinned id unchanged** into every
-   event. Do not recollect digests mid-session; do not hash SOUL content into
-   logs; only the local `soul_sha` lives on the generation record. If the pin
-   is missing, refuse sensor emission until SessionStart / `scripts/pin_harness_generation.py`
-   has run.
+2. **Harness session (portable step 0 — all brains).** Resolve a
+   `SessionHandle` for *this* conversation before any quality sensor:
+
+   a. If `DIGITAL_BRAIN_HARNESS_GENERATION_ID` **and**
+      `DIGITAL_BRAIN_SESSION_ID` are already in env (Claude SessionStart /
+      prior open in this process) → use them as the handle.
+   b. Else if a pin exists under
+      `$DIGITAL_BRAIN_STATE_DIR/sessions/<this_session_id>/harness_generation.json`
+      → resume that pin (do not recollect digests).
+   c. Else **open** a session (do not invent ids by reading `active/` alone):
+
+      ```bash
+      python3 "${CLAUDE_PROJECT_DIR:-.}/scripts/pin_harness_generation.py" \
+        --host <claude|grok|codex|unknown> \
+        --session-id "${DIGITAL_BRAIN_SESSION_ID:-}" \
+        --skip-record \
+        --json
+      ```
+
+      Prefer `--use-open-api` when available. Parse JSON for
+      `session_id` + `harness_generation_id`. Keep both sticky for the rest of
+      the conversation (subagent prompts must receive the same
+      `harness_generation_id` unchanged).
+
+   **Never** adopt `$STATE/active/harness_generation.json` as “my” pin — that
+   file is a dual-process breadcrumb and may belong to another session
+   (e.g. verify runs). Memory BOOTSTRAP may proceed without a handle;
+   **sensors (Feedback/RunEvent) must refuse** until a handle exists.
+   Do not recollect digests mid-session; do not put SOUL body into logs.
 
 2b. **Active trial overlays (reviewed digests only).** If the host has pinned a
    session overlay set under
@@ -309,22 +329,30 @@ Do not store:
 - If memory is thin or conflicting, say that directly.
 - Finish with a strong question, conclusion, or next step.
 
-## Harness Generation Pin
+## Harness Session (portable pin)
 
-- SessionStart (`compose-up.sh` → `scripts/pin_harness_generation.py`) binds the
-  pin to the host `session_id` (Claude hook stdin JSON, or
-  `DIGITAL_BRAIN_SESSION_ID`). `startup`/`clear` recollect; `resume`/`compact`
-  reload the existing pin for that session. Without a host session id the host
-  mints a timestamped local id — never a sticky global `current` pin.
-- Exports `DIGITAL_BRAIN_HARNESS_GENERATION_ID` and
-  `DIGITAL_BRAIN_HARNESS_PIN_PATH` (state-dir pin file + `CLAUDE_ENV_FILE` when set).
-- Pass that generation id unchanged into every Feedback/RunEvent for the session.
-- Do not recompute digests after the pin is set; only a new session (or clear)
-  gets a new id.
+Brains (Grok, Claude, Codex, …) are interchangeable. **Quality sensors require a
+harness session handle for this conversation**, not a leftover file from another run.
+
+- **Library:** `digital_brain.maintenance.session.open_harness_session` →
+  `SessionHandle` (`session_id`, `harness_generation_id`, `pin_path`, …).
+- **CLI:** `scripts/pin_harness_generation.py --host <brain> [--session-id …]
+  [--use-open-api] --json` (Claude SessionStart / `compose-up.sh` is one adapter).
+- **Resolve order for this chat:** env session+generation →
+  `sessions/<session_id>/harness_generation.json` → open new. **Never** use
+  `$STATE/active/` alone (breadcrumb for MCP dual-process only).
+- `startup`/`clear` / `--force-new` recollect; `resume`/`compact` reload.
+  Without a host session id, mint a host-prefixed id (`grok-…`, `local-…`) —
+  never a sticky global `current` pin across opens.
+- Exports `DIGITAL_BRAIN_SESSION_ID`, `DIGITAL_BRAIN_HARNESS_GENERATION_ID`, and
+  `DIGITAL_BRAIN_HARNESS_PIN_PATH` (state-dir pin + optional `CLAUDE_ENV_FILE`).
+- Pass `harness_generation_id` unchanged into every Feedback/RunEvent.
+- Do not recompute digests mid-session; only a new session (or clear) gets a new id.
 - Never put SOUL body text into generation records, MCP args, or sensor payloads.
-- The harness generation identity includes `overlay_manifest_digest` of the
-  **active** manifest only (never draft/proposal trees). A new session after
-  trial activation/rollback recollects; an existing session stays pinned.
+- Generation identity includes `overlay_manifest_digest` of the **active**
+  manifest only. A new session after trial activation/rollback recollects;
+  an existing session stays pinned.
+- Spec: `docs/superpowers/specs/2026-07-10-host-agnostic-harness-session-design.md`
 
 ## Active Overlay Trials
 

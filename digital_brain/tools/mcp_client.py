@@ -491,33 +491,37 @@ async def get_quality_receipt(receipt_id: str) -> dict[str, Any]:
 
 
 def _session_harness_generation_id(explicit: str | None = None) -> str:
-    """Prefer explicit id; else env pin; else active pin file (quality.resolve).
+    """Prefer explicit id; else env pin; else session-scoped active pin.
 
     Resolution order matches ``resolve_session_harness_generation_id``:
     explicit → ``DIGITAL_BRAIN_HARNESS_GENERATION_ID`` → pin path env →
-    well-known active pin under ``DIGITAL_BRAIN_STATE_DIR``.
+    session-matched ``active/`` (never a foreign leftover pin alone).
     """
     if explicit is not None and str(explicit).strip():
         return str(explicit).strip()
     pinned = (os.getenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID") or "").strip()
     if pinned:
         return pinned
-    # Dual-process / host consistency: fall back to pin path + active pin file.
+    # Dual-process / host consistency: session-scoped active pin only.
     _ensure_mcp_cypher_on_path()
     try:
         from digital_brain_mcp_cypher.quality import (  # type: ignore[import-not-found]
             resolve_session_harness_generation_id,
         )
 
-        resolved = resolve_session_harness_generation_id(None)
+        session_id = (os.getenv("DIGITAL_BRAIN_SESSION_ID") or "").strip() or None
+        resolved = resolve_session_harness_generation_id(
+            None, session_id=session_id
+        )
         if resolved:
             return resolved
     except Exception:
         pass
     raise ValueError(
         "harness_generation_id is required "
-        "(set DIGITAL_BRAIN_HARNESS_GENERATION_ID, pass explicitly, "
-        "or write $DIGITAL_BRAIN_STATE_DIR/active/harness_generation.id)"
+        "(pass explicitly, set DIGITAL_BRAIN_HARNESS_GENERATION_ID, "
+        "or open a harness session so sessions/<id>/ + matching active pin exist; "
+        "unscoped active/ alone is not enough)"
     )
 
 
@@ -550,10 +554,13 @@ def _best_effort_host_tool_outcome(
     recorder = get_host_deterministic_run_event_recorder()
 
     generation_id: str | None
+    session_id = (os.getenv("DIGITAL_BRAIN_SESSION_ID") or "").strip() or None
     if harness_generation_id is not None and str(harness_generation_id).strip():
         generation_id = str(harness_generation_id).strip()
     elif resolve_session_harness_generation_id is not None:
-        generation_id = resolve_session_harness_generation_id(None)
+        generation_id = resolve_session_harness_generation_id(
+            None, session_id=session_id
+        )
     else:
         try:
             generation_id = _session_harness_generation_id(harness_generation_id)
@@ -567,6 +574,7 @@ def _best_effort_host_tool_outcome(
             tool_outcome=tool_outcome,
             route=route,
             outcome_source="host",
+            session_ref=session_id,
             harness_generation_id=generation_id,
             error_class=error_class,
         )

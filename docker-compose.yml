@@ -78,6 +78,9 @@ services:
       # Host default matches resolve_state_dir / XDG rules (compose-up exports
       # DIGITAL_BRAIN_STATE_DIR before `up` so this mount tracks the pin path).
       DIGITAL_BRAIN_STATE_DIR: "/var/lib/digital-brain"
+      # Last-writer active/ when container has no DIGITAL_BRAIN_SESSION_ID.
+      # Host brain processes must NOT set this — they fail closed without a session.
+      DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN: "1"
     volumes:
       - hf-cache:/models/huggingface
       # Bind host state dir so dual-process RunEvent emit can resolve the pin.
