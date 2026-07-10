@@ -788,11 +788,25 @@ response; after manifest rename before graph receipt; lease takeover;
 concurrent/double activation; stale base; symlink substitution; external packet
 containing an intimate field.
 
+- [x] In-process 13-step dream workflow smoke (`tests/e2e/dream_workflow_smoke.py`)
+  with deterministic fake analyzer / fake stores (no live Grok).
+- [x] Chaos/crash-recovery gates (`tests/e2e/dream_crash_recovery.py`): checkpoint
+  resume, alias replay, post/pre-manifest reconcile, lease takeover, double/
+  concurrent activation, stale base, symlink refuse, intimate packet reject.
+- [x] `scripts/run-dreams-e2e.sh` always runs pytest e2e modules; optional Docker
+  role smoke via `DREAMS_E2E_DOCKER=1` + `docker-compose.dreams-e2e.yml`.
+- [x] `tests/e2e/Dockerfile` supports journal + dreams profiles.
+- [x] Pytest collects dream E2E modules in unit CI (`python_files` in pyproject).
+- [x] Full suite green: `uv run --group dev python -m pytest tests/ -q`.
+- [x] Journal E2E remains opt-in Docker (`bash scripts/run-journal-e2e.sh`); skip
+  in CI without Docker / insufficient memory / main stack running.
+- [x] Live Grok is never a required correctness gate.
+
 **Final commands:**
 
 ```bash
 uv run --group dev python -m pytest tests/ -q
-bash scripts/run-journal-e2e.sh
+bash scripts/run-journal-e2e.sh  # if too heavy, skip for CI without docker
 bash scripts/run-dreams-e2e.sh
 ```
 
