@@ -1,0 +1,72 @@
+# digital-brain-buddy version taxonomy
+
+Hosts install this plugin into a **versioned cache** (Claude, Codex, Grok).
+Leaving the version at `0.1.0` after a large behavior change means `plugin update`
+and “reload” keep serving the old skills. Bump the version when the contract
+changes so installs land in a new cache path and reloads actually pick up work.
+
+## Canonical version
+
+| File | Role |
+| --- | --- |
+| `version.json` | Single source of truth: plain SemVer string, e.g. `"0.2.0"` |
+| `.claude-plugin/plugin.json` → `version` | Must equal `version.json` |
+| `.codex-plugin/plugin.json` → `version` | Base SemVer **or** `BASE+codex.YYYYMMDDHHMMSS` to force a new Codex cache dir |
+| repo `.claude-plugin/marketplace.json` → `plugins[].version` | Must equal `version.json` for the digital-brain-buddy entry |
+
+Do not invent a third number. If they disagree, fix them before merge.
+
+## SemVer for this plugin (0.x)
+
+While the major is `0`, treat the **middle** number as the product surface:
+
+| Bump | When | Examples |
+| --- | --- | --- |
+| **PATCH** `0.2.x` | Docs/skills wording only; no new tools; no change to write/read contract | Typo, clearer receipt outcomes, compose timeout tweak docs |
+| **MINOR** (middle digit: `0.2.0` → `0.3.0`) | New capability or **breaking agent contract**, still compatible with same MCP stack family | New MCP tools agents must call; append protocol; new hooks; renamed skills |
+| **MAJOR** `1.0.0+` | Stable public surface, or intentional hard break for all hosts | Shipping as a published marketplace plugin; removing a skill agents rely on |
+
+Rule of thumb: **if buddy writers must change how they call MCP or how they
+chain JournalEntry, bump at least MINOR** (and never leave the version
+unchanged).
+
+## What counts as “must bump” (do not skip)
+
+- Journal / chain write protocol change (e.g. raw Cypher → `append_journal_entry`)
+- MCP tool set change (add/remove/rename tools agents are taught to use)
+- Skill or agent instructions that reverse a previous hard rule
+- SessionStart hook / compose bring-up behavior that operators rely on
+- SOUL or session contract changes that alter memory policy
+
+## What does not require a bump
+
+- Internal MCP server fixes that stay behind the same tool names + outcomes
+- Test-only or ops-script changes under `scripts/` / repo root
+- Pure incident postmortems under `docs/`
+
+Still **rebuild mcp-cypher** when server code changes; version bumps are about
+the **plugin package hosts cache**, not Docker layers.
+
+## Release checklist
+
+1. Edit `version.json` first.
+2. Copy the same base into `.claude-plugin/plugin.json`.
+3. Set `.codex-plugin/plugin.json` to the base or `BASE+codex.<utc stamp>`.
+4. Set the same base on the digital-brain-buddy entry in repo
+   `.claude-plugin/marketplace.json`.
+5. Add a short entry to `CHANGELOG.md`.
+6. Merge to `master`.
+7. Refresh hosts so they install the new version:
+   - Claude: `claude plugin update digital-brain-buddy@avatar-digital-brain-local` + restart
+   - Codex: marketplace refresh + re-add (new cache dir from new version string)
+   - Grok: `grok plugin update digital-brain-buddy`
+8. Rebuild local MCP: `CLAUDE_PROJECT_DIR=$PWD bash plugins/digital-brain-buddy/scripts/compose-up.sh`
+
+## Why 0.2.0
+
+`0.1.0` was the first local buddy packaging (skills, hooks, MCP URL).
+
+`0.2.0` is the **server-owned JournalEntry append protocol**: CAS chain head,
+receipts, hardened generic Cypher, append-first skills/agents, readiness and
+compose resource gates. Hosts still on a `0.1.0` cache teach the obsolete
+write path even when the MCP server rejects it.

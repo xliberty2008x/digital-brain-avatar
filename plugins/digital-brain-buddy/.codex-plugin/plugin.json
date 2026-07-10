@@ -1,6 +1,6 @@
 {
   "name": "digital-brain-buddy",
-  "version": "0.1.0+codex.20260709094800",
+  "version": "0.2.0+codex.20260710013006",
   "description": "Repo-local buddy-session plugin for the avatar_digital_brain persona, SOUL file, and Neo4j MCP memory workflow.",
   "author": {
     "name": "Kyrylo Dubovyk"
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "Digital Brain Buddy",
     "shortDescription": "Buddy persona with Neo4j memory tools",
-    "longDescription": "Run a direct, pattern-aware buddy session on top of the avatar_digital_brain memory graph. The default internal pattern is: main session agent keeps the conversation, a reader gathers graph evidence, and a writer persists bounded memory updates when needed. Bundles the SOUL file, session workflow, delegated read/write memory skills, identity bootstrap guidance, and Neo4j Cypher MCP configuration in one repo-local plugin.",
+    "longDescription": "Run a direct, pattern-aware buddy session on top of the avatar_digital_brain memory graph. The default internal pattern is: main session agent keeps the conversation, a reader gathers graph evidence, and a writer persists bounded memory updates when needed. Bundles the SOUL file, session workflow, delegated read/write memory skills, identity bootstrap guidance, and Neo4j Cypher MCP configuration in one repo-local plugin. v0.2 ships the server-owned JournalEntry append protocol (CAS head, receipts, hardened generic Cypher).",
     "developerName": "Kyrylo Dubovyk",
     "category": "Productivity",
     "capabilities": [

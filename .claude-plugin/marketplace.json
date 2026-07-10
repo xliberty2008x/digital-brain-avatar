@@ -8,7 +8,8 @@
     {
       "name": "digital-brain-buddy",
       "source": "./plugins/digital-brain-buddy",
-      "description": "Buddy persona with Neo4j memory tools for the avatar_digital_brain graph."
+      "description": "Buddy persona with Neo4j memory tools for the avatar_digital_brain graph (v0.2 append protocol).",
+      "version": "0.2.0"
     }
   ]
 }
