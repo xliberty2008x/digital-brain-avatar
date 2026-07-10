@@ -219,6 +219,26 @@ def test_general_write_rejects_destructive_and_unlabeled_chain_bypasses():
             raise AssertionError(f"expected rejection for {query}")
 
 
+def test_general_write_rejects_map_merge_and_alias_full_node_replacement():
+    for query in (
+        "MATCH (j:JournalEntry {id: $id}) SET j += {content: 'hack', embedding: null}",
+        "MATCH (j:JournalEntry {id: $id}) SET j += {`append_key`: 'x'}",
+        "MATCH (j:JournalEntry {id: $id}) SET j += $props",
+        "MATCH (j:JournalEntry {id: $id}), (m) SET j = m",
+        "MATCH (j:JournalEntry {id: $id}) SET j = properties(m)",
+        "MATCH (n) SET n.version = 999",
+        "DROP CONSTRAINT journal_entry_append_key_unique IF EXISTS",
+        "DROP INDEX journal_entry_embedding_index",
+        "MATCH ()-[r]->() WHERE type(r) IN $types DELETE r",
+    ):
+        try:
+            assert_general_write_allowed(query)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected rejection for {query}")
+
+
 def test_general_write_allows_idempotent_post_append_links_and_non_reserved_sets():
     assert_general_write_allowed(
         "MATCH (j:JournalEntry {id: $journal_id}) "
@@ -230,6 +250,10 @@ def test_general_write_allows_idempotent_post_append_links_and_non_reserved_sets
     )
     assert_general_write_allowed(
         "MATCH (j:JournalEntry {id: $journal_id}) SET j += {summary: 'ok', source: 'buddy'}"
+    )
+    assert_general_write_allowed(
+        "CREATE VECTOR INDEX journal_entry_embedding_index IF NOT EXISTS "
+        "FOR (j:JournalEntry) ON (j.embedding)"
     )
 
 

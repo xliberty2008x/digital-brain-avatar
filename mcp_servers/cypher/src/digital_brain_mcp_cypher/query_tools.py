@@ -64,17 +64,34 @@ SET_LABEL_LIST_RE = re.compile(
     rf"(?:\bSET\b|,)\s*{_CYPHER_IDENTIFIER}((?:\s*:\s*{_CYPHER_IDENTIFIER})+)",
     re.IGNORECASE,
 )
-# Full node replacement (`SET n = {...}` / `SET n = $map`), not `SET n.prop =`.
+# Full node replacement: any `SET n = ...` that is not `SET n.prop = ...`.
+# Covers maps, params, `SET n = m`, and `SET n = properties(m)`.
 FULL_NODE_SET_RE = re.compile(
-    rf"(?:\bSET\b|,)\s*{_CYPHER_IDENTIFIER}\s*=\s*(?:\{{|\$)",
+    rf"(?:\bSET\b|,)\s*{_CYPHER_IDENTIFIER}\s*=",
+    re.IGNORECASE,
+)
+# `SET n += $map` can smuggle protected keys through opaque params.
+MAP_MERGE_PARAM_RE = re.compile(
+    rf"(?:\bSET\b|,)\s*{_CYPHER_IDENTIFIER}\s*\+=\s*\$",
+    re.IGNORECASE,
+)
+MAP_MERGE_LITERAL_RE = re.compile(
+    rf"(?:\bSET\b|,)\s*{_CYPHER_IDENTIFIER}\s*\+=\s*\{{",
     re.IGNORECASE,
 )
 # Post-append path is MERGE-only; destructive clauses bypass label guards easily.
 DELETE_DETACH_REMOVE_RE = re.compile(r"\b(?:DELETE|DETACH|REMOVE)\b", re.IGNORECASE)
+# Dropping schema removes the uniqueness foundation for append_key / chain key.
+# CREATE INDEX/CONSTRAINT remains allowed for ops (vector index DDL).
+DROP_SCHEMA_RE = re.compile(
+    r"\bDROP\s+(?:CONSTRAINT|INDEX)\b|\bLOAD\s+CSV\b",
+    re.IGNORECASE,
+)
 # `type(r) = 'FOLLOWS'` severs the chain without a `:FOLLOWS` literal.
 PROTECTED_TYPE_PREDICATE_RE = re.compile(
     rf"\btype\s*\(\s*{_CYPHER_IDENTIFIER}\s*\)\s*(?:=\s*['\"](?:FOLLOWS|HEAD)['\"]|"
-    rf"IN\s*\([^)]*(?:FOLLOWS|HEAD)[^)]*\))",
+    rf"IN\s*\([^)]*(?:FOLLOWS|HEAD)[^)]*\)|"
+    rf"IN\s*\$)",
     re.IGNORECASE,
 )
 JOURNAL_ENTRY_NODE_RE = re.compile(_node_label_pattern(_JOURNAL_LABEL), re.IGNORECASE)
@@ -94,19 +111,22 @@ _PROTECTED_JOURNAL_PROPERTIES = (
     "previous_journal_id",
     "previous_element_id",
     "_journal_append_lock",
+    # JournalChain CAS cursor; also common enough to ban unlabeled SET n.version.
+    "version",
+)
+_PROTECTED_PROPERTY_NAMES = frozenset(
+    name.lower() for name in _PROTECTED_JOURNAL_PROPERTIES
 )
 PROTECTED_JOURNAL_PROPERTY_RE = re.compile(
     rf"\.\s*(?:{'|'.join(_PROTECTED_JOURNAL_PROPERTIES)}|"
     rf"`(?:{'|'.join(_PROTECTED_JOURNAL_PROPERTIES)})`)(?![A-Za-z0-9_`])",
     re.IGNORECASE,
 )
-# Unlabeled chain CAS mutation: SET version while addressing key='primary'.
-CHAIN_VERSION_MUTATION_RE = re.compile(
-    r"(?=.*\bSET\b)(?=.*\.\s*`?version`?\b)(?=.*(?:['\"]primary['\"]|\.\s*`?key`?\b))",
-    re.IGNORECASE | re.DOTALL,
-)
 EMBEDDING_PARAM_RE = re.compile(r"\$embedding\b")
 SET_CLAUSE_RE = re.compile(r"\bSET\b", re.IGNORECASE)
+_MAP_LITERAL_KEY_RE = re.compile(
+    r"(?:^|[,{]\s*)(?:`([^`]+)`|['\"]([^'\"]+)['\"]|([A-Za-z_][A-Za-z0-9_]*))\s*:",
+)
 
 
 def _normalize_label_token(token: str) -> str:
@@ -121,6 +141,32 @@ def _set_adds_protected_label(query: str) -> bool:
         for label in re.findall(rf":\s*({_CYPHER_IDENTIFIER})", match.group(1), re.IGNORECASE):
             if _normalize_label_token(label) in _PROTECTED_LABEL_NAMES:
                 return True
+    return False
+
+
+def _map_literal_has_protected_key(body: str) -> bool:
+    for groups in _MAP_LITERAL_KEY_RE.findall(body):
+        name = next((part for part in groups if part), "")
+        if name.lower() in _PROTECTED_PROPERTY_NAMES:
+            return True
+    return False
+
+
+def _map_merge_sets_protected_property(query: str) -> bool:
+    """Reject map merges that include protected receipt/chain keys."""
+    for match in MAP_MERGE_LITERAL_RE.finditer(query):
+        start = match.end() - 1  # position of '{'
+        depth = 0
+        for index in range(start, len(query)):
+            char = query[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    if _map_literal_has_protected_key(query[start + 1 : index]):
+                        return True
+                    break
     return False
 
 
@@ -205,10 +251,25 @@ def assert_general_write_allowed(query: str) -> None:
             "write_neo4j_cypher does not allow DELETE/DETACH/REMOVE; "
             "post-append mutations must be idempotent MATCH/MERGE only"
         )
+    if DROP_SCHEMA_RE.search(query):
+        raise ValueError(
+            "write_neo4j_cypher does not allow DROP CONSTRAINT/INDEX or LOAD CSV; "
+            "schema changes are operator-only"
+        )
     if FULL_NODE_SET_RE.search(query):
         raise ValueError(
-            "write_neo4j_cypher does not allow full node replacement (`SET n = {...}`); "
+            "write_neo4j_cypher does not allow full node replacement (`SET n = ...`); "
             "set explicit non-reserved properties only"
+        )
+    if MAP_MERGE_PARAM_RE.search(query):
+        raise ValueError(
+            "write_neo4j_cypher does not allow `SET n += $map`; "
+            "set explicit non-reserved properties only"
+        )
+    if _map_merge_sets_protected_property(query):
+        raise ValueError(
+            "write_neo4j_cypher cannot mutate protected JournalEntry/chain fields; "
+            "use append_journal_entry instead"
         )
     if PROTECTED_TYPE_PREDICATE_RE.search(query):
         raise ValueError(
@@ -224,11 +285,6 @@ def assert_general_write_allowed(query: str) -> None:
         raise ValueError(
             "write_neo4j_cypher cannot use dynamic property writes that could "
             "target protected journal fields; set explicit properties only"
-        )
-    if CHAIN_VERSION_MUTATION_RE.search(query):
-        raise ValueError(
-            "write_neo4j_cypher cannot mutate JournalChain version/CAS state; "
-            "use the dedicated journal MCP tools"
         )
 
 
