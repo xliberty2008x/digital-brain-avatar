@@ -376,6 +376,81 @@ def get_quality_receipt(
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="Get Harness Generation",
+        description=(
+            "Read back a pinned Operational:HarnessGeneration by id for "
+            "session reconciliation. Returns digests only — never SOUL content."
+        ),
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+def get_harness_generation(
+    generation_id: str = Field(..., description="Stable HarnessGeneration id"),
+) -> str:
+    """Reconcile a session pin against the quality ledger."""
+    try:
+        _ensure_quality_schema()
+    except Exception:
+        pass
+    payload = _quality_store().get_harness_generation(generation_id)
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Record Harness Generation",
+        description=(
+            "Idempotently record an Operational:HarnessGeneration for the "
+            "session pin. Replay/conflict by id + request_fingerprint. "
+            "SOUL body is rejected; only soul_sha is stored."
+        ),
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+def record_harness_generation(
+    id: str = Field(..., description="Stable generation id (hg-<fingerprint>)"),
+    core_commit: str = Field(..., description="Git commit SHA or unknown"),
+    core_tree_digest: str = Field(..., description="Git tree digest"),
+    dirty_state_digest: str = Field(..., description="Dirty worktree digest"),
+    plugin_version: str = Field(..., description="digital-brain-buddy plugin version"),
+    soul_sha: str = Field(..., description="Local SHA-256 of SOUL file bytes only"),
+    overlay_manifest_digest: str = Field(..., description="Active overlay manifest digest"),
+    policy_digest: str = Field(..., description="Active policy digest"),
+    mcp_version: str = Field(..., description="MCP server version"),
+    schema_version: str = Field(..., description="HarnessGeneration schema version"),
+    taxonomy_version: str = Field(..., description="Evidence taxonomy version"),
+    request_fingerprint: str = Field(..., description="Canonical identity fingerprint"),
+    model_id: str | None = Field(default=None, description="Host model id when known"),
+    created_at: str | None = Field(default=None, description="ISO timestamp; set on first create"),
+) -> str:
+    """Quality-plane create with replay/conflict receipt."""
+    _ensure_quality_schema()
+    generation = {
+        "id": id,
+        "core_commit": core_commit,
+        "core_tree_digest": core_tree_digest,
+        "dirty_state_digest": dirty_state_digest,
+        "plugin_version": plugin_version,
+        "soul_sha": soul_sha,
+        "overlay_manifest_digest": overlay_manifest_digest,
+        "policy_digest": policy_digest,
+        "mcp_version": mcp_version,
+        "model_id": model_id,
+        "schema_version": schema_version,
+        "taxonomy_version": taxonomy_version,
+        "request_fingerprint": request_fingerprint,
+        "created_at": created_at,
+    }
+    payload = _quality_store().record_harness_generation(generation)
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Append Journal Entry",
         description="Atomically append one embedded JournalEntry to the primary chain.",
         readOnlyHint=False,

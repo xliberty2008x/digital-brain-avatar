@@ -13,11 +13,21 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    from the template with `python3 ../../scripts/init_soul.py ../../SOUL.MD`
    (or identity-bootstrap). `SOUL.MD` is local/per-user, not shipped personal data.
 
-2. Read `../digital-brain-buddy-graph-mcp/references/runtime-patterns.md` before generating Cypher or deciding what to fetch.
+2. Confirm the SessionStart-pinned harness generation id is available
+   (`DIGITAL_BRAIN_HARNESS_GENERATION_ID` or the pin under
+   `$DIGITAL_BRAIN_STATE_DIR/sessions/<session>/harness_generation.json`).
+   Every session that can emit quality sensors (Feedback/RunEvent) — private
+   buddy or otherwise — must pass **that same pinned id unchanged** into every
+   event. Do not recollect digests mid-session; do not hash SOUL content into
+   logs; only the local `soul_sha` lives on the generation record. If the pin
+   is missing, refuse sensor emission until SessionStart / `scripts/pin_harness_generation.py`
+   has run.
 
-3. Treat the graph as factual memory and `SOUL.MD` as voice and stance.
+3. Read `../digital-brain-buddy-graph-mcp/references/runtime-patterns.md` before generating Cypher or deciding what to fetch.
 
-4. Use only the plugin-owned `digital-brain-neo4j` MCP server from this
+4. Treat the graph as factual memory and `SOUL.MD` as voice and stance.
+
+5. Use only the plugin-owned `digital-brain-neo4j` MCP server from this
    plugin's `.mcp.json`. Do not use the ChatGPT Apps connector
    `mcp__codex_apps__neo4j_cypher`; it is a separate app/link and may still
    point at the retired Cloud Run service. If only that app connector is
@@ -25,7 +35,7 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    to the repo-local HTTP client with `DIGITAL_BRAIN_MCP_URL=<plugin .mcp.json
    url>`.
 
-5. At the start of every new buddy conversation, before the first user-facing
+6. At the start of every new buddy conversation, before the first user-facing
    answer and before creating or merging people, build a mandatory `BOOTSTRAP`
    evidence pack from the graph. Delegate it to
    `../digital-brain-buddy-read-memory/SKILL.md` when possible; otherwise fetch
@@ -45,9 +55,9 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    to avoid duplicate people, stale relationship assumptions, and narrow
    single-turn interpretation.
 
-6. Read `references/subagent-prompts.md` and reuse the canonical reader/writer prompt shapes instead of improvising them whenever delegated execution is available.
+7. Read `references/subagent-prompts.md` and reuse the canonical reader/writer prompt shapes instead of improvising them whenever delegated execution is available.
 
-7. Treat delegated memory I/O as the default internal execution pattern for this skill:
+8. Treat delegated memory I/O as the default internal execution pattern for this skill:
 - keep the main agent focused on conversation, judgment, and final phrasing
 - delegate bounded graph retrieval to `../digital-brain-buddy-read-memory/SKILL.md` — on hosts with native subagents (Claude Code, Cowork), invoke `digital-brain-reader` directly instead of improvising the delegation
 - delegate persistence to `../digital-brain-buddy-write-memory/SKILL.md` — on hosts with native subagents, invoke `digital-brain-writer` directly
@@ -193,6 +203,14 @@ Do not store:
 - Separate memory-backed fact from your inference.
 - If memory is thin or conflicting, say that directly.
 - Finish with a strong question, conclusion, or next step.
+
+## Harness Generation Pin
+
+- SessionStart (`compose-up.sh` → `scripts/pin_harness_generation.py`) records one
+  `HarnessGeneration` and exports `DIGITAL_BRAIN_HARNESS_GENERATION_ID`.
+- Pass that id unchanged into every Feedback/RunEvent for the session.
+- Do not recompute digests after the pin is set; only a new session gets a new id.
+- Never put SOUL body text into generation records, MCP args, or sensor payloads.
 
 ## Do Not
 

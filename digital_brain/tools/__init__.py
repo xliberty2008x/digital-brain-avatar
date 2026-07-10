@@ -7,8 +7,10 @@ from .mcp_client import (
     append_journal_entry,
     call_mcp_tool,
     execute_cypher,
+    get_harness_generation,
     get_journal_append_receipt,
     get_journal_chain_head,
+    record_harness_generation,
 )
 
 __all__ = [
@@ -17,6 +19,8 @@ __all__ = [
     "get_journal_chain_head",
     "append_journal_entry",
     "get_journal_append_receipt",
+    "get_harness_generation",
+    "record_harness_generation",
 ]
 
 try:

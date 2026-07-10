@@ -138,6 +138,8 @@ Output contract:
 Constraints:
 - one JournalEntry only unless explicitly told otherwise
 - writer tasks must be serialized; on timeout reconcile the same append key rather than retrying blindly
+- if emitting any quality sensor (RunEvent/Feedback), pass the session-pinned
+  `harness_generation_id` (`DIGITAL_BRAIN_HARNESS_GENERATION_ID`) unchanged; never recompute it
 - do not produce buddy-tone prose for the user
 ```
 
@@ -152,3 +154,20 @@ After a delegated write:
 
 - the parent session agent still decides whether to mention that memory was stored
 - the parent session agent still owns the conversational response
+
+## Harness Generation (all sensor-capable sessions)
+
+Every session that may emit RunEvents or Feedback — not only private buddy
+sessions — must carry the SessionStart-pinned generation id:
+
+- source: `DIGITAL_BRAIN_HARNESS_GENERATION_ID` or the session pin file
+- pass the **same** id into every sensor call for the session
+- do not recollect core commit, SOUL hash, overlay/policy digests mid-session
+- never include SOUL content in worker prompts or tool arguments; digests only
+
+When spawning workers that might emit sensors, include:
+
+```text
+Pinned harness_generation_id (do not recompute):
+<paste DIGITAL_BRAIN_HARNESS_GENERATION_ID>
+```

@@ -27,6 +27,8 @@ _RETRY_SAFE_TOOLS = {
     "get_neo4j_schema",
     "get_journal_chain_head",
     "get_journal_append_receipt",
+    "get_quality_receipt",
+    "get_harness_generation",
 }
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
@@ -266,6 +268,55 @@ async def append_journal_entry(
     if properties:
         arguments["properties"] = properties
     return _tool_content_json(await call_mcp_tool("append_journal_entry", arguments))
+
+
+async def get_harness_generation(generation_id: str) -> dict[str, Any]:
+    """Reconcile a session harness generation pin against the quality ledger."""
+    return _tool_content_json(
+        await call_mcp_tool("get_harness_generation", {"generation_id": generation_id})
+    )
+
+
+async def record_harness_generation(generation: dict[str, Any]) -> dict[str, Any]:
+    """Record a HarnessGeneration through the quality-plane MCP tool.
+
+    Callers must not include SOUL content — only digests/public fields.
+    On ``McpWriteOutcomeUnknown``, reconcile with :func:`get_harness_generation`
+    rather than blindly retrying a conflicting payload.
+    """
+    if not isinstance(generation, dict):
+        raise TypeError("generation must be a dict of public harness fields")
+    for forbidden in ("soul_content", "soul_text", "soul", "SOUL"):
+        if forbidden in generation:
+            raise ValueError(
+                f"SOUL content must not be sent to record_harness_generation ({forbidden})"
+            )
+    fingerprint = generation.get("request_fingerprint")
+    if not fingerprint:
+        gen_id = generation.get("id")
+        if isinstance(gen_id, str) and gen_id.startswith("hg-"):
+            fingerprint = gen_id[3:]
+    if not fingerprint:
+        raise ValueError("generation.request_fingerprint is required")
+    arguments: dict[str, Any] = {
+        "id": generation["id"],
+        "core_commit": generation["core_commit"],
+        "core_tree_digest": generation["core_tree_digest"],
+        "dirty_state_digest": generation["dirty_state_digest"],
+        "plugin_version": generation["plugin_version"],
+        "soul_sha": generation["soul_sha"],
+        "overlay_manifest_digest": generation["overlay_manifest_digest"],
+        "policy_digest": generation["policy_digest"],
+        "mcp_version": generation["mcp_version"],
+        "schema_version": generation["schema_version"],
+        "taxonomy_version": generation["taxonomy_version"],
+        "request_fingerprint": fingerprint,
+    }
+    if generation.get("model_id") is not None:
+        arguments["model_id"] = generation["model_id"]
+    if generation.get("created_at") is not None:
+        arguments["created_at"] = generation["created_at"]
+    return _tool_content_json(await call_mcp_tool("record_harness_generation", arguments))
 
 
 async def execute_cypher(query: str, params: dict = None, embed_text: str | None = None) -> list[dict]:

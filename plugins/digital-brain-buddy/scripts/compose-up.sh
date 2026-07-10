@@ -151,4 +151,55 @@ if ! wait_for_service_health mcp-cypher "$MCP_READY_MAX_ATTEMPTS" "mcp-cypher (/
 fi
 
 echo "$PLUGIN_NAME: local Neo4j + Ollama + Cypher MCP stack is ready for writes"
+
+# Pin one HarnessGeneration for this session (SOUL hash only; never SOUL body).
+# Mid-session file/policy edits must not recompute the id — only a new SessionStart
+# (or --force-new) may mint a new generation. Export path is under state dir.
+echo "$PLUGIN_NAME: pinning harness generation for this session..."
+PIN_CMD=(python3)
+if command -v uv >/dev/null 2>&1; then
+  PIN_CMD=(uv run --group dev python)
+fi
+PIN_SCRIPT="$CLAUDE_PROJECT_DIR/scripts/pin_harness_generation.py"
+if [ ! -f "$PIN_SCRIPT" ]; then
+  echo "$PLUGIN_NAME: pin script missing at $PIN_SCRIPT; continuing without pin" >&2
+  exit 0
+fi
+# Prefer plugin SOUL when present; pin script also falls back to repo SOUL.
+SOUL_ARGS=()
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT}/SOUL.MD" ]; then
+  SOUL_ARGS=(--soul-path "${CLAUDE_PLUGIN_ROOT}/SOUL.MD")
+elif [ -f "$CLAUDE_PROJECT_DIR/SOUL.MD" ]; then
+  SOUL_ARGS=(--soul-path "$CLAUDE_PROJECT_DIR/SOUL.MD")
+fi
+PLUGIN_ARGS=()
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  PLUGIN_ARGS=(--plugin-root "$CLAUDE_PLUGIN_ROOT")
+fi
+if ! "${PIN_CMD[@]}" "$PIN_SCRIPT" \
+    --repo-root "$CLAUDE_PROJECT_DIR" \
+    "${PLUGIN_ARGS[@]}" \
+    "${SOUL_ARGS[@]}" \
+    --session-id "${DIGITAL_BRAIN_SESSION_ID:-current}"; then
+  echo "$PLUGIN_NAME: harness generation pin failed; session continues without a recorded pin" >&2
+  # Non-fatal for compose bring-up so journal writes still work if MCP quality
+  # path is unavailable; RunEvent emission must refuse without a pin (Task 4).
+  exit 0
+fi
+
+if [ -n "${DIGITAL_BRAIN_HARNESS_GENERATION_ID:-}" ]; then
+  echo "$PLUGIN_NAME: harness generation pinned id=${DIGITAL_BRAIN_HARNESS_GENERATION_ID}"
+else
+  # pin script may have written an env file even when this shell did not export.
+  STATE_DIR="${DIGITAL_BRAIN_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/digital-brain}"
+  ENV_FILE="${STATE_DIR}/sessions/${DIGITAL_BRAIN_SESSION_ID:-current}/harness_generation.env"
+  if [ -f "$ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    echo "$PLUGIN_NAME: harness generation pinned id=${DIGITAL_BRAIN_HARNESS_GENERATION_ID:-unknown} (from $ENV_FILE)"
+  else
+    echo "$PLUGIN_NAME: harness generation pin completed but id env not visible in this shell"
+  fi
+fi
+
 exit 0
