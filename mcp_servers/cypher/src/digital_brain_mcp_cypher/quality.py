@@ -2462,17 +2462,18 @@ def resolve_session_harness_generation_id(
     1. Explicit argument (always wins — model-facing sensors should pass this)
     2. ``DIGITAL_BRAIN_HARNESS_GENERATION_ID`` env
     3. ``DIGITAL_BRAIN_HARNESS_PIN_PATH`` (JSON pin, env-file, or id file)
-    4. Well-known ``active/`` pin **only when session-scoped**:
-       - active JSON has ``session_id`` and it matches ``session_id`` arg or
-         ``DIGITAL_BRAIN_SESSION_ID``
-       - unscoped active (id-only / no session_id) is used only when
-         ``allow_unscoped_active`` is true or
-         ``DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN=1``
+    4. Well-known ``active/`` pin with session scoping:
+       - active JSON has ``session_id`` matching ``session_id`` arg or
+         ``DIGITAL_BRAIN_SESSION_ID`` → adopt
+       - active has ``session_id`` but expected session differs → never adopt
+       - active has ``session_id`` but expected is missing (MCP container):
+         adopt only with ``allow_unscoped_active`` /
+         ``DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN=1`` (last-writer dual-process)
+       - unscoped active (id-only) only with the same opt-in
 
-    Foreign leftover pins (e.g. verify runs) are never adopted when the caller
-    has a different session id. Returns ``None`` when no safe pin is available
-    (instrumentation must skip, not fail the primary tool path).
-    Never reads SOUL body content.
+    Foreign leftover pins are never adopted when the caller has a *different*
+    session id. Host brains without a session stay fail-closed; the mcp-cypher
+    service sets the opt-in env for dual-process emit. Never reads SOUL body.
     """
     if explicit is not None and str(explicit).strip():
         return str(explicit).strip()
@@ -2502,24 +2503,37 @@ def resolve_session_harness_generation_id(
     )
     active_session = active.get("session_id")
 
-    if active_session:
-        if expected_session and expected_session == active_session:
-            return active["id"]
-        # Scoped active pin belongs to another (or unknown) session — skip.
-        _logger.debug(
-            "skip active pin id=%s: session mismatch (active=%s expected=%s)",
-            active["id"][:20],
-            active_session,
-            expected_session,
-        )
-        return None
-
-    # Unscoped active (legacy id-only breadcrumb).
     allow = (
         allow_unscoped_active
         if allow_unscoped_active is not None
         else _env_truthy("DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN")
     )
+
+    if active_session:
+        if expected_session and expected_session == active_session:
+            return active["id"]
+        if expected_session and expected_session != active_session:
+            # Scoped active pin belongs to another session — never adopt.
+            _logger.debug(
+                "skip active pin id=%s: session mismatch (active=%s expected=%s)",
+                active["id"][:20],
+                active_session,
+                expected_session,
+            )
+            return None
+        # expected_session is None: dual-process MCP container has no chat id.
+        # Last-writer breadcrumb only when explicitly opted in (mcp-cypher service).
+        if allow:
+            return active["id"]
+        _logger.debug(
+            "skip scoped active pin id=%s session=%s: no expected session "
+            "(set DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN=1 on MCP only)",
+            active["id"][:20],
+            active_session,
+        )
+        return None
+
+    # Unscoped active (legacy id-only breadcrumb).
     if allow:
         return active["id"]
     _logger.debug(

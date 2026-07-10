@@ -711,6 +711,49 @@ def test_resolve_skips_foreign_active_pin(
     )
 
 
+def test_resolve_scoped_active_without_expected_session_mcp_shape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """MCP dual-process: scoped active + no session env → skip unless MCP opt-in."""
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_SESSION_ID", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN", raising=False)
+    state = tmp_path / "state"
+    active = state / "active"
+    active.mkdir(parents=True)
+    gid = "hg-" + ("d" * 64)
+    (active / "harness_generation.json").write_text(
+        json.dumps({"id": gid, "session_id": "host-chat-1"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(state))
+
+    # Host brain without session env: fail closed.
+    assert resolve_session_harness_generation_id(None) is None
+    # MCP container opt-in: last-writer breadcrumb for dual-process emit.
+    assert (
+        resolve_session_harness_generation_id(None, allow_unscoped_active=True)
+        == gid
+    )
+    monkeypatch.setenv("DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN", "1")
+    assert resolve_session_harness_generation_id(None) == gid
+
+    session = _FakeSession()
+    store = _store_with(session)
+    out = try_record_tool_outcome_run_event(
+        store.record_deterministic_run_event,
+        tool="read_neo4j_cypher",
+        tool_outcome="empty",
+        route="READ",
+        outcome_source="mcp",
+        event_id="re-mcp-dual-process",
+        session_ref=None,
+    )
+    assert out is not None
+    assert out["harness_generation_id"] == gid
+
+
 def test_resolve_skips_unscoped_active_by_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
