@@ -170,6 +170,20 @@ def test_runtime_and_quality_auth_are_separable(monkeypatch: pytest.MonkeyPatch)
     assert server._neo4j_auth() == ("runtime_user", "runtime_pass")
 
 
+def test_runtime_auth_requires_both_username_and_password(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Username-only RUNTIME_* must not mix with admin password (compose defaults)."""
+    monkeypatch.setenv("NEO4J_USERNAME", "legacy_user")
+    monkeypatch.setenv("NEO4J_PASSWORD", "legacy_pass")
+    monkeypatch.setenv("NEO4J_RUNTIME_USERNAME", "digital_brain_runtime")
+    monkeypatch.setenv("NEO4J_RUNTIME_PASSWORD", "")
+    assert server._neo4j_auth() == ("legacy_user", "legacy_pass")
+
+    monkeypatch.setenv("NEO4J_RUNTIME_PASSWORD", "runtime_pass")
+    assert server._neo4j_auth() == ("digital_brain_runtime", "runtime_pass")
+
+
 def test_operator_activation_env_not_required_for_mcp_runtime(monkeypatch: pytest.MonkeyPatch):
     """Operator activation credentials must not be required by model-facing MCP."""
     monkeypatch.delenv("NEO4J_OPERATOR_USERNAME", raising=False)

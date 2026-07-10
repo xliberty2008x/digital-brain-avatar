@@ -1,14 +1,19 @@
 """Isolated Neo4j smoke for the Operational / role boundary.
 
 Run against a live Neo4j with roles applied (see scripts/init_quality_roles.py).
-Exits 0 on success. Skips (exit 0 with message) when runtime credentials or
-Neo4j are unavailable so CI without the stack still passes unit gates.
+Exits 0 on success.
+
+By default, missing credentials or an unavailable Neo4j yield skip (exit 0) so
+unit CI without the stack still passes. Set DIGITAL_BRAIN_REQUIRE_ROLE_SMOKE=1
+to fail instead of skip — use this after bootstrap with
+DIGITAL_BRAIN_APPLY_QUALITY_ROLES=1.
 
   NEO4J_URI=bolt://localhost:7687 \
   NEO4J_RUNTIME_USERNAME=digital_brain_runtime \
   NEO4J_RUNTIME_PASSWORD=... \
   NEO4J_QUALITY_USERNAME=digital_brain_quality \
   NEO4J_QUALITY_PASSWORD=... \
+  DIGITAL_BRAIN_REQUIRE_ROLE_SMOKE=1 \
   uv run --group dev python tests/e2e/quality_control_smoke.py
 """
 
@@ -25,6 +30,18 @@ def _env(name: str, default: str | None = None) -> str | None:
         return None
     value = value.strip()
     return value or None
+
+
+def _require_role_smoke() -> bool:
+    return (_env("DIGITAL_BRAIN_REQUIRE_ROLE_SMOKE") or "0") == "1"
+
+
+def _skip_or_fail(message: str) -> int:
+    if _require_role_smoke():
+        print(f"FAIL: required role smoke cannot run: {message}", file=sys.stderr)
+        return 1
+    print(f"skip: {message}")
+    return 0
 
 
 def _driver(user: str, password: str):
@@ -59,6 +76,50 @@ def _expect_denied(user: str, password: str, query: str, label: str) -> None:
     raise AssertionError(f"runtime role was allowed to run protected query: {label}")
 
 
+# Labels previously under-denied (CREATE-only coverage gaps) must be probed live.
+_GAP_SET_LABEL_PROBES: tuple[tuple[str, str], ...] = (
+    (
+        "CREATE (n:Person {id: 'quality-smoke-setlab-qp'}) SET n:QualityPayload RETURN n",
+        "SET LABEL QualityPayload",
+    ),
+    (
+        "CREATE (n:Person {id: 'quality-smoke-setlab-dec'}) SET n:Decision RETURN n",
+        "SET LABEL Decision",
+    ),
+    (
+        "CREATE (n:Person {id: 'quality-smoke-setlab-ep'}) SET n:EntityProtection RETURN n",
+        "SET LABEL EntityProtection",
+    ),
+)
+
+_GAP_CREATE_PROBES: tuple[tuple[str, str], ...] = (
+    (
+        "CREATE (n:QualityPayload {id: 'quality-smoke-qp'}) RETURN n",
+        "CREATE QualityPayload",
+    ),
+    (
+        "CREATE (n:Decision {id: 'quality-smoke-dec'}) RETURN n",
+        "CREATE Decision",
+    ),
+    (
+        "CREATE (n:EntityProtection {id: 'quality-smoke-ep'}) RETURN n",
+        "CREATE EntityProtection",
+    ),
+)
+
+_GAP_SET_PROPERTY_PROBES: tuple[tuple[str, str], ...] = (
+    (
+        "CREATE (n:Decision {id: 'quality-smoke-dec-prop', status: 'x'}) RETURN n",
+        "CREATE+props Decision (also CREATE deny)",
+    ),
+    # SET property on an existing Decision-only node (quality role seeds it).
+    (
+        "MATCH (n:Decision {id: 'quality-smoke-dec-seed'}) SET n.status = 'hacked' RETURN n",
+        "SET PROPERTY on Decision-only node",
+    ),
+)
+
+
 def main() -> int:
     runtime_user = _env("NEO4J_RUNTIME_USERNAME")
     runtime_password = _env("NEO4J_RUNTIME_PASSWORD")
@@ -66,24 +127,20 @@ def main() -> int:
     quality_password = _env("NEO4J_QUALITY_PASSWORD")
 
     if not runtime_user or not runtime_password:
-        print("skip: NEO4J_RUNTIME_USERNAME/PASSWORD not set")
-        return 0
+        return _skip_or_fail("NEO4J_RUNTIME_USERNAME/PASSWORD not set")
 
     try:
         from neo4j import GraphDatabase  # noqa: F401
     except ImportError:
-        print("skip: neo4j driver not installed")
-        return 0
+        return _skip_or_fail("neo4j driver not installed")
 
     # Connectivity
     try:
         rows = _run(runtime_user, runtime_password, "RETURN 1 AS ok")
     except Exception as exc:
-        print(f"skip: runtime cannot connect ({exc})")
-        return 0
+        return _skip_or_fail(f"runtime cannot connect ({exc})")
     if not rows or rows[0].get("ok") != 1:
-        print("skip: unexpected runtime probe response")
-        return 0
+        return _skip_or_fail("unexpected runtime probe response")
 
     # Life-graph write still allowed.
     _run(
@@ -121,6 +178,12 @@ def main() -> int:
         "CREATE Operational",
     )
 
+    # Previously incomplete DENY surface (QualityPayload / Decision / EntityProtection).
+    for query, label in _GAP_CREATE_PROBES:
+        _expect_denied(runtime_user, runtime_password, query, label)
+    for query, label in _GAP_SET_LABEL_PROBES:
+        _expect_denied(runtime_user, runtime_password, query, label)
+
     # Quality role can create Operational control records when credentials exist.
     if quality_user and quality_password:
         _run(
@@ -132,22 +195,53 @@ def main() -> int:
             {"id": "quality-smoke-receipt"},
         )
         print("ok: quality role can MERGE Operational:EffectReceipt")
+
+        # Seed a Decision-only node so runtime SET PROPERTY can be probed.
+        _run(
+            quality_user,
+            quality_password,
+            "MERGE (d:Decision {id: $id}) SET d.status = 'seeded' RETURN d.id AS id",
+            {"id": "quality-smoke-dec-seed"},
+        )
+        print("ok: quality role seeded Decision for property probe")
+
+        for query, label in _GAP_SET_PROPERTY_PROBES:
+            _expect_denied(runtime_user, runtime_password, query, label)
+
         _run(
             quality_user,
             quality_password,
             "MATCH (r:Operational:EffectReceipt {id: $id}) DETACH DELETE r",
             {"id": "quality-smoke-receipt"},
         )
-        print("ok: quality role cleaned smoke receipt")
+        _run(
+            quality_user,
+            quality_password,
+            "MATCH (d:Decision {id: $id}) DETACH DELETE d",
+            {"id": "quality-smoke-dec-seed"},
+        )
+        print("ok: quality role cleaned smoke control nodes")
     else:
+        # Without quality creds we can still prove CREATE deny for Decision props.
+        _expect_denied(
+            runtime_user,
+            runtime_password,
+            "CREATE (n:Decision {id: 'quality-smoke-dec-prop', status: 'x'}) RETURN n",
+            "CREATE Decision with properties",
+        )
+        if _require_role_smoke():
+            return _skip_or_fail(
+                "NEO4J_QUALITY_USERNAME/PASSWORD required when "
+                "DIGITAL_BRAIN_REQUIRE_ROLE_SMOKE=1 (SET PROPERTY probes need a seed)"
+            )
         print("skip: quality credentials not set (runtime denies still verified)")
 
     # Cleanup life-graph smoke node (runtime may delete non-protected Person).
+    # Also sweep any Person stubs left from failed SET LABEL attempts (should not exist if denied).
     _run(
         runtime_user,
         runtime_password,
-        "MATCH (p:Person {id: $id}) DETACH DELETE p",
-        {"id": "quality-smoke-person"},
+        "MATCH (p:Person) WHERE p.id STARTS WITH 'quality-smoke-' DETACH DELETE p",
     )
     print("ok: quality control smoke passed")
     return 0

@@ -15,7 +15,9 @@ from typing import Any, Callable
 OPERATIONAL_LABEL = "Operational"
 
 # Specific control-plane labels protected from generic model-facing Cypher.
-# Keep in sync with scripts/init-quality-roles.cypher DENY lists.
+# Single source of truth for Neo4j DENY coverage: scripts/init_quality_roles.py
+# imports this set and generates CREATE/DELETE/SET PROPERTY/SET LABEL denies
+# for every label (regenerate scripts/init-quality-roles.cypher via --write-cypher).
 PROTECTED_QUALITY_LABELS: frozenset[str] = frozenset(
     {
         "Operational",

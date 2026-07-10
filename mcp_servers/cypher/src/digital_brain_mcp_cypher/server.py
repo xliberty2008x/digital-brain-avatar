@@ -53,11 +53,17 @@ def _neo4j_uri() -> str:
 def _neo4j_auth() -> tuple[str, str]:
     """Model-facing runtime credential (life-graph read/write).
 
-    Prefer dedicated runtime role users. Falls back to NEO4J_USERNAME for
-    local single-user stacks that have not yet applied role bootstrap.
+    Prefer dedicated runtime role only when *both* username and password are
+    set (avoids mixed auth: runtime user + admin password). Falls back to
+    NEO4J_USERNAME/PASSWORD for local single-user stacks that have not yet
+    applied role bootstrap (see .env.example + DIGITAL_BRAIN_APPLY_QUALITY_ROLES).
     """
-    username = os.getenv("NEO4J_RUNTIME_USERNAME") or os.getenv("NEO4J_USERNAME", "neo4j")
-    password = os.getenv("NEO4J_RUNTIME_PASSWORD") or os.getenv("NEO4J_PASSWORD", "password")
+    runtime_user = (os.getenv("NEO4J_RUNTIME_USERNAME") or "").strip()
+    runtime_password = (os.getenv("NEO4J_RUNTIME_PASSWORD") or "").strip()
+    if runtime_user and runtime_password:
+        return (runtime_user, runtime_password)
+    username = os.getenv("NEO4J_USERNAME", "neo4j")
+    password = os.getenv("NEO4J_PASSWORD", "password")
     return (username, password)
 
 
@@ -68,8 +74,8 @@ def _quality_neo4j_auth() -> tuple[str, str]:
     only when quality credentials are unset (local bootstrap convenience);
     production compose should always set NEO4J_QUALITY_*.
     """
-    username = os.getenv("NEO4J_QUALITY_USERNAME")
-    password = os.getenv("NEO4J_QUALITY_PASSWORD")
+    username = (os.getenv("NEO4J_QUALITY_USERNAME") or "").strip()
+    password = (os.getenv("NEO4J_QUALITY_PASSWORD") or "").strip()
     if username and password:
         return (username, password)
     return _neo4j_auth()
