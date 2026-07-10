@@ -269,3 +269,93 @@ def test_read_only_rejects_dynamic_procedure_escape_hatch_but_allows_vector_sear
         "CALL db.index.vector.queryNodes('journal_entry_embedding_index', $limit, $embedding) "
         "YIELD node RETURN node.id"
     )
+
+
+# ---------------------------------------------------------------------------
+# Operational / quality control write guards (Task 2)
+# ---------------------------------------------------------------------------
+
+PROTECTED_QUALITY_WRITE_CASES = (
+    # CREATE / MERGE protected labels
+    "CREATE (n:Operational {id: $id})",
+    "CREATE (n:Operational:Feedback {id: $id})",
+    "CREATE (f:Feedback {id: $id})",
+    "MERGE (a:Alias {from_name: $name})",
+    "CREATE (l:LearningLog {id: $id})",
+    "CREATE (r:EffectReceipt {id: $id})",
+    "CREATE (p:AgentPolicyRevision {id: $id})",
+    "CREATE (s:PolicySlot {slot: 'active'})",
+    "CREATE (m:MaintenanceLease {id: $id})",
+    "CREATE (d:DreamRun {id: $id})",
+    "CREATE (h:HarnessGeneration {id: $id})",
+    "CREATE (e:RunEvent {id: $id})",
+    "CREATE (x:EvaluationReceipt {id: $id})",
+    "CREATE (y:ActivationAuthority {id: $id})",
+    "CREATE (z:Deployment {id: $id})",
+    # SET label
+    "MATCH (n {id: $id}) SET n:Operational",
+    "MATCH (n) SET n:Alias",
+    "MATCH (n) SET n:Person:LearningLog",
+    "MATCH (n) SET n:`Operational`",
+    "CREATE (n {id: $id}) SET n:Feedback:Operational",
+    # Dynamic label / property smuggling
+    "MATCH (n) SET n[$label] = true",
+    "MATCH (n) SET n['id'] = $id",
+    # Full node replacement of control records
+    "MATCH (a:Alias {id: $id}) SET a = $props",
+    "MATCH (o:Operational) SET o = {summary: 'x'}",
+    "MATCH (a:Alias) SET a += $props",
+    # Relationship-based access to protected control records
+    "MATCH (p:Person)-[r]->(a:Alias) SET a.to_name = $name",
+    "MATCH (p:Person)-[r]->(o:Operational) SET o.stage = 'hack'",
+    "MATCH (j:JournalEntry), (a:Alias) MERGE (j)-[:USES_ALIAS]->(a)",
+    "MATCH (n)-[r:SUPPORTED_BY]->(f:Finding) SET f.summary = 'x'",
+    "MATCH ()-[r]->(e:EffectReceipt) SET e.status = 'forged'",
+    # Escaped / whitespace variants
+    "CREATE (a : `Alias` {from_name: $name})",
+    "MERGE (l:`LearningLog` {id: $id})",
+)
+
+
+def test_general_write_rejects_protected_quality_control_mutations():
+    for query in PROTECTED_QUALITY_WRITE_CASES:
+        try:
+            assert_general_write_allowed(query)
+        except ValueError as exc:
+            message = str(exc).lower()
+            assert any(
+                token in message
+                for token in (
+                    "operational",
+                    "quality",
+                    "control",
+                    "alias",
+                    "learninglog",
+                    "protected",
+                    "receipt",
+                    "policy",
+                    "dynamic",
+                    "full node",
+                    "delete",
+                    "map",
+                )
+            ), f"unexpected message for {query!r}: {exc}"
+        else:
+            raise AssertionError(f"expected protected quality rejection for {query}")
+
+
+def test_general_write_still_allows_life_graph_post_append_links():
+    assert_general_write_allowed(
+        "MATCH (j:JournalEntry {id: $journal_id}) "
+        "MERGE (p:Person {id: $person_id}) "
+        "ON CREATE SET p.name = $name "
+        "MERGE (j)-[:MENTIONS]->(p)"
+    )
+    assert_general_write_allowed(
+        "MATCH (j:JournalEntry {id: $journal_id}) "
+        "MERGE (e:Event {id: $event_id}) "
+        "MERGE (j)-[:DOCUMENTS]->(e)"
+    )
+    assert_general_write_allowed(
+        "MATCH (j:JournalEntry {id: $journal_id}) SET j.summary = 'ok'"
+    )

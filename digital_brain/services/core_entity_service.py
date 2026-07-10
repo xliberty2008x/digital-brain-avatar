@@ -32,6 +32,7 @@ async def get_all_core_entities() -> dict[str, list[dict[str, Any]]]:
     query = """
     MATCH (n)
     WHERE n.name IS NOT NULL
+      AND NOT n:Operational
       AND NOT 'JournalEntry' IN labels(n)
       AND NOT 'Alias' IN labels(n)
       AND NOT 'LearningLog' IN labels(n)

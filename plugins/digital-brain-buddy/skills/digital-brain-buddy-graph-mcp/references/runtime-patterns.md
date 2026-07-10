@@ -42,9 +42,23 @@ ORDER BY j.entry_date DESC, j.timestamp DESC, j.created_at DESC
 Entity expansion pattern:
 
 - `OPTIONAL MATCH (j)-[r]->(e)`
-- drop `JournalEntry` and `Alias`
+- drop `Operational`, `JournalEntry`, `Alias`, and `LearningLog`
 - expose `label = head(labels(e))`
 - expose `relation = type(r)`
+
+### Operational exclusion (central rule)
+
+All quality/control nodes carry an `Operational` label. BOOTSTRAP, heavy-node,
+vector, and default-export paths must exclude them centrally:
+
+```cypher
+NOT n:Operational
+```
+
+Until the reviewed `scripts/migrate_operational_labels.py` backfill is applied
+everywhere, keep temporary legacy exclusions for `Alias` and `LearningLog` as
+well. Generic `write_neo4j_cypher` rejects protected quality/control mutations;
+typed quality tools and the authenticated local coordinator API own that plane.
 
 ### Core-entity reads
 
@@ -52,7 +66,7 @@ Entity expansion pattern:
 
 Heavy-node pattern:
 
-- exclude `JournalEntry`, `Alias`, `LearningLog`
+- exclude `Operational`, `JournalEntry`, `Alias`, `LearningLog`
 - require `n.name`
 - include all `Person` and `Organization`
 - include everything else only if `COUNT { (n)--() } >= threshold`
@@ -221,6 +235,7 @@ This is the startup-session version of the heavy-node pattern.
 ```cypher
 MATCH (n)
 WHERE n.name IS NOT NULL
+  AND NOT n:Operational
   AND NOT 'JournalEntry' IN labels(n)
   AND NOT 'Alias' IN labels(n)
   AND NOT 'LearningLog' IN labels(n)
@@ -244,7 +259,8 @@ which node categories dominate the user's graph.
 
 ```cypher
 MATCH (n)
-WHERE NOT 'JournalEntry' IN labels(n)
+WHERE NOT n:Operational
+  AND NOT 'JournalEntry' IN labels(n)
   AND NOT 'Alias' IN labels(n)
   AND NOT 'LearningLog' IN labels(n)
 WITH n, labels(n) AS labels, COUNT { (n)--() } AS node_weight
@@ -289,7 +305,7 @@ authorizing a merge.
 
 ```cypher
 MATCH (a {id: $entity_id}), (b)
-WHERE b <> a AND NOT b:JournalEntry AND NOT b:Alias
+WHERE b <> a AND NOT b:Operational AND NOT b:JournalEntry AND NOT b:Alias
 OPTIONAL MATCH (a)-[]-(common)-[]-(b)
 WITH b, count(DISTINCT common) AS shared_connections
 WHERE shared_connections > 0

@@ -65,7 +65,7 @@ Rules:
 - sort by `entry_date DESC, timestamp DESC, created_at DESC`
 
 3. Mirror core-entity lookup when the goal is stable memory:
-- exclude `JournalEntry`, `Alias`, and `LearningLog`
+- exclude `Operational`, `JournalEntry`, `Alias`, and `LearningLog`
 - require `name`
 - prioritize `Person` and `Organization`
 - otherwise use connection count (`weight = COUNT { (n)--() }`)

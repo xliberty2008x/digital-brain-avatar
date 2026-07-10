@@ -108,6 +108,26 @@ if ! wait_for_service_health ollama "$OLLAMA_HEALTH_MAX_ATTEMPTS" "ollama"; then
   warn_and_exit "ollama is not healthy; no MCP service was started"
 fi
 
+# Optional: apply runtime/quality Neo4j roles when credentials are configured.
+# Explicit, non-silent — skipped unless DIGITAL_BRAIN_APPLY_QUALITY_ROLES=1 and
+# NEO4J_RUNTIME_PASSWORD + NEO4J_QUALITY_PASSWORD are set. Never mounts operator
+# activation credentials into mcp-cypher. Does not run Operational backfill
+# migration (scripts/migrate_operational_labels.py is operator-reviewed only).
+if [ "${DIGITAL_BRAIN_APPLY_QUALITY_ROLES:-0}" = "1" ]; then
+  if [ -n "${NEO4J_RUNTIME_PASSWORD:-}" ] && [ -n "${NEO4J_QUALITY_PASSWORD:-}" ]; then
+    echo "$PLUGIN_NAME: applying Neo4j runtime/quality roles (reviewed bootstrap)..."
+    if command -v uv >/dev/null 2>&1; then
+      if ! uv run --group dev python scripts/init_quality_roles.py --apply; then
+        echo "$PLUGIN_NAME: quality role bootstrap failed; continuing with existing Neo4j auth" >&2
+      fi
+    else
+      echo "$PLUGIN_NAME: uv not found; skip quality role bootstrap" >&2
+    fi
+  else
+    echo "$PLUGIN_NAME: DIGITAL_BRAIN_APPLY_QUALITY_ROLES=1 but runtime/quality passwords unset; skip" >&2
+  fi
+fi
+
 # Rebuild + recreate mcp-cypher so SessionStart / /digital-brain-up pick up
 # local source changes (hard-reject, embeddings). Cached layers keep builds
 # cheap when nothing changed; --force-recreate ensures the container is not

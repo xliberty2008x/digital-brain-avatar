@@ -42,8 +42,20 @@ services:
       - "127.0.0.1:${MCP_CYPHER_PORT:-8000}:8000"
     environment:
       NEO4J_URI: "bolt://neo4j:7687"
+      # Fallback life-graph auth (first boot / pre-role stacks).
       NEO4J_USERNAME: "${NEO4J_USERNAME:-neo4j}"
       NEO4J_PASSWORD: "${NEO4J_PASSWORD:-password}"
+      # Model-facing runtime role preferred by server when set (after
+      # scripts/init_quality_roles.py --apply).
+      NEO4J_RUNTIME_USERNAME: "${NEO4J_RUNTIME_USERNAME:-}"
+      NEO4J_RUNTIME_PASSWORD: "${NEO4J_RUNTIME_PASSWORD:-}"
+      # Typed quality transactions (separate credential). Not an operator key.
+      NEO4J_QUALITY_USERNAME: "${NEO4J_QUALITY_USERNAME:-}"
+      NEO4J_QUALITY_PASSWORD: "${NEO4J_QUALITY_PASSWORD:-}"
+      # Coordinator control API secret (local non-MCP). Absent from analyzer envs.
+      DIGITAL_BRAIN_COORDINATOR_SECRET: "${DIGITAL_BRAIN_COORDINATOR_SECRET:-}"
+      # Intentionally NOT mounted: NEO4J_ADMIN_*, NEO4J_OPERATOR_*,
+      # DIGITAL_BRAIN_OPERATOR_SECRET (activation/operator boundary).
       NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
       NEO4J_TRANSPORT: "streamable-http"
       NEO4J_MCP_SERVER_HOST: "0.0.0.0"

@@ -48,8 +48,8 @@ return a compact first-layer context pack before any interpretation or write:
 3. `top_weighted_nodes`: top 20 non-internal nodes ranked by graph degree.
    Mirror the runtime heavy-node pattern from
    `../digital-brain-buddy-graph-mcp/references/runtime-patterns.md`: exclude
-   `JournalEntry`, `Alias`, and `LearningLog`; use `COUNT { (n)--() }` as
-   weight; sort descending.
+   `Operational`, `JournalEntry`, `Alias`, and `LearningLog`; use
+   `COUNT { (n)--() }` as weight; sort descending.
 4. `node_type_weight_summary`: compact non-internal label/type summary ranked
    by summed node weights.
 5. `recent_baseline`: only the most recent valid journal entries needed to

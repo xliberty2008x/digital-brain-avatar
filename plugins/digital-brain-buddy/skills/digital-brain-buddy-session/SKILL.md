@@ -36,8 +36,8 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
      relationship to the user when available, and a compact summary of themes
      that tend to involve or trigger that person
    - a top-20 weighted core-node list, plus a compact node label/type weight
-     summary, using graph degree as `weight` and excluding `JournalEntry`,
-     `Alias`, and `LearningLog`
+     summary, using graph degree as `weight` and excluding `Operational`,
+     `JournalEntry`, `Alias`, and `LearningLog`
    - recent valid `JournalEntry` rows only as support for the people/theme
      summaries, not as a raw dump
 

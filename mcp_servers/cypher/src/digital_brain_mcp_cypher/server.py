@@ -26,6 +26,8 @@ from .journal import (
     build_append_request,
     replay_or_key_conflict,
 )
+from .quality import QualityStore
+from .quality_control_api import handle_quality_control
 from .query_tools import (
     assert_general_write_allowed,
     assert_read_only,
@@ -39,6 +41,8 @@ mcp = FastMCP("digital-brain-mcp-cypher")
 
 _JOURNAL_SCHEMA_LOCK = threading.Lock()
 _journal_schema_ready = False
+_QUALITY_SCHEMA_LOCK = threading.Lock()
+_quality_schema_ready = False
 JOURNAL_EMBEDDING_DIMENSIONS = 1024
 
 
@@ -47,10 +51,28 @@ def _neo4j_uri() -> str:
 
 
 def _neo4j_auth() -> tuple[str, str]:
-    return (
-        os.getenv("NEO4J_USERNAME", "neo4j"),
-        os.getenv("NEO4J_PASSWORD", "password"),
-    )
+    """Model-facing runtime credential (life-graph read/write).
+
+    Prefer dedicated runtime role users. Falls back to NEO4J_USERNAME for
+    local single-user stacks that have not yet applied role bootstrap.
+    """
+    username = os.getenv("NEO4J_RUNTIME_USERNAME") or os.getenv("NEO4J_USERNAME", "neo4j")
+    password = os.getenv("NEO4J_RUNTIME_PASSWORD") or os.getenv("NEO4J_PASSWORD", "password")
+    return (username, password)
+
+
+def _quality_neo4j_auth() -> tuple[str, str]:
+    """Quality/control credential for typed quality transactions.
+
+    Separate from the model-facing runtime role. Falls back to runtime auth
+    only when quality credentials are unset (local bootstrap convenience);
+    production compose should always set NEO4J_QUALITY_*.
+    """
+    username = os.getenv("NEO4J_QUALITY_USERNAME")
+    password = os.getenv("NEO4J_QUALITY_PASSWORD")
+    if username and password:
+        return (username, password)
+    return _neo4j_auth()
 
 
 def _neo4j_database() -> str:
@@ -59,6 +81,10 @@ def _neo4j_database() -> str:
 
 def _driver():
     return GraphDatabase.driver(_neo4j_uri(), auth=_neo4j_auth())
+
+
+def _quality_driver():
+    return GraphDatabase.driver(_neo4j_uri(), auth=_quality_neo4j_auth())
 
 
 def _run_cypher(query: str, params: dict[str, Any] | None, write: bool) -> list[dict[str, Any]]:
@@ -92,6 +118,10 @@ def _journal_store() -> JournalStore:
     return JournalStore(_driver, _neo4j_database())
 
 
+def _quality_store() -> QualityStore:
+    return QualityStore(_quality_driver, _neo4j_database())
+
+
 def _ensure_journal_schema() -> None:
     """Create only the new safe uniqueness constraints once per process."""
     global _journal_schema_ready
@@ -102,6 +132,18 @@ def _ensure_journal_schema() -> None:
             return
         _journal_store().ensure_constraints()
         _journal_schema_ready = True
+
+
+def _ensure_quality_schema() -> None:
+    """Idempotent quality/control uniqueness constraints (JournalStore pattern)."""
+    global _quality_schema_ready
+    if _quality_schema_ready:
+        return
+    with _QUALITY_SCHEMA_LOCK:
+        if _quality_schema_ready:
+            return
+        _quality_store().ensure_constraints()
+        _quality_schema_ready = True
 
 
 def _readiness() -> tuple[bool, dict[str, str]]:
@@ -153,6 +195,20 @@ async def readyz(_: Request) -> JSONResponse:
     # Keep their bounded (20s by default) probe off FastMCP's event loop.
     ready, payload = await asyncio.to_thread(_readiness)
     return JSONResponse(payload, status_code=200 if ready else 503)
+
+
+@mcp.custom_route("/internal/quality-control", methods=["POST"], include_in_schema=False)
+async def quality_control(request: Request) -> JSONResponse:
+    """Authenticated non-MCP coordinator control API (local host only).
+
+    Never registered as a FastMCP tool. Requires
+    ``X-Digital-Brain-Coordinator-Secret``. Analyzer/evaluator environments
+    must not receive ``DIGITAL_BRAIN_COORDINATOR_SECRET``.
+    """
+    return await handle_quality_control(
+        request,
+        quality_ping=lambda: _quality_store().ping(),
+    )
 
 
 @mcp.tool(
@@ -283,6 +339,32 @@ def bootstrap_journal_chain(
         empty=empty,
         chain_key=PRIMARY_JOURNAL_CHAIN_KEY,
     )
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Quality Receipt",
+        description=(
+            "Look up a quality/control EffectReceipt by stable id. "
+            "Model-facing recorder/read surface only; coordinator mutations "
+            "use the authenticated local control API."
+        ),
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+def get_quality_receipt(
+    receipt_id: str = Field(..., description="Stable EffectReceipt id"),
+) -> str:
+    """Read-only quality receipt reconciliation helper."""
+    try:
+        _ensure_quality_schema()
+    except Exception:
+        # Constraints may already exist from admin bootstrap; reads still work.
+        pass
+    payload = _quality_store().get_receipt(receipt_id)
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
