@@ -2456,8 +2456,8 @@ class MaintenanceStore:
             str(receipt.get("candidate_ref") or f"candidate:{proposal_id}"),
             "evaluation_receipt.candidate_ref",
         )
-        # Holdout proof required: non-empty fixture_snapshot with holdout_ids or
-        # explicit holdout_ids / fixture_digest on the embed.
+        # Holdout proof requires concrete ids. A digest cannot prove that a
+        # hidden holdout was actually evaluated.
         fixture_snapshot = _json_field(
             receipt.get("fixture_snapshot") or "{}",
             "evaluation_receipt.fixture_snapshot",
@@ -2484,8 +2484,6 @@ class MaintenanceStore:
                     "evaluation_receipt.fixture_snapshot",
                     default="{}",
                 )
-            elif str(receipt.get("fixture_digest") or "").strip():
-                holdout_ok = True
         if not holdout_ok:
             raise EvaluationGateError("evaluation_receipt_missing_holdout_proof")
         target_results = _json_field(
