@@ -3,7 +3,7 @@
     "digital-brain-neo4j": {
       "type": "http",
       "url": "http://localhost:8000/api/mcp/",
-      "note": "Local Neo4j Cypher MCP endpoint for avatar_digital_brain. Exposes read_neo4j_cypher, write_neo4j_cypher, and get_neo4j_schema. Literal URL: some hosts do not expand shell-style env defaults in plugin MCP URLs."
+      "note": "Local Neo4j Cypher MCP endpoint for avatar_digital_brain. Exposes read/write Cypher plus the server-owned JournalEntry append tools (get_journal_chain_head, append_journal_entry, and get_journal_append_receipt). Literal URL: some hosts do not expand shell-style env defaults in plugin MCP URLs."
     }
   }
 }

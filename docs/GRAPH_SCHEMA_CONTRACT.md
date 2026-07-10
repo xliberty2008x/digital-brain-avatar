@@ -23,7 +23,8 @@ This document defines the strict structure and rules for node creation and relat
 
 | Label | Required Properties | Description |
 | :--- | :--- | :--- |
-| **JournalEntry** | `id`, `content`, `timestamp`, `mood` | The raw thought captured from the user. |
+| **JournalEntry** | `id`, `append_key`, `content`, `timestamp`, `mood`, `embedding` | The raw thought captured from the user. `append_key` is the idempotency key for new writes. |
+| **JournalChain** | `key`, `version` | Server-owned primary append cursor; never inferred from timestamp order. |
 | **Alias** | `from_name`, `to_name`, `canonical_id` | Metadata for "learned" entity resolution. |
 | **LearningLog** | `type`, `entity`, `timestamp` | Audit log of merges and self-corrections. |
 
@@ -45,6 +46,8 @@ Relationships define the "web of thought". Direction matters.
 | **OWNS** | `Person` | `Pet` | Relationship between a person and their pet. |
 | **WORKS_AT** | `Person` | `Organization` | Professional affiliation. |
 | **ALIAS_OF** | `Person` | `Person` | A hard-link indicating two nodes represent the same entity (used for resolution).|
+| **HEAD** | `JournalChain` | `JournalEntry` | The one current head of the server-owned primary journal chain. |
+| **FOLLOWS** | `JournalEntry` | `JournalEntry` | Created only by the JournalEntry append protocol. |
 
 ---
 
@@ -53,6 +56,9 @@ Relationships define the "web of thought". Direction matters.
 ### Rule 1: Deterministic IDs
 - Nodes must have a unique `id` (usually a UUID or a deterministic string).
 - **Writer Agent** must never use `CREATE` for an entity present in `{existing_entities}`.
+- A new `JournalEntry` must be created only through `append_journal_entry`.
+  The server derives its stable id from `append_key`, stores the request
+  fingerprint, and atomically advances `JournalChain`.
 
 ### Rule 2: Naming Conventions
 - **Labels**: PascalCase (e.g., `JournalEntry`).

@@ -8,17 +8,44 @@ Includes retry logic for local MCP startup and temporary unavailability.
 import aiohttp
 import asyncio
 import json
+import os
 from typing import Any
 
 from ..config import DEFAULT_LOCAL_MCP_URL, get_mcp_url
 
 DEFAULT_MCP_URL = DEFAULT_LOCAL_MCP_URL
 
-# Retry configuration for MCP startup or temporary unavailability
-MAX_RETRIES = 4
-INITIAL_DELAY = 5  # seconds
+# Retry configuration for MCP startup or temporary unavailability.  A retry is
+# safe only for read-style tools; a timed-out generic write may already have
+# committed on Neo4j.
+MAX_RETRIES = 1
+INITIAL_DELAY = 1  # seconds
+MCP_REQUEST_TIMEOUT_SECONDS = int(os.getenv("MCP_REQUEST_TIMEOUT_SECONDS", "25"))
+
+_RETRY_SAFE_TOOLS = {
+    "read_neo4j_cypher",
+    "get_neo4j_schema",
+    "get_journal_chain_head",
+    "get_journal_append_receipt",
+}
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
+
+
+class McpWriteOutcomeUnknown(RuntimeError):
+    """A write may have committed after the client lost its response.
+
+    Callers must reconcile an append through its stable ``append_key`` instead
+    of resubmitting a fresh write.
+    """
+
+    def __init__(self, tool_name: str, arguments: dict[str, Any], cause: BaseException):
+        self.tool_name = tool_name
+        self.arguments = arguments
+        self.__cause__ = cause
+        super().__init__(
+            f"MCP write outcome is unknown for {tool_name}; reconcile before retrying: {cause}"
+        )
 
 
 def _response_mentions_missing_session(text: str) -> bool:
@@ -95,7 +122,7 @@ async def call_mcp_tool(
     tool_name: str,
     arguments: dict[str, Any],
     url: str | None = None,
-    max_retries: int = MAX_RETRIES,
+    max_retries: int | None = None,
     initial_delay: int = INITIAL_DELAY
 ) -> dict[str, Any]:
     """
@@ -105,13 +132,17 @@ async def call_mcp_tool(
         tool_name: Name of the MCP tool (e.g., 'read_neo4j_cypher')
         arguments: Tool arguments as a dictionary
         url: MCP server endpoint
-        max_retries: Maximum number of retry attempts
+        max_retries: Maximum number of retry attempts.  Defaults to one retry
+            for read-style tools and no retry for writes.
         initial_delay: Initial delay between retries (doubles each attempt)
     
     Returns:
         Tool response as a dictionary
     """
     endpoint = url or get_mcp_url()
+    retry_safe = tool_name in _RETRY_SAFE_TOOLS
+    if max_retries is None:
+        max_retries = MAX_RETRIES if retry_safe else 0
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -128,7 +159,7 @@ async def call_mcp_tool(
     
     for attempt in range(max_retries + 1):
         try:
-            timeout = aiohttp.ClientTimeout(total=30)  # 30 second timeout
+            timeout = aiohttp.ClientTimeout(total=MCP_REQUEST_TIMEOUT_SECONDS)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 if mcp_session_id is None:
                     mcp_session_id = await _initialize_mcp_session(session, endpoint)
@@ -174,12 +205,67 @@ async def call_mcp_tool(
                 delay *= 2  # Exponential backoff
             else:
                 print(f"❌ MCP call failed after {max_retries} retries: {e}")
+                if not retry_safe:
+                    raise McpWriteOutcomeUnknown(tool_name, arguments, e) from e
                 raise
         except Exception as e:
             # Non-retryable error
             raise
     
     raise last_error or Exception("MCP call failed with unknown error")
+
+
+def _tool_content_json(result: dict[str, Any]) -> dict[str, Any]:
+    """Decode the JSON payload returned by an MCP tool."""
+    content = result.get("content") if isinstance(result, dict) else None
+    if not isinstance(content, list) or not content:
+        raise ValueError(f"MCP tool returned no content: {result}")
+    text = content[0].get("text") if isinstance(content[0], dict) else None
+    if not isinstance(text, str):
+        raise ValueError(f"MCP tool returned invalid content: {result}")
+    decoded = json.loads(text)
+    if not isinstance(decoded, dict):
+        raise ValueError(f"MCP tool returned non-object JSON: {decoded!r}")
+    return decoded
+
+
+async def get_journal_chain_head() -> dict[str, Any]:
+    """Read the server-owned primary JournalEntry chain head."""
+    return _tool_content_json(await call_mcp_tool("get_journal_chain_head", {}))
+
+
+async def get_journal_append_receipt(append_key: str) -> dict[str, Any]:
+    """Reconcile a possibly timed-out append without issuing another write."""
+    return _tool_content_json(
+        await call_mcp_tool("get_journal_append_receipt", {"append_key": append_key})
+    )
+
+
+async def append_journal_entry(
+    *,
+    append_key: str,
+    content: str,
+    timestamp: str,
+    mood: str | None,
+    expected_version: int,
+    properties: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append one JournalEntry through the server-owned CAS protocol.
+
+    This function deliberately does not retry a failed request.  On
+    ``McpWriteOutcomeUnknown``, call :func:`get_journal_append_receipt` (or
+    submit this exact payload again only after reconciliation).
+    """
+    arguments: dict[str, Any] = {
+        "append_key": append_key,
+        "content": content,
+        "timestamp": timestamp,
+        "mood": mood,
+        "expected_version": expected_version,
+    }
+    if properties:
+        arguments["properties"] = properties
+    return _tool_content_json(await call_mcp_tool("append_journal_entry", arguments))
 
 
 async def execute_cypher(query: str, params: dict = None, embed_text: str | None = None) -> list[dict]:

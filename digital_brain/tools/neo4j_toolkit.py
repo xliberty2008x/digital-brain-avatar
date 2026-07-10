@@ -22,7 +22,6 @@ def create_neo4j_toolset(
     
     Args:
         tools: List of tool names to include. If None, all tools are available.
-               Available tools: 'read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema'
         url: MCP server URL
     
     Returns:
@@ -46,6 +45,13 @@ def read_only_toolset(url: str | None = None) -> McpToolset:
 def full_access_toolset(url: str | None = None) -> McpToolset:
     """Toolset with full read/write access."""
     return create_neo4j_toolset(
-        tools=['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema'],
+        tools=[
+            'read_neo4j_cypher',
+            'write_neo4j_cypher',
+            'get_neo4j_schema',
+            'get_journal_chain_head',
+            'append_journal_entry',
+            'get_journal_append_receipt',
+        ],
         url=url
     )

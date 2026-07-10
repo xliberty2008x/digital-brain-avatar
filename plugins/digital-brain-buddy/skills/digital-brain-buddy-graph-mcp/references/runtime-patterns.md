@@ -81,34 +81,37 @@ Type-specific patterns:
 
 `digital_brain/agents/writer.py`
 
-- `MERGE` existing entities by id
-- repair missing ids when a node exists by name
-- `CREATE` new entities only after resolution
-- create `JournalEntry` with explicit `id`
-- link each new `JournalEntry` to the previous one with `FOLLOWS`
+- resolve entities before append, then use idempotent `MERGE` for post-append links
+- mint one UUID `append_key` before the first append attempt
+- append the journal core through `append_journal_entry`, never raw Cypher
+- use the returned `journal_id` for follow-up relation mutations
 
-### Deterministic guard
+### Server-owned chain protocol
 
-`digital_brain/callbacks/journal_chain_guard.py`
+`mcp_servers/cypher` owns the authoritative chain state:
 
-Before `write_neo4j_cypher`, if a query creates or merges `(:JournalEntry ...)`, the guard requires:
+```text
+(:JournalChain {key: "primary", version})-[:HEAD]->(:JournalEntry)
+```
 
-1. explicit `id` in the property map
-2. chain link to the previous journal id when available
+1. Call `get_journal_chain_head()` immediately before mutation.
+2. Call `append_journal_entry(append_key, content, timestamp, mood,
+   expected_version, properties?)`.
+3. The server validates the fingerprint, generates the embedding, locks the
+   chain node, updates HEAD, creates FOLLOWS, and increments version in one
+   transaction.
+4. Outcomes are `created`, `replayed`, or `conflict`. A timeout is reconciled
+   with `get_journal_append_receipt(append_key)`.
 
-Accepted chain relations:
-
-- `FOLLOWS`
-- `NEXT_ENTRY`
-- `PRECEDED_BY`
-- `NEXT`
+Generic `write_neo4j_cypher` rejects JournalEntry and FOLLOWS creation.
 
 ### Execution path
 
 `digital_brain/agents/executor.py`
 
 - all mutations go through `write_neo4j_cypher`
-- JournalEntry writes must include `embed_text` — the MCP server (`mcp_servers/cypher`) hard-rejects the write otherwise
+- JournalEntry core writes go through `append_journal_entry`; generic Cypher is
+  limited to idempotent post-append links
 
 ## Live Graph Snapshot Checked On 2026-04-08
 
@@ -243,18 +246,16 @@ ORDER BY weight DESC, node_count DESC
 LIMIT 20
 ```
 
-### Latest valid JournalEntry id
+### Current server-owned JournalChain head
 
-```cypher
-MATCH (j:JournalEntry)
-WHERE j.id IS NOT NULL
-  AND trim(toString(j.id)) <> ''
-  AND trim(coalesce(toString(j.content), toString(j.raw_text), '')) <> ''
-  AND trim(coalesce(toString(j.timestamp), toString(j.entry_date), toString(j.created_at), '')) <> ''
-RETURN j.id AS id
-ORDER BY j.entry_date DESC, j.timestamp DESC, j.created_at DESC
-LIMIT 1
-```
+Call `get_journal_chain_head()` instead of deriving a head from timestamps or
+legacy FOLLOWS edges. If it returns `chain_uninitialized`, stop and ask the
+operator to bootstrap the primary head from audited candidates.
+
+The operator runs `scripts/bootstrap_journal_chain.py --head-element-id
+<elementId> --apply`; this uses the dedicated `bootstrap_journal_chain` MCP
+tool. Generic Cypher cannot modify `JournalChain`, `HEAD`, `FOLLOWS`, or core
+JournalEntry receipt fields.
 
 ### Alias-first entity lookup
 
@@ -286,19 +287,20 @@ ORDER BY shared_connections DESC
 LIMIT 10
 ```
 
-### Chain-safe JournalEntry write skeleton
+### Chain-safe JournalEntry append
 
-```cypher
-MATCH (prev:JournalEntry {id: $prev_id})
-CREATE (j:JournalEntry {
-  id: $journal_id,
-  content: $content,
-  timestamp: $timestamp,
-  mood: $mood,
-  embedding: $embedding
-})
-MERGE (j)-[:FOLLOWS]->(prev)
-RETURN j.id AS id
+```text
+head = get_journal_chain_head()
+append_key = one UUID retained across reconciliation
+receipt = append_journal_entry(
+  append_key=append_key,
+  content=content,
+  timestamp=timestamp,
+  mood=mood,
+  expected_version=head.version,
+)
 ```
 
-Pass `embed_text = $content` on every MCP `JournalEntry` write. The MCP server hard-rejects a `JournalEntry` create or merge without `embed_text`; this is a mandatory MCP input for the write path.
+For `created` or matching `replayed`, use `receipt.journal_id` in
+idempotent post-append `MATCH`/`MERGE` queries. For `conflict`, no node has
+been created: read the head again and make an explicit new append decision.

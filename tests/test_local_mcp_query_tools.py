@@ -5,6 +5,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "mcp_servers" / "cypher" / "src"))
 
 from digital_brain_mcp_cypher.query_tools import (  # noqa: E402
+    assert_general_write_allowed,
     assert_read_only,
     validate_embedding_usage,
     with_embedding_param,
@@ -121,3 +122,77 @@ def test_validate_embedding_usage_rejects_whitespace_only_embed_text():
         assert "embed_text" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_general_write_rejects_anonymous_journal_entry_creation():
+    try:
+        assert_general_write_allowed("CREATE (:JournalEntry {id: $id})")
+    except ValueError as exc:
+        assert "append_journal_entry" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_general_write_rejects_relationship_chained_journal_merge():
+    try:
+        assert_general_write_allowed(
+            "MATCH (p:Person {id: $person_id}) "
+            "MERGE (p)-[:WROTE]->(j:JournalEntry {id: $id})"
+        )
+    except ValueError as exc:
+        assert "JournalEntry" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_general_write_rejects_raw_follows_create_and_merge():
+    for query in (
+        "CREATE (new:JournalEntry)-[:FOLLOWS]->(old:JournalEntry)",
+        "MATCH (new), (old) MERGE (new)-[r : FOLLOWS]->(old)",
+    ):
+        try:
+            assert_general_write_allowed(query)
+        except ValueError as exc:
+            assert "FOLLOWS" in str(exc)
+        else:
+            raise AssertionError(f"expected ValueError for {query}")
+
+
+def test_general_write_allows_journal_reads_and_vector_index_ddl():
+    assert_general_write_allowed("MATCH (j:JournalEntry) RETURN j.id")
+    assert_general_write_allowed(
+        "CREATE VECTOR INDEX journal_entry_embedding_index IF NOT EXISTS "
+        "FOR (j:JournalEntry) ON (j.embedding)"
+    )
+
+
+def test_general_write_rejects_escaped_labels_and_chain_protocol_mutations():
+    for query in (
+        "CREATE (j:`JournalEntry` {id: $id})",
+        "CREATE (a)-[:`FOLLOWS`]->(b)",
+        "CREATE (chain:`JournalChain` {key: 'primary'})",
+        "MATCH (j) SET j:`JournalEntry`",
+        "MATCH (j:JournalEntry {id: $id}) SET j.append_key = $append_key",
+        "MATCH (chain:JournalChain {key: 'primary'}), (j:JournalEntry) "
+        "CREATE (chain)-[:HEAD]->(j)",
+    ):
+        try:
+            assert_general_write_allowed(query)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected protected-write rejection for {query}")
+
+
+def test_read_only_rejects_dynamic_procedure_escape_hatch_but_allows_vector_search():
+    try:
+        assert_read_only("CALL apoc.cypher.run($query, {}) YIELD value RETURN value")
+    except ValueError as exc:
+        assert "only allows CALL db.index.vector.queryNodes" in str(exc)
+    else:
+        raise AssertionError("expected dynamic procedure rejection")
+
+    assert_read_only(
+        "CALL db.index.vector.queryNodes('journal_entry_embedding_index', $limit, $embedding) "
+        "YIELD node RETURN node.id"
+    )

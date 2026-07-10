@@ -1,4 +1,4 @@
 interface:
   display_name: "Digital Brain Buddy Write Memory"
   short_description: "Delegated writer for chain-safe memory updates"
-  default_prompt: "Use $digital-brain-buddy-write-memory to persist one bounded buddy-memory update into the Digital Brain graph. Resolve entities first, create one chain-safe JournalEntry, and return a compact mutation report."
+  default_prompt: "Use $digital-brain-buddy-write-memory to persist one bounded buddy-memory update into the Digital Brain graph. Resolve entities first, append one JournalEntry through the server-owned append API, then create idempotent post-append links and return a compact mutation report."

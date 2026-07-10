@@ -3,9 +3,21 @@
 Keep direct MCP helpers importable without the ADK runtime present.
 """
 
-from .mcp_client import call_mcp_tool, execute_cypher
+from .mcp_client import (
+    append_journal_entry,
+    call_mcp_tool,
+    execute_cypher,
+    get_journal_append_receipt,
+    get_journal_chain_head,
+)
 
-__all__ = ["call_mcp_tool", "execute_cypher"]
+__all__ = [
+    "call_mcp_tool",
+    "execute_cypher",
+    "get_journal_chain_head",
+    "append_journal_entry",
+    "get_journal_append_receipt",
+]
 
 try:
     from .neo4j_toolkit import create_neo4j_toolset, full_access_toolset, read_only_toolset

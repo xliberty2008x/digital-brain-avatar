@@ -41,12 +41,17 @@ Expected tools on `digital-brain-neo4j`:
 
 - `get_neo4j_schema(sample_size=100)` when labels or relationship names are uncertain.
 - `read_neo4j_cypher(query, params, embed_text)` for reads and vector search.
-- `write_neo4j_cypher(query, params, embed_text)` for mutations and embedding-backed `JournalEntry` writes.
+- `write_neo4j_cypher(query, params)` for non-journal mutations and idempotent post-append links.
+- `get_journal_chain_head()` immediately before a JournalEntry append.
+- `bootstrap_journal_chain(head_element_id?, empty)` is operator-only; use it
+  only after the integrity audit selects a legacy head (or on a fresh graph).
+- `append_journal_entry(append_key, content, timestamp, mood, expected_version, properties?)` for the only supported JournalEntry write path.
+- `get_journal_append_receipt(append_key)` to reconcile an uncertain append.
 
 Rules:
 
 - Pass `params` as an object, not a JSON string, when using the MCP connector directly.
-- `embed_text` is mandatory on JournalEntry writes — the MCP server hard-rejects a JournalEntry create/merge with no `embed_text`. Also use it on semantic read queries that rely on vector search.
+- The append tool owns embedding generation. `embed_text` remains for semantic read queries, not JournalEntry writes.
 - The plugin MCP URL in `.mcp.json` is a literal `http://localhost:8000/api/mcp/` (some hosts do not expand shell-style env defaults). To point elsewhere, edit that file or call the repo HTTP client with `DIGITAL_BRAIN_MCP_URL`.
 
 ## Read Workflow
@@ -73,13 +78,11 @@ Rules:
 
 ## Write Workflow
 
-1. Before creating a `JournalEntry`, fetch the latest valid journal id.
+1. Mint one UUID `append_key`, then fetch `get_journal_chain_head()` immediately before append.
 
-2. Every `JournalEntry` create or merge must include an explicit `id`.
+2. Call `append_journal_entry` with the returned `expected_version`. The server creates the explicit stable id, embedding, HEAD and FOLLOWS atomically.
 
-3. If a previous journal id is known, the same query must link the new entry to it.
-- Prefer `FOLLOWS`.
-- Accept `NEXT_ENTRY`, `PRECEDED_BY`, or `NEXT` only when matching existing graph patterns.
+3. On timeout, inspect `get_journal_append_receipt(append_key)`; never submit a new raw write or a new key blindly.
 
 4. Reuse existing entities.
 - `MERGE` by `id` when it exists.
@@ -94,7 +97,7 @@ Rules:
 
 - Do not trust stale prompt docs over the live graph.
 - Do not use `mcp__codex_apps__neo4j_cypher`; it is not the plugin-owned MCP server.
-- Do not create a `JournalEntry` without explicit `id` and chain link.
+- Do not create or merge `JournalEntry` or `FOLLOWS` through generic Cypher.
 - Do not assume all mentions use one relationship type.
 - Do not stringify `params` when calling the direct MCP connector.
-- Do not run concurrent writer flows that can race on latest-entry lookup.
+- Do not run unresolved writer flows in parallel; a stale head produces an explicit append conflict.

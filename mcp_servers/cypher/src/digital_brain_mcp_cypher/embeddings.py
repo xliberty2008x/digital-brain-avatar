@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ class EmbeddingConfig:
     model: str
     dimensions: int
     ollama_url: str
+    ollama_timeout_seconds: float = 20.0
 
     @classmethod
     def from_env(cls) -> "EmbeddingConfig":
@@ -23,7 +25,33 @@ class EmbeddingConfig:
         model = os.getenv("EMBEDDING_MODEL", "bge-m3").strip()
         dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1024"))
         ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/")
-        return cls(provider=provider, model=model, dimensions=dimensions, ollama_url=ollama_url)
+        # Keep the more explicit name as the documented setting, while accepting
+        # the shorter alias for existing local setups.
+        raw_timeout = os.getenv(
+            "OLLAMA_EMBEDDING_TIMEOUT_SECONDS",
+            os.getenv("OLLAMA_TIMEOUT_SECONDS", "20"),
+        )
+        try:
+            ollama_timeout_seconds = float(raw_timeout)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("OLLAMA_EMBEDDING_TIMEOUT_SECONDS must be a positive number") from exc
+        if ollama_timeout_seconds <= 0:
+            raise ValueError("OLLAMA_EMBEDDING_TIMEOUT_SECONDS must be a positive number")
+        return cls(
+            provider=provider,
+            model=model,
+            dimensions=dimensions,
+            ollama_url=ollama_url,
+            ollama_timeout_seconds=ollama_timeout_seconds,
+        )
+
+
+class EmbeddingRequestError(RuntimeError):
+    """A bounded, classifiable failure returned by an embedding provider."""
+
+    def __init__(self, message: str, *, reason: str):
+        super().__init__(message)
+        self.reason = reason
 
 
 class EmbeddingProvider:
@@ -44,15 +72,67 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(
+                request,
+                timeout=self.config.ollama_timeout_seconds,
+            ) as response:
                 data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # Ollama often reports useful OOM/model-load diagnostics in the
+            # response body. Keep it intentionally bounded so an upstream
+            # proxy cannot turn an error into an unbounded tool response.
+            body = _bounded_http_error_body(exc)
+            reason = "oom" if _looks_like_oom(body) else "http_error"
+            detail = f": {body}" if body else ""
+            raise EmbeddingRequestError(
+                f"Ollama embedding HTTP {exc.code}{detail}",
+                reason=reason,
+            ) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise EmbeddingRequestError(
+                "Ollama embedding request timed out",
+                reason="timeout",
+            ) from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"Ollama embedding request failed: {exc}") from exc
+            reason = "timeout" if isinstance(exc.reason, (TimeoutError, socket.timeout)) else "network"
+            raise EmbeddingRequestError(
+                f"Ollama embedding request failed: {_bounded_error_text(exc.reason)}",
+                reason=reason,
+            ) from exc
 
         embeddings = data.get("embeddings")
         if not embeddings:
-            raise RuntimeError("Ollama embedding response did not include embeddings")
+            error = _bounded_error_text(data.get("error"))
+            if error:
+                reason = "oom" if _looks_like_oom(error) else "response_error"
+                raise EmbeddingRequestError(
+                    f"Ollama embedding response error: {error}",
+                    reason=reason,
+                )
+            raise EmbeddingRequestError(
+                "Ollama embedding response did not include embeddings",
+                reason="invalid_response",
+            )
         return _validate_dimensions(embeddings[0], self.config.dimensions)
+
+
+def _bounded_error_text(value: object, limit: int = 512) -> str:
+    """Return a one-line diagnostic suitable for an MCP tool error."""
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    return text[:limit]
+
+
+def _bounded_http_error_body(error: urllib.error.HTTPError) -> str:
+    try:
+        raw = error.read(512)
+    except OSError:
+        return ""
+    return _bounded_error_text(raw.decode("utf-8", errors="replace"))
+
+
+def _looks_like_oom(value: str) -> bool:
+    lowered = value.lower()
+    return "out of memory" in lowered or "oom" in lowered or "not enough memory" in lowered
 
 
 class HuggingFaceEmbeddingProvider(EmbeddingProvider):
