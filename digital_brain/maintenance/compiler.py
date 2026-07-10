@@ -8,7 +8,6 @@ approved. Compilation never writes plugin load paths or active-overlays.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -23,9 +22,10 @@ from digital_brain.maintenance.artifacts import (
     COMPILER_VERSION_DEFAULT,
     QuarantineBundle,
     build_manifest,
+    compute_patch_sha256,
     write_quarantine_bundle,
 )
-from digital_brain.maintenance.models import digest_bytes, digest_text
+from digital_brain.maintenance.models import digest_bytes
 from digital_brain.maintenance.overlay_rules import (
     MAX_ARTIFACT_BYTES,
     OverlayRulesError,
@@ -111,17 +111,6 @@ class CompileResult:
     rule_id: str
     compiler_version: str
     schema_version: str
-
-
-def _canonical_json(payload: Any) -> str:
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-        default=str,
-    )
 
 
 def _intent_payload(intent: ChangeIntent) -> dict[str, Any]:
@@ -288,29 +277,8 @@ def compile_change_intent(request: CompileRequest) -> CompileResult:
     intent_payload = _intent_payload(intent)
     evaluation = dict(request.evaluation or {})
 
-    # Deterministic patch digest over intent + artifact + evaluation + binding.
-    binding = {
-        "base_commit": request.base_commit,
-        "before_hashes": dict(sorted(before_hashes.items())),
-        "compiler_version": COMPILER_VERSION,
-        "extension_slot": slot.id,
-        "proposal_id": request.proposal_id,
-        "rule_id": intent.rule_id,
-        "schema_version": COMPILER_SCHEMA_VERSION,
-        "target_file": target_file,
-        "target_skill": intent.target_skill or slot.target_skill,
-    }
-    patch_sha256 = digest_text(
-        _canonical_json(
-            {
-                "artifact_md": digest_bytes(artifact_md.encode("utf-8")),
-                "binding": binding,
-                "evaluation": evaluation,
-                "intent": intent_payload,
-            }
-        )
-    )
-
+    # Build manifest first (placeholder digest), then apply the single shared
+    # algorithm used by write_quarantine_bundle so control-plane == on-disk.
     manifest = build_manifest(
         proposal_id=request.proposal_id,
         dream_id=intent.dream_id,
@@ -323,7 +291,7 @@ def compile_change_intent(request: CompileRequest) -> CompileResult:
         target_file=target_file,
         compiler_version=COMPILER_VERSION,
         schema_version=COMPILER_SCHEMA_VERSION,
-        patch_sha256=patch_sha256,
+        patch_sha256="pending",
         artifact_relpath=f"dreams/quarantine/{intent.dream_id}/{request.proposal_id}/artifact.md",
         expected_plugin_generation=request.expected_plugin_generation,
         rollback_ref=request.rollback_ref,
@@ -331,6 +299,13 @@ def compile_change_intent(request: CompileRequest) -> CompileResult:
         lease_epoch=request.lease_epoch,
         run_id=request.run_id,
     )
+    patch_sha256 = compute_patch_sha256(
+        intent=intent_payload,
+        artifact_md=artifact_md,
+        evaluation=evaluation,
+        manifest=manifest,
+    )
+    manifest["patch_sha256"] = patch_sha256
 
     return CompileResult(
         artifact_md=artifact_md,

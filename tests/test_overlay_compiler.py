@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 from typing import Any
@@ -134,14 +135,51 @@ def test_compile_deterministic_and_bound():
 
 def test_compile_to_quarantine_writes_layout(tmp_path):
     state = tmp_path / "state"
+    result = compile_change_intent(_request())
     bundle = compile_to_quarantine(_request(), state_dir=state, repo_root=ROOT)
     assert (bundle.directory / "artifact.md").is_file()
     assert (bundle.directory / "intent.json").is_file()
     assert (bundle.directory / "manifest.json").is_file()
     assert (bundle.directory / "checksums.json").is_file()
+    # Control-plane digest must equal on-disk manifest / bundle digest.
+    assert result.patch_sha256 == bundle.patch_sha256
+    assert result.patch_sha256 == bundle.manifest["patch_sha256"]
+    assert result.manifest["patch_sha256"] == bundle.manifest["patch_sha256"]
     # Second compile same inputs is immutable replay.
     bundle2 = compile_to_quarantine(_request(), state_dir=state, repo_root=ROOT)
     assert bundle2.patch_sha256 == bundle.patch_sha256
+
+
+def test_compiler_and_write_bundle_share_patch_sha256(tmp_path):
+    """Single algorithm: compile_change_intent == write_quarantine_bundle."""
+    from digital_brain.maintenance.artifacts import (  # noqa: PLC0415
+        compute_patch_sha256,
+        write_quarantine_bundle,
+    )
+
+    result = compile_change_intent(_request())
+    shared = compute_patch_sha256(
+        intent=result.intent_payload,
+        artifact_md=result.artifact_md,
+        evaluation=result.evaluation,
+        manifest=result.manifest,
+    )
+    assert shared == result.patch_sha256 == result.manifest["patch_sha256"]
+
+    state = tmp_path / "state"
+    bundle = write_quarantine_bundle(
+        state_dir=state,
+        dream_id=result.intent_payload["dream_id"],
+        proposal_id="prop-ov-1",
+        intent=result.intent_payload,
+        artifact_md=result.artifact_md,
+        manifest=result.manifest,
+        evaluation=result.evaluation,
+        repo_root=ROOT,
+    )
+    assert bundle.patch_sha256 == result.patch_sha256
+    on_disk = json.loads((bundle.directory / "manifest.json").read_text(encoding="utf-8"))
+    assert on_disk["patch_sha256"] == result.patch_sha256
 
 
 def test_reject_unknown_slot():

@@ -16,14 +16,21 @@ sys.path.insert(0, str(ROOT))
 from digital_brain.maintenance.artifacts import (  # noqa: E402
     ARTIFACT_FILENAME,
     CHECKSUMS_FILENAME,
+    DEFAULT_ISOLATED_VALIDATION_COMMANDS,
     INTENT_FILENAME,
+    ISOLATED_VALIDATION_COMMANDS,
     MANIFEST_FILENAME,
     ArtifactError,
     ImmutableArtifactError,
+    IsolatedValidationError,
     SecureStateDirError,
+    ValidationCommandError,
+    assert_validation_commands_allowed,
     build_manifest,
+    compute_patch_sha256,
     quarantine_proposal_dir,
     resolve_secure_state_dir,
+    validate_quarantine_isolated,
     write_quarantine_bundle,
 )
 from digital_brain.maintenance.generation import (  # noqa: E402
@@ -277,3 +284,88 @@ def test_resolve_state_dir_still_works_for_non_secure_helpers(tmp_path, monkeypa
     monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(tmp_path / "plain"))
     p = resolve_state_dir()
     assert p == (tmp_path / "plain").resolve()
+
+
+def test_compute_patch_sha256_stable_and_matches_bundle(tmp_path):
+    state = tmp_path / "state"
+    bundle = _write_bundle(state)
+    recomputed = compute_patch_sha256(
+        intent=bundle.intent,
+        artifact_md=bundle.artifact_md,
+        evaluation=bundle.evaluation,
+        manifest=bundle.manifest,
+    )
+    assert recomputed == bundle.patch_sha256 == bundle.manifest["patch_sha256"]
+    on_disk = json.loads(
+        (bundle.directory / MANIFEST_FILENAME).read_text(encoding="utf-8")
+    )
+    assert on_disk["patch_sha256"] == recomputed
+
+
+def test_isolated_validation_success(tmp_path):
+    state = tmp_path / "state"
+    bundle = _write_bundle(state)
+    result = validate_quarantine_isolated(
+        bundle.directory,
+        commands=DEFAULT_ISOLATED_VALIDATION_COMMANDS,
+        state_dir=state,
+        repo_root=ROOT,
+    )
+    assert result.ok is True
+    assert result.errors == ()
+    assert set(result.commands_run) == set(DEFAULT_ISOLATED_VALIDATION_COMMANDS)
+    assert result.results["recompute_checksums"]["ok"] is True
+    assert result.results["patch_digest_check"]["patch_sha256"] == bundle.patch_sha256
+    # Worktree is ephemeral (cleaned up by default) and not under the plugin.
+    assert "plugins" not in result.work_dir
+    # Validation work root exists under secure state; per-run dir is removed.
+    work_root = state / "dreams" / "validation-work"
+    assert work_root.is_dir()
+    assert list(work_root.iterdir()) == []
+
+
+def test_isolated_validation_rejects_disallowed_command(tmp_path):
+    state = tmp_path / "state"
+    bundle = _write_bundle(state)
+    with pytest.raises(ValidationCommandError, match="disallowed_validation_command"):
+        validate_quarantine_isolated(
+            bundle.directory,
+            commands=["rm -rf /", "recompute_checksums"],
+            state_dir=state,
+            repo_root=ROOT,
+        )
+    with pytest.raises(ValidationCommandError, match="disallowed_validation_command"):
+        validate_quarantine_isolated(
+            bundle.directory,
+            commands=["python -c 'import os; os.system(\"id\")'"],
+            state_dir=state,
+            repo_root=ROOT,
+        )
+    with pytest.raises(ValidationCommandError, match="disallowed_validation_command"):
+        assert_validation_commands_allowed(["shell:echo hi"])
+    # Allowlist is a closed repository-owned set.
+    assert "recompute_checksums" in ISOLATED_VALIDATION_COMMANDS
+    assert "bash" not in ISOLATED_VALIDATION_COMMANDS
+
+
+def test_isolated_validation_detects_checksum_tamper(tmp_path):
+    state = tmp_path / "state"
+    bundle = _write_bundle(state)
+    # Tamper after write by rewriting a private copy we validate against.
+    # (Immutable bundle on the original path is not mutated.)
+    import shutil
+
+    tampered = tmp_path / "tampered-bundle"
+    shutil.copytree(bundle.directory, tampered)
+    (tampered / ARTIFACT_FILENAME).write_text(
+        "<!-- OVERLAY_SLOT:fail_soft_language BEGIN -->\ntampered\n"
+        "<!-- OVERLAY_SLOT:fail_soft_language END -->\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(IsolatedValidationError, match="checksum_mismatch|isolated_validation_failed"):
+        validate_quarantine_isolated(
+            tampered,
+            commands=("recompute_checksums",),
+            state_dir=state,
+            repo_root=ROOT,
+        )
