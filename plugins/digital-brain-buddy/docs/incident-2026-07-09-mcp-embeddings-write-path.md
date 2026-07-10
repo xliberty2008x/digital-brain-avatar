@@ -14,7 +14,7 @@
 
 ## 1. Summary
 
-During a `/digital-brain-buddy-session` WRITE (Паша / septic 14k message), creating a chain-safe `JournalEntry` via the plugin MCP server failed repeatedly.
+During a `/digital-brain-buddy-session` WRITE (a normal buddy memory append), creating a chain-safe `JournalEntry` via the plugin MCP server failed repeatedly.
 
 The **root cause** was not Neo4j schema and not “slow Cypher.” It was a **broken Ollama URL inside the `mcp-cypher` container**: host `.env` set `OLLAMA_BASE_URL=http://localhost:11434`, Compose injected that into the container, and from inside the container `localhost` is the MCP process itself — not the Ollama service. Embedding generation failed with connection refused; JournalEntry writes hard-require embeddings, so the write path was dead.
 
@@ -174,7 +174,7 @@ Note: `task9-verify-...` still has another non-septic follower (`journal-grok-pl
 
 | Phase | What happened |
 | --- | --- |
-| Buddy WRITE start | User provided chat screenshot + context about Pavlo / septic / “противиться” / Ira side-channel |
+| Buddy WRITE start | User provided chat screenshot + context for a normal memory-worthy event |
 | Attempt 1 | MCP write rejected: missing `$embedding` in Cypher |
 | Attempt 2 | MCP write failed: Ollama connection refused from mcp-cypher |
 | Diagnosis | Confirmed Ollama up with `bge-m3`; container env had `localhost`; compose default overridden by `.env` |

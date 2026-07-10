@@ -1,5 +1,10 @@
 # PRD: Digital Brain Multi-Agent Architecture
 
+> **Historical notice (2026-07):** This PRD describes the early multi-agent MVP.
+> Journal chaining is **not** `[:NEXT_ENTRY]` — use the server-owned append
+> protocol (`append_journal_entry`, `FOLLOWS`/`HEAD`/`JournalChain`). Authoritative
+> write path: `mcp_servers/cypher/README.md` and the digital-brain-buddy write skill.
+
 ## Overview
 
 Multi-agent workflow system for the Digital Brain that processes user input, extracts entities, searches for context, writes to Neo4j, and detects patterns/insights.
@@ -81,11 +86,11 @@ flowchart TB
 
 ### Turn 1: Small Talk → SKIP
 
-**User:** "Привіт!"
+**User:** "Hi!"
 
 **Root Agent:** `route = SKIP` (no significance)
 
-**Response Agent:** "Привіт! Як ти сьогодні?"
+**Response Agent:** "Hi! How are you today?"
 
 **Persisted:** ❌ Nothing
 
@@ -93,18 +98,18 @@ flowchart TB
 
 ### Turn 2.5: Ambiguous Intent → CLARIFY
 
-**User:** "Та норм, батько дістав"
+**User:** "Fine, my father got on my nerves"
 
 **Root Agent:** `route = CLARIFY` (potential event, needs more context)
 
-**Response Agent:** "Що сталось з батьком? Розкажи детальніше."
+**Response Agent:** "What happened with your father? Tell me more."
 
-**User:** "Знову почав говорити про роботу, що мені треба щось стабільніше"
+**User:** "He started talking about work again — that I need something more stable"
 
 **Root Agent:** `route = WRITE` (now clear event)
 
 **AI synthesizes JournalEntry.content:**
-> "Сьогодні посварився з батьком. Він знову почав говорити про роботу, що мені треба знайти щось стабільніше."
+> "I argued with my father today. He started talking about work again and said I need to find something more stable."
 
 **Persisted:** ✅ JournalEntry (synthesized) + Event + Person
 
@@ -116,39 +121,39 @@ flowchart TB
 
 ### Turn 3: Meaningful Sharing → WRITE_FLOW
 
-**User:** "Сьогодні вчерговий раз посварився з батьком через роботу. Він знову казав що я маю знайти нормальну роботу."
+**User:** "I argued with my father about work again today. He said I need to find a real job."
 
-**Root Agent:** `route = WRITE` (event + emotions + person + pattern "вчерговий раз")
+**Root Agent:** `route = WRITE` (event + emotions + person + pattern "again")
 
 **WRITE_FLOW execution:**
 
 | Agent | Action |
 |-------|--------|
-| Entity Extractor | `{mood: "frustrated", entities: [Person("батько"), Topic("робота")], event: "conflict", pattern: "recurring"}` |
-| Context Retriever | Hybrid search → Finds 2 past conflicts with батько about work |
-| Planner | Plan: CREATE JournalEntry, CREATE Event, MERGE Person, CREATE State, CREATE Insight("pattern: конфлікти з батьком про роботу") |
+| Entity Extractor | `{mood: "frustrated", entities: [Person("father"), Topic("work")], event: "conflict", pattern: "recurring"}` |
+| Context Retriever | Hybrid search → Finds 2 past conflicts with father about work |
+| Planner | Plan: CREATE JournalEntry, CREATE Event, MERGE Person, CREATE State, CREATE Insight("pattern: conflicts with father about work") |
 | Writer | Generates 5 Cypher queries |
 | Critic | ✅ Valid |
 | Executor | Executes queries |
 
 **Persisted:**
 ```
-(:JournalEntry {content: "Сьогодні вчерговий раз...", embedding: [...], timestamp: "2025-12-08"})
+(:JournalEntry {content: "I argued with my father again today...", embedding: [...], timestamp: "2025-12-08"})
   -[:DESCRIBES]-> (:State {name: "frustrated"})
-  -[:MENTIONS]-> (:Person {name: "батько", relation: "father"})
+  -[:MENTIONS]-> (:Person {name: "father", relation: "father"})
   -[:TRIGGERED]-> (:Event {type: "conflict", timestamp: "2025-12-08"})
-                    -[:ABOUT]-> (:Topic {name: "робота"})
+                    -[:ABOUT]-> (:Topic {name: "work"})
 
-(:Insight {content: "3-й конфлікт з батьком про роботу за місяць"})
+(:Insight {content: "3rd conflict with father about work this month"})
 ```
 
-**Response Agent:** "Це вже третій раз за місяць, коли ви сваритесь про роботу. Минулого разу він казав те саме про 'нормальну роботу'. Що для тебе означає його схвалення? Чому це так важливо?"
+**Response Agent:** "This is already the third time this month you two argue about work. Last time he said the same thing about a 'real job'. What does his approval mean to you? Why does it matter so much?"
 
 ---
 
 ### Turn 4: Question About Past → READ_FLOW
 
-**User:** "Коли я востаннє говорив про страх відмовляти?"
+**User:** "When did I last talk about the fear of saying no?"
 
 **Root Agent:** `route = READ` (question about past)
 
@@ -156,15 +161,15 @@ flowchart TB
 
 | Agent | Action |
 |-------|--------|
-| Context Retriever | Vector search: "страх відмовляти" → Finds JournalEntry from 2025-11-20 |
+| Context Retriever | Vector search: "fear of saying no" → Finds JournalEntry from 2025-11-20 |
 
 **Found:**
 ```
-(:JournalEntry {content: "Зрозумів що боюсь відмовляти колегам...", timestamp: "2025-11-20"})
+(:JournalEntry {content: "I realized I am afraid to say no to colleagues...", timestamp: "2025-11-20"})
   -[:DESCRIBES]-> (:Insight {content: "pattern: people-pleasing"})
 ```
 
-**Response Agent:** "20 листопада. Ти тоді казав що зрозумів що боїшся відмовляти колегам. Ми говорили про те, як це пов'язано з бажанням бути 'хорошим'. Щось змінилось з того часу?"
+**Response Agent:** "November 20. You said you realized you were afraid to say no to colleagues. We talked about how that linked to wanting to be 'good'. Has anything changed since then?"
 
 **Persisted:** ❌ Nothing (read-only)
 
@@ -179,11 +184,11 @@ flowchart TB
 
 | Input Example | Route | Reason |
 |---------------|-------|--------|
-| "Привіт, як справи?" | SKIP | Small talk, no value |
-| "Норм, працюю" | SKIP | Generic, no insights |
-| "Посварився з батьком про роботу" | WRITE | Event + emotions + people |
-| "Зрозумів що боюсь відмовляти" | WRITE | Self-insight |
-| "Коли я востаннє говорив про роботу?" | READ | Query about past |
+| "Hi, how are you?" | SKIP | Small talk, no value |
+| "Fine, working" | SKIP | Generic, no insights |
+| "I argued with my father about work" | WRITE | Event + emotions + people |
+| "I realized I am afraid to say no" | WRITE | Self-insight |
+| "When did I last talk about work?" | READ | Query about past |
 
 ### 2. Entity Extractor (+ Query Expansion)
 - **Input:** Raw user text
@@ -191,23 +196,23 @@ flowchart TB
   ```json
   {
     "mood": "frustrated",
-    "entities": [{"type": "Person", "name": "батько"}],
+    "entities": [{"type": "Person", "name": "father"}],
     "event_type": "conflict",
     "patterns": ["recurring"],
     "timestamp": "2025-12-08T01:00:00Z",
     "search_queries": [
-      "батько знову почав",
-      "конфлікт з батьком",
-      "сварка з татом",
-      "Батько знову критикував мою роботу. Він вважає що я маю знайти щось стабільніше."
+      "father started again",
+      "conflict with father",
+      "argument with dad",
+      "Father criticized my work again. He thinks I need to find something more stable."
     ]
   }
   ```
 
 - **Query Expansion Logic:**
   1. **Original** — raw user input
-  2. **Synonyms** — тато = батько, сварка = конфлікт
-  3. **HyDE** — "Як це могло бути записано раніше?" (hypothetical document)
+  2. **Synonyms** — dad = father, argument = conflict
+  3. **HyDE** — "How might this have been written down earlier?" (hypothetical document)
 
 ### 3. Context Retriever (Hybrid Search)
 
@@ -241,7 +246,7 @@ flowchart LR
 
 #### Step 1: Vector Search (Semantic)
 
-Використовуємо embedding для семантичного пошуку по `JournalEntry`:
+Use embeddings for semantic search over `JournalEntry`:
 
 ```cypher
 // Query pattern for vector search
@@ -258,9 +263,9 @@ ORDER BY score DESC
 ```
 
 **Parameters:**
-- `$embedding` — генерується з user input через `embed_text`
-- `$limit` — топ 5-10 результатів
-- `score > 0.7` — фільтр релевантності
+- `$embedding` — generated from user input via `embed_text`
+- `$limit` — top 5–10 results
+- `score > 0.7` — relevance filter
 
 **Batch Search (multiple queries):**
 ```cypher
@@ -277,7 +282,7 @@ LIMIT 10
 
 #### Step 2: Cypher Match (Exact)
 
-Точний пошук по extracted entities:
+Exact lookup on extracted entities:
 
 ```cypher
 // Find existing Person nodes
@@ -398,7 +403,7 @@ LIMIT 10
   ```json
   {
     "nodes_to_create": ["JournalEntry", "Event", "Insight"],
-    "nodes_to_merge": ["Person:батько"],
+    "nodes_to_merge": ["Person:father"],
     "relationships": ["MENTIONS", "TRIGGERED", "LEADS_TO"],
     "pattern_detected": "recurring conflict about work"
   }
@@ -429,7 +434,7 @@ LoopAgent(
 
 **Fallback (after 3 iterations):**
 - Log error
-- Notify user: "Не вдалось зберегти запис. Спробуй переформулювати."
+- Notify user: "Could not save the entry. Try rephrasing."
 
 ### 7. Executor
 - **Input:** Validated Cypher queries
@@ -538,10 +543,10 @@ Root → Entity Extractor → Context Retriever → Writer → Executor → Resp
 
 | Feature | Priority | Description |
 |---------|----------|-------------|
-| CLARIFY route | High | Uточнюючі питання для ambiguous intent |
-| Writer-Critic Loop | High | Validation з max_iterations=3 |
+| CLARIFY route | High | Clarifying questions for ambiguous intent |
+| Writer-Critic Loop | High | Validation with max_iterations=3 |
 | Multi-query search | Medium | HyDE + synonyms for better RAG |
 | Pattern Detection | Medium | Insight nodes for recurring themes |
 | Planner Agent | Medium | Schema-aware query planning |
-| Batch search | Low | UNWIND для оптимізації |
+| Batch search | Low | UNWIND for optimization |
 | Session persistence | Low | Redis/PostgreSQL for production |

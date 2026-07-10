@@ -20,7 +20,7 @@ async def resolve_entities(entity_output: dict) -> dict[str, Any]:
     Returns:
         {
             "existing_entities": [{"id": "...", "name": "...", "type": "Person"}],
-            "new_entities": [{"name": "Оливія", "type": "Person"}]
+            "new_entities": [{"name": "Olivia", "type": "Person"}]
         }
     """
     existing = []

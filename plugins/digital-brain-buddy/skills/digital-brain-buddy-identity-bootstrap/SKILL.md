@@ -1,6 +1,6 @@
 ---
 name: digital-brain-buddy-identity-bootstrap
-description: Initialize or refine the Digital Brain buddy identity by creating or editing the bundled SOUL file, keeping only durable voice, stance, and behavioral rules rather than temporary moods.
+description: Initialize or refine the Digital Brain buddy identity by creating or editing the local SOUL file from the shipped template, keeping only durable voice, stance, and behavioral rules rather than temporary moods.
 ---
 
 # Digital Brain Buddy Identity Bootstrap
@@ -9,11 +9,25 @@ Use this skill when the user wants to initialize, rewrite, or refine the buddy p
 
 ## Start Here
 
-1. Read `../../SOUL.MD`.
+1. Check for a local identity file at `../../SOUL.MD`.
+   - This path is **per-user / local**. It is not shipped as the author's personal
+     identity and should not be committed to git.
+2. If the file is missing, create it from the template (do not invent a persona cold):
 
-2. If the file is missing or should be reset, use `../../scripts/init_soul.py`.
+```bash
+python3 ../../scripts/init_soul.py ../../SOUL.MD
+```
 
-3. Treat `SOUL.MD` as durable identity, not as a journal.
+3. If a reset is requested, use `--force` only after confirming with the user:
+
+```bash
+python3 ../../scripts/init_soul.py ../../SOUL.MD --force
+```
+
+4. Then read `../../SOUL.MD` and refine it.
+5. Treat `SOUL.MD` as durable identity, not as a journal.
+
+Shipped neutral defaults live in `../../assets/SOUL.template.md` only.
 
 ## What Belongs In `SOUL.MD`
 
@@ -37,11 +51,3 @@ Use this skill when the user wants to initialize, rewrite, or refine the buddy p
 - Keep statements short and operational.
 - Prefer hard behavioral rules over vague adjectives.
 - If a requested identity change conflicts with existing stance, call it out before rewriting.
-
-## Bootstrap Command
-
-Initialize a new SOUL file from the plugin template:
-
-```bash
-python3 ../../scripts/init_soul.py ../../SOUL.MD --force
-```

@@ -949,7 +949,7 @@ the following, capturing its full evidence-pack output for each:
 1. A `BOOTSTRAP` request (new-conversation evidence pack: people map, top-20
    weighted nodes, node-type summary).
 2. A semantic/`READ` search on a topic from `docs/LOG.md`'s probe list (e.g.
-   "father/family" or "EPAM/work").
+   "family" or "work").
 3. A related-node request for one `Person` returned by step 1's people map
    (exercises the Task 4 shared-connections query specifically).
 

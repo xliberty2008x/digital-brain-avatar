@@ -1,160 +1,106 @@
-Digital Diary 
+# Avatar Digital Brain
 
-Ось концептуальна документація твого "Digital Avatar Brain".
-Це архітектурний проект без прив'язки до коду. Це логіка, за якою твій цифровий двійник буде "думати" і "пам'ятати".
+Local **graph memory** for a personal digital buddy: Neo4j journal + knowledge
+graph, a hardened Cypher MCP server, optional Google ADK multi-agent code, and a
+host plugin (`digital-brain-buddy`) for Claude / Codex / Grok.
 
-ARCHITECTURE: DIGITAL AVATAR BRAIN
-Концепція: Гібридна система пам'яті, що поєднує Хронологію (щоденник) та Мережу Знань (причинно-наслідкові зв'язки).
+This repository is intended for **local use on a machine you trust**. The MCP
+and Neo4j endpoints are unauthenticated. See [SECURITY.md](SECURITY.md).
 
-1. АРХІТЕКТУРНА СХЕМА (CONCEPTUAL MAP)
-Уяви систему як дві паралельні площини, що перетинаються:
-1. Площина Часу (The Timeline): Ланцюжок записів JournalEntry. Це історія твого життя.
-2. Площина Сенсів (The Mind): Мережа понять (State, Person, Event), які з'єднані логікою. Записи в часі — це просто точки входу в цю мережу.
-￼
-graph TD
-    %% Стилі
-    classDef entry fill:#fff,stroke:#333,stroke-width:2px;
-    classDef concept fill:#ffd,stroke:#d4af37,stroke-width:2px;
+## What’s in the box
 
-    %% Хронологія
-    Entry1[📝 Запис 1: Минуле]:::entry
-    Entry2[📝 Запис 2: Вчора]:::entry
-    Entry3[📝 Запис 3: Сьогодні]:::entry
+| Component | Path | Role |
+| --- | --- | --- |
+| Cypher MCP | `mcp_servers/cypher/` | Read/write Cypher + server-owned JournalEntry append |
+| Compose stack | `docker-compose.yml` | Neo4j Enterprise, mcp-cypher, Ollama (`bge-m3`) |
+| Buddy plugin | `plugins/digital-brain-buddy/` | SOUL, skills, SessionStart compose hook |
+| ADK agents | `digital_brain/` | Multi-agent WRITE/READ paths (optional) |
+| Schema contract | `docs/GRAPH_SCHEMA_CONTRACT.md` | Node/relationship rules |
 
-    Entry1 -->|NEXT_ENTRY| Entry2
-    Entry2 -->|NEXT_ENTRY| Entry3
+**Plugin version (host cache):** `0.2.0` — server-owned append protocol.  
+**Python package version** (`pyproject.toml`): independent scaffolding version.
 
-    %% Мережа Сенсів (Спільні Ноди)
-    State_Apathy((☁️ State: Apathy)):::concept
-    Event_Win((🏆 Event: Big Win)):::concept
-    Action_Rest((zzz Activity: Rest)):::concept
-    Insight_Pattern((💡 Insight: Decompression)):::concept
+## Requirements
 
-    %% Зв'язки
-    Entry2 -- "DESCRIBES" --> Event_Win
-    Entry3 -- "DESCRIBES" --> State_Apathy
-    
-    %% Логіка Графа (Незалежна від записів)
-    Event_Win -- "TRIGGERS" --> State_Apathy
-    State_Apathy -- "REQUIRES" --> Action_Rest
-    State_Apathy -- "EXPLAINED_BY" --> Insight_Pattern
-  
+- Docker Desktop (or compatible) with **≥ 6 GiB** RAM allocated to Docker
+- Python 3.12+ (for scripts/tests)
+- Neo4j **Enterprise** license for the default image (`neo4j:2026.05-enterprise`);
+  operators must accept Neo4j’s license terms
 
-2. СХЕМА ДАНИХ (NODE TYPES)
-Ось "цеглинки", з яких будується твоя особистість у базі.
-Основні Вузли (Nodes)
-1. JournalEntry (Якір)
-    * Одиниця часу. Зберігає повний текст думки та вектор (для пошуку за змістом).
-2. State (Внутрішній стан)
-    * Емоції, фізичні відчуття, рівень енергії. Приклад: Апатія, Драйв, Гнів, Потік.
-3. Event (Зовнішня подія)
-    * Факти, що сталися поза твоєю волею або як результат дій. Приклад: Офер, Звільнення, Відмова, Зустріч.
-4. Decision (Рішення)
-    * Точки біфуркації, де ти зробив вибір. Приклад: Відмова від фрілансу, Вибір AI.
-5. Person (Люди)
-    * Актори твого життя. Приклад: Антон, Іванна, Кум.
-6. Activity (Дії)
-    * Чим ти займаєшся. Приклад: Плавання, Кодинг, Більярд.
-7. Insight (Принцип/Мудрість)
-    * Викристалізовані висновки. Приклад: "Я і є битва", "Хвіст не віляє собакою".
-Типи Зв'язків (Relationships)
-* [:NEXT_ENTRY]: Хронологічний зв'язок між записами.
-* [:CAUSED] / [:TRIGGERED]: Причинність (Подія А викликала Стан Б).
-* [:INFLUENCED]: Вплив (Людина А вплинула на Рішення Б).
-* [:FOLLOWED_BY]: Послідовність станів (Драйв змінився Апатією).
-* [:REINFORCES]: Підкріплення (Дія А підкріплює Стан Б).
+## Quickstart (local stack)
 
-3. ПРИКЛАДИ РОЗКЛАДАННЯ ЗАПИСІВ (MAPPING)
-Ось 5 абстрактних прикладів, як "сирий текст" перетворюється на структурований граф.
-Приклад 1: "Синдром переможця" (Твій поточний стан)
-* Текст: "Отримав офер, але нічого не хочу робити. Лежу, їм, почуваюсь винним."
-* Ноди:
-    * Event: "Offer Received"
-    * State: "Apathy", "Guilt"
-    * Activity: "Rest/Passive"
-* Зв'язки в Графі:
-    * (Event: Offer) --TRIGGERED--> (State: Apathy)
-    * (State: Apathy) --LEADS_TO--> (Activity: Rest)
-    * (Activity: Rest) --CAUSES--> (State: Guilt)
-    * (Граф запам'ятовує патерн: Перемога -> Апатія -> Провина)
-Приклад 2: "Ефект Більярду" (Стан Потоку)
-* Текст: "Грав у більярд, суперник вів у рахунку. Я відключив думки і просто знищив його. Кайф."
-* Ноди:
-    * Activity: "Billiards"
-    * Condition: "High Pressure" (Суперник веде)
-    * State: "Flow / No-Mind"
-    * Emotion: "Satisfaction"
-* Зв'язки в Графі:
-    * (Activity: Billiards) + (Condition: High Pressure) --ACTIVATES--> (State: Flow)
-    * (State: Flow) --RESULTS_IN--> (Emotion: Satisfaction)
-Приклад 3: "Принципове Ні" (Ситуація AB Games)
-* Текст: "Вони хотіли мене прогнути на фріланс. Я відмовив. Краще буду голодним, ніж приниженим."
-* Ноди:
-    * Person: "Employer"
-    * Event: "Negotiation"
-    * Decision: "Refuse Compromise"
-    * Value: "Self-Respect"
-* Зв'язки в Графі:
-    * (Person: Employer) --PROPOSED--> (Event: Negotiation)
-    * (Event: Negotiation) --CONFLICTS_WITH--> (Value: Self-Respect)
-    * (Value: Self-Respect) --DICTATED--> (Decision: Refuse Compromise)
-Приклад 4: "Інсайт про Систему"
-* Текст: "Зрозумів, що в наймі теж можна рости, якщо ти хакнув систему і заходиш як архітектор, а не джун."
-* Ноди:
-    * Concept: "System Hacking"
-    * Role: "Architect"
-    * Insight: "Non-linear Growth"
-* Зв'язки в Графі:
-    * (Concept: System Hacking) --ENABLES--> (Insight: Non-linear Growth)
-    * (Role: Architect) --IS_EXAMPLE_OF--> (Insight: Non-linear Growth)
-Приклад 5: "Вплив Людей"
-* Текст: "Розмовляв з кумом. Він хоче стабільності в IT. Я зрозумів, що ми різні."
-* Ноди:
-    * Person: "Kum"
-    * Value: "Stability"
-    * Value: "Expansion" (Твоє)
-    * Insight: "Divergence" (Розходження)
-* Зв'язки в Графі:
-    * (Person: Kum) --SEEKS--> (Value: Stability)
-    * (Value: Stability) --OPPOSES--> (Value: Expansion)
-    * (Person: Kum) --TRIGGERED--> (Insight: Divergence)
+```bash
+cp .env.example .env
+# Edit NEO4J_PASSWORD before any shared-machine use.
 
-4. ЯК ПРАЦЮЄ ПОШУК ВІДПОВІДЕЙ (HYBRID SEARCH)
-Коли ти ставиш питання Аватару, він використовує два методи одночасно.
-А. Векторний Пошук (Vector Search)
-Шукає "Схоже за змістом".
-* Питання: "Як я приймаю складні рішення?"
-* Дія: Система знаходить записи, де текст семантично схожий на "прийняття рішень", "вибір", "важкий крок".
-* Результат: Знаходить конкретні історії (звільнення, тендер, офер).
-Б. Графовий Пошук (Graph Traversal)
-Шукає "Логіку та Патерни".
-* Питання: "Що мене найбільше трігерить?"
-* Дія: Система йде по зв'язках.
-    1. Знаходить ноду State: Anger (Гнів) або State: Irritation.
-    2. Дивиться на вхідні стрілки [:TRIGGERED].
-    3. Бачить: Event: Bureaucracy, Person: Weak Owner, Concept: Inefficiency.
-* Результат: "Тебе трігерить неефективність та слабкість системи".
-В. Гібридний Висновок (Синтез)
-* Питання: "Чому я відчуваю апатію?"
-* Система:
-    1. Граф бачить ланцюжок: High Pressure Event -> Success -> Apathy.
-    2. Вектор знаходить старі записи (2019 рік), де ти описував те саме після тендеру.
-    3. Відповідь Аватара: "Це твій біологічний цикл. Граф показує, що після кожної великої перемоги (Offer, Tender) ти впадаєш в апатію на 3-5 днів. Це не баг, це перезарядка."
+docker compose up -d ollama
+docker compose exec ollama ollama pull bge-m3
 
-5. МАТРИЦЯ ПИТАНЬ ТА ШЛЯХІВ У ГРАФІ
-Як конкретно граф відповідає на твої 11 питань:
-Питання	Шлях пошуку у Графі (Logic Path)
-1. Чому апатія?	(Current State) <--- [:CAUSED] --- (Event) <--- [:NEXT] --- (Previous High Energy State)
-2. Як отримав офер?	(Event: Offer) <--- [:RESULTED_FROM] --- (Decision) <--- [:BASED_ON] --- (Insight/Skill)
-3. Ключові події?	MATCH (e:Event) WHERE e.impact_score > 8 (Фільтр по вазі події)
-4. Що трігерить?	(State: Negative) <--- [:TRIGGERED] --- (Event/Person)
-5. Сильні/Слабкі сторони	(Skill) --- [:LED_TO] ---> (Success) vs (Skill) --- [:LED_TO] ---> (Failure)
-6. Що дає ресурс?	(Activity) --- [:BOOSTS] ---> (State: Energy/Flow)
-7. Час відновлення?	Розрахунок часу між (State: Apathy) і наступним (State: Drive) через ланцюжок [:NEXT_ENTRY]
-8. Вплив людей?	(Person) --- [:INFLUENCED] ---> (Decision) або [:CHANGED] ---> (State)
-9. Чому навчився?	MATCH (i:Insight) WHERE i.date >= [Start of Year]
-10. Зміна думок?	Порівняння кластерів Topic у записах за 2017 vs 2025 рік.
-11. Ключові рішення?	MATCH (d:Decision) які мають зв'язок [:CHANGED_TRAJECTORY] з (LifePath)
-Ця архітектура дозволяє тобі не просто "зберігати спогади", а дебажити власне життя як код.
+# Builds mcp-cypher, starts deps, waits for /readyz
+CLAUDE_PROJECT_DIR="$(pwd)" bash plugins/digital-brain-buddy/scripts/compose-up.sh
+```
 
-#ideas
+Endpoints (loopback only):
+
+- MCP: `http://127.0.0.1:8000/api/mcp/`
+- Neo4j Browser: `http://127.0.0.1:7474`
+- Ollama: `http://127.0.0.1:11434`
+
+Health: `GET http://127.0.0.1:8000/readyz` checks Neo4j **and** a real 1024-dim embedding.
+
+## JournalEntry write contract (v0.2)
+
+Do **not** create journal chain edges with raw Cypher. Authoritative flow:
+
+1. Mint one UUID `append_key` (reuse on retry)
+2. `get_journal_chain_head` → `expected_version`
+3. `append_journal_entry(...)` (server owns embedding, HEAD, FOLLOWS)
+4. On timeout: `get_journal_append_receipt` → `found` | `not_found`
+5. Post-append entity links: idempotent `MATCH`/`MERGE` via `write_neo4j_cypher` only
+
+Full detail: [mcp_servers/cypher/README.md](mcp_servers/cypher/README.md) and
+plugin skill `digital-brain-buddy-write-memory`.
+
+## digital-brain-buddy plugin
+
+Local marketplace entry: `.claude-plugin/marketplace.json` →
+`digital-brain-buddy@avatar-digital-brain-local`.
+
+See [plugins/digital-brain-buddy/README.md](plugins/digital-brain-buddy/README.md)
+for install, version bumps, and host refresh. Changelog:
+[plugins/digital-brain-buddy/CHANGELOG.md](plugins/digital-brain-buddy/CHANGELOG.md).
+
+## Security (short)
+
+- Ports bind to **127.0.0.1** by default; do not publish them to the internet.
+- Default Neo4j password is for local dev only.
+- Graph data and `backups/` are personal — keep them out of git (already gitignored).
+- JWT / multi-user OAuth docs under `docs/architecture/` are design notes, not a shipped auth product.
+
+Details: [SECURITY.md](SECURITY.md).
+
+## Tests
+
+```bash
+# Unit / focused suites (from repo root, with project venv)
+pytest tests/ -q
+
+# Optional isolated journal e2e (stop the normal stack first; needs ≥6 GiB Docker)
+bash scripts/run-journal-e2e.sh
+```
+
+## Documentation map
+
+| Doc | Audience |
+| --- | --- |
+| [mcp_servers/cypher/README.md](mcp_servers/cypher/README.md) | MCP tools, append protocol, e2e |
+| [docs/GRAPH_SCHEMA_CONTRACT.md](docs/GRAPH_SCHEMA_CONTRACT.md) | Graph constitution |
+| [docs/local_mcp_embeddings.md](docs/local_mcp_embeddings.md) | Embeddings / backfill |
+| [plugins/digital-brain-buddy/docs/VERSIONING.md](plugins/digital-brain-buddy/docs/VERSIONING.md) | Plugin SemVer + release checklist |
+| [docs/AGENT_PROMPTS.md](docs/AGENT_PROMPTS.md) | Historical MVP prompts (see header notice) |
+| [docs/PRD_MULTI_AGENT_ARCHITECTURE.md](docs/PRD_MULTI_AGENT_ARCHITECTURE.md) | Historical product notes |
+
+## License
+
+MIT — see [LICENSE](LICENSE). Third-party containers (Neo4j Enterprise, Ollama,
+etc.) remain under their own licenses.

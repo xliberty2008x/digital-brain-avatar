@@ -132,7 +132,7 @@ class DigitalBrainOrchestrator(BaseAgent):
             
             yield Event(
                 author="digital_brain",
-                content={"parts": [{"text": "Ця думка дуже важлива. Я надійно записую її у твою пам'ять... 🧠"}]},
+                content={"parts": [{"text": "This thought matters. I am reliably writing it into your memory... 🧠"}]},
             )
             
             # Step 1: Extract Entities (Pure LLM)

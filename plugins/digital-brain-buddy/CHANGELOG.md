@@ -13,5 +13,5 @@ Server-owned JournalEntry write path (major agent contract change).
 
 ## 0.1.0 — 2026-07
 
-Initial local marketplace packaging: SOUL, session/read/write skills,
-SessionStart compose hook, Neo4j MCP URL.
+Initial local marketplace packaging: SOUL template, session/read/write skills,
+SessionStart compose hook, Neo4j MCP URL. (Personal `SOUL.MD` is local-only.)

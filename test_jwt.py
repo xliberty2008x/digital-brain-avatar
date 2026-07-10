@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Простий тест для jwt_handler.py
-Запускай: python test_jwt.py
+Simple smoke test for jwt_handler.py
+Run: PYTHONPATH=. python test_jwt.py
 """
 
 from digital_brain.security.jwt_handler import create_access_token, decode_access_token
@@ -9,62 +9,55 @@ from datetime import timedelta
 import time
 
 print("=" * 60)
-print("🧪 ТЕСТУВАННЯ JWT HANDLER")
+print("JWT HANDLER SMOKE TEST")
 print("=" * 60)
 
-# Тест 1: Створення токена
-print("\n1️⃣  Створюємо токен для юзера 'cyril'...")
+print("\n1) Create token for user 'alice'...")
 test_data = {
-    "sub": "cyril@gmail.com",
+    "sub": "alice@example.com",
     "role": "admin",
     "user_id": 123
 }
 
 token = create_access_token(test_data)
-print(f"✅ Токен створено!")
-print(f"📝 Токен (перші 50 символів): {token[:50]}...")
-print(f"📏 Довжина токена: {len(token)} символів")
+print("OK: token created")
+print(f"Token prefix: {token[:50]}...")
+print(f"Token length: {len(token)}")
 
-# Тест 2: Декодування токена
-print("\n2️⃣  Декодуємо токен...")
+print("\n2) Decode token...")
 decoded = decode_access_token(token)
 if decoded:
-    print("✅ Токен успішно декодовано!")
-    print(f"📦 Дані з токена:")
+    print("OK: token decoded")
     for key, value in decoded.items():
-        if key != "exp":  # exp - це timestamp, виглядає страшно
+        if key != "exp":
             print(f"   - {key}: {value}")
 else:
-    print("❌ Помилка декодування!")
+    print("FAIL: decode error")
 
-# Тест 3: Токен з коротким терміном дії (2 секунди)
-print("\n3️⃣  Створюємо токен, який живе 2 секунди...")
+print("\n3) Create short-lived token (2s)...")
 short_token = create_access_token(
-    {"sub": "test_user"}, 
+    {"sub": "test_user"},
     expires_delta=timedelta(seconds=2)
 )
-print("✅ Токен створено!")
-
-print("⏳ Чекаємо 3 секунди...")
+print("OK: short token created")
+print("Waiting 3 seconds...")
 time.sleep(3)
 
-print("🔍 Перевіряємо прострочений токен...")
+print("Check expired token...")
 expired_decoded = decode_access_token(short_token)
 if expired_decoded is None:
-    print("✅ Правильно! Токен прострочений і не пройшов перевірку")
+    print("OK: expired token rejected")
 else:
-    print("❌ Помилка: прострочений токен не має працювати!")
+    print("FAIL: expired token accepted")
 
-# Тест 4: Підроблений токен
-print("\n4️⃣  Перевіряємо підроблений токен...")
-fake_token = token[:-10] + "HACKED1234"  # Змінюємо кінець токена
-print("🔍 Намагаємось декодувати підроблений токен...")
+print("\n4) Check tampered token...")
+fake_token = token[:-10] + "HACKED1234"
 hacked_decoded = decode_access_token(fake_token)
 if hacked_decoded is None:
-    print("✅ Правильно! Підроблений токен не пройшов перевірку")
+    print("OK: tampered token rejected")
 else:
-    print("❌ НЕБЕЗПЕКА! Підроблений токен пройшов перевірку!")
+    print("FAIL: tampered token accepted")
 
 print("\n" + "=" * 60)
-print("🎉 ТЕСТУВАННЯ ЗАВЕРШЕНО!")
+print("DONE")
 print("=" * 60)

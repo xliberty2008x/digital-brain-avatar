@@ -10,9 +10,9 @@ What was done:
 - Smoked `plugins/digital-brain-buddy/scripts/compose-up.sh` successfully against the local stack.
 - Exercised live graph paths that the native subagents encode:
   - BOOTSTRAP-style people map, top-weighted nodes, node-type weight summary, recent journals
-  - Semantic journal vector search (`father/family`) via `embed_text` + `journal_entry_embedding_index`
-  - Shared-connections related-node query for `Отец` and `Іра`
-  - Entity-check shape for nickname `Ірочка` → authorize merge into `person-ira-wife` as an obvious variant
+  - Semantic journal vector search via `embed_text` + `journal_entry_embedding_index`
+  - Shared-connections related-node query for synthetic person nodes
+  - Entity-check shape for nickname variants → authorize merge when evidence is strong
 - Found and fixed a runtime gap: the **running** `mcp-cypher` image still had the pre-Task-1 validator (`if not embed_text: return`). Rebuilt/recreated `mcp-cypher` so live hard-reject matches repo source + unit tests.
 - After rebuild:
   - JournalEntry write without `embed_text` raises hard-reject
@@ -58,7 +58,7 @@ What verified it:
 - Local restore completed with `neo4j:2026.05-enterprise`; offline consistency check completed with restore-related dirty-index warnings only.
 - `scripts/full_embedding_backfill.py` created `backups/neo4j/pre-embedding-backfill-20260702T095114Z/`, recreated indexes, and ran focused regression tests.
 - Manual re-backfill confirmed `JournalEntry` embeddings are 1024-dimensional for 260 searchable entries and `Article` embeddings are 1024-dimensional for all 130 articles.
-- `scripts/probe_embedding_quality.py --limit 5` returns meaningful results for father/family, EPAM/work, swimming, Digital Brain, and AI dependency probes.
+- `scripts/probe_embedding_quality.py --limit 5` returns meaningful results for the fixed quality probe set (family, work, sports, project, and AI-dependency themed queries).
 
 ### Local MCP and embedding migration checkpoint
 

@@ -44,7 +44,7 @@ entity_extractor = LlmAgent(
         {
           "entry_date": "2018-11-24",
           "mood": "determined but uncertain",
-          "entities": [{"type": "Organization", "name": "Роскосметика", "relation": "former workplace"}],
+          "entities": [{"type": "Organization", "name": "Acme Cosmetics", "relation": "former workplace"}],
           "events": [
             {"description": "Became director with 11 people team", "type": "achievement", "timestamp": "2018-11-24", "source_date": "2018-11-24", "is_clarified": true}
           ]
@@ -58,7 +58,7 @@ entity_extractor = LlmAgent(
           ]
         }
       ],
-      "search_query": "тендери бізнес звільнення пошук інвестицій"
+      "search_query": "tenders business layoffs investment search"
     }
 
     **Output Example (Single Entry):**
