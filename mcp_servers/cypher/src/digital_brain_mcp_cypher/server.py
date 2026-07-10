@@ -194,6 +194,18 @@ def _error_class_for_exception(exc: BaseException) -> str:
     return "query_error"
 
 
+def _tool_outcome_for_exception(exc: BaseException) -> str:
+    """Map exceptions to tool_outcome enums shared with host instrumentation.
+
+    Timeouts use ``timeout`` (not ``fail``) so MCP query timeouts and host
+    transport timeouts share the same outcome class; ``error_class`` still
+    distinguishes ``query_timeout`` vs ``mcp_timeout`` / transport classes.
+    """
+    if _error_class_for_exception(exc) == "query_timeout":
+        return "timeout"
+    return "fail"
+
+
 def _readiness() -> tuple[bool, dict[str, str]]:
     """Check both required dependencies without exposing upstream diagnostics."""
     try:
@@ -302,7 +314,7 @@ def read_neo4j_cypher(
     except Exception as exc:
         _instrument_mcp_tool_outcome(
             tool="read_neo4j_cypher",
-            tool_outcome="fail",
+            tool_outcome=_tool_outcome_for_exception(exc),
             route="READ",
             error_class=_error_class_for_exception(exc),
         )
@@ -349,7 +361,7 @@ def write_neo4j_cypher(
     except Exception as exc:
         _instrument_mcp_tool_outcome(
             tool="write_neo4j_cypher",
-            tool_outcome="fail",
+            tool_outcome=_tool_outcome_for_exception(exc),
             route="WRITE",
             error_class=_error_class_for_exception(exc),
         )

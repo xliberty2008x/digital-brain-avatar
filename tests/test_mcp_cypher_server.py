@@ -503,6 +503,87 @@ def test_read_fail_path_emits_mcp_run_event(monkeypatch: pytest.MonkeyPatch) -> 
     assert event["harness_generation_id"] == generation_id
 
 
+def test_read_timeout_path_emits_timeout_outcome_not_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP query timeouts must use tool_outcome=timeout (aligned with host transport)."""
+    recorded: list[dict[str, Any]] = []
+    generation_id = "hg-" + ("e1" * 32)
+
+    class Store:
+        def ensure_constraints(self) -> None:
+            return None
+
+        def record_deterministic_run_event(self, event: dict[str, Any]) -> dict[str, Any]:
+            recorded.append(event)
+            return {"outcome": "created", "run_event_id": event["id"]}
+
+    monkeypatch.setenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", generation_id)
+    monkeypatch.setattr(server, "_quality_store", lambda: Store())
+    monkeypatch.setattr(server, "_ensure_quality_schema", lambda: None)
+    monkeypatch.setattr(server, "generate_embedding", lambda _text: None)
+
+    def boom(*_a, **_k):
+        raise TimeoutError("query timed out after 30s")
+
+    monkeypatch.setattr(server, "_run_cypher", boom)
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        _tool_function(server.read_neo4j_cypher)(
+            query="MATCH (n) RETURN n",
+            params=None,
+            embed_text=None,
+        )
+
+    assert len(recorded) == 1
+    event = recorded[0]
+    assert event["tool"] == "read_neo4j_cypher"
+    assert event["tool_outcome"] == "timeout"
+    assert event["error_class"] == "query_timeout"
+    assert event["route"] == "READ"
+    assert event["outcome_source"] == "mcp"
+    assert event["harness_generation_id"] == generation_id
+
+
+def test_write_timeout_path_emits_timeout_outcome_not_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[dict[str, Any]] = []
+    generation_id = "hg-" + ("e2" * 32)
+
+    class Store:
+        def ensure_constraints(self) -> None:
+            return None
+
+        def record_deterministic_run_event(self, event: dict[str, Any]) -> dict[str, Any]:
+            recorded.append(event)
+            return {"outcome": "created", "run_event_id": event["id"]}
+
+    monkeypatch.setenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", generation_id)
+    monkeypatch.setattr(server, "_quality_store", lambda: Store())
+    monkeypatch.setattr(server, "_ensure_quality_schema", lambda: None)
+    monkeypatch.setattr(server, "generate_embedding", lambda _text: None)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("SocketTimeout: connection timed out")
+
+    monkeypatch.setattr(server, "_run_cypher", boom)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        _tool_function(server.write_neo4j_cypher)(
+            query="MERGE (t:Topic {id: $id})",
+            params={"id": "t-1"},
+            embed_text=None,
+        )
+
+    assert len(recorded) == 1
+    event = recorded[0]
+    assert event["tool"] == "write_neo4j_cypher"
+    assert event["tool_outcome"] == "timeout"
+    assert event["error_class"] == "query_timeout"
+    assert event["outcome_source"] == "mcp"
+
+
 def test_read_empty_instrumentation_failure_does_not_break_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

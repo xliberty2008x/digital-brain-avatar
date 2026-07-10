@@ -153,17 +153,17 @@ collection depends on a globally installed namespace package.
 returns evidence/proposal inputs. There is no `merge_duplicate_nodes`,
 `create_alias`, `MergeCommand`, or post-WRITE consistency mutation.
 
-- [ ] Write a test whose generic write/MCP mutation stub always raises; prove
+- [x] Write a test whose generic write/MCP mutation stub always raises; prove
   duplicate detection still returns candidates without calling it.
-- [ ] Write a characterization test proving current MCP DELETE rejection stays
+- [x] Write a characterization test proving current MCP DELETE rejection stays
   active.
-- [ ] Remove the post-WRITE reflex-loop call from `digital_brain/agent.py`.
-- [ ] Replace the consistency checker with report-only candidate discovery.
-- [ ] Rename mutation-shaped `MergeCommand` output to `DuplicateCandidate` or
+- [x] Remove the post-WRITE reflex-loop call from `digital_brain/agent.py`.
+- [x] Replace the consistency checker with report-only candidate discovery.
+- [x] Rename mutation-shaped `MergeCommand` output to `DuplicateCandidate` or
   `AliasProposalInput`; remove `remove_id="NEW"` semantics.
-- [ ] Remove sanitizer/help text that recommends APOC merge or DETACH DELETE.
-- [ ] Rewrite Graph Contract Rule 4 to detect-and-propose only.
-- [ ] Run:
+- [x] Remove sanitizer/help text that recommends APOC merge or DETACH DELETE.
+- [x] Rewrite Graph Contract Rule 4 to detect-and-propose only.
+- [x] Run:
 
   ```bash
   uv run --group dev python -m pytest \
@@ -219,26 +219,26 @@ delete, or create Alias automatically.
 - Retrieval excludes `Operational` centrally, with legacy exclusions kept until
   migration is complete.
 
-- [ ] Add failing lexical-guard tests for CREATE, MERGE, SET label, dynamic
+- [x] Add failing lexical-guard tests for CREATE, MERGE, SET label, dynamic
   label/property, full replacement, and relationship-based access to protected
   control records.
-- [ ] Add a real Neo4j integration test showing the runtime role is denied even
+- [x] Add a real Neo4j integration test showing the runtime role is denied even
   for a syntactic bypass not caught by a simple regex.
-- [ ] Implement the separate runtime/quality roles and deterministic bootstrap.
-- [ ] Add an authenticated local coordinator route with bounded typed payloads;
+- [x] Implement the separate runtime/quality roles and deterministic bootstrap.
+- [x] Add an authenticated local coordinator route with bounded typed payloads;
   never register lease, snapshot, proposal decision, authority, effect, or
   deployment operations as model-facing MCP tools.
-- [ ] Add a tool-list contract test proving those coordinator/operator names are
+- [x] Add a tool-list contract test proving those coordinator/operator names are
   absent from FastMCP discovery.
-- [ ] Add an idempotent constraint/bootstrap pattern analogous to
+- [x] Add an idempotent constraint/bootstrap pattern analogous to
   `JournalStore.ensure_constraints()`.
-- [ ] Make `write_neo4j_cypher` reject protected quality/control mutations.
-- [ ] Add/backfill `Operational` on legacy Alias/LearningLog through an explicit
+- [x] Make `write_neo4j_cypher` reject protected quality/control mutations.
+- [x] Add/backfill `Operational` on legacy Alias/LearningLog through an explicit
   reviewed migration; do not run it silently at session startup.
-- [ ] Update heavy-node/BOOTSTRAP/default export patterns to `NOT n:Operational`
+- [x] Update heavy-node/BOOTSTRAP/default export patterns to `NOT n:Operational`
   plus temporary legacy exclusions.
-- [ ] Prove journal and normal post-append entity-link writes still work.
-- [ ] Run focused tests plus isolated Neo4j smoke.
+- [x] Prove journal and normal post-append entity-link writes still work.
+- [x] Run focused tests plus isolated Neo4j smoke.
 
 **Gate:** stop if the boundary is only prompt/regex enforcement, if generic
 writers can mutate protected records, or if Operational nodes can enter
@@ -275,23 +275,31 @@ The canonical digest covers core commit/dirty state, plugin version, SOUL hash
 only, active overlay manifest digest, active policy digest, MCP version, model
 id when known, schema version, and taxonomy version.
 
-- [ ] Write deterministic serialization/digest tests.
-- [ ] Test that each meaningful input changes the generation id.
-- [ ] Test that SOUL content is never stored—only its local digest.
-- [ ] Add a typed `record_harness_generation` transaction and replay/conflict
+- [x] Write deterministic serialization/digest tests.
+- [x] Test that each meaningful input changes the generation id.
+- [x] Test that SOUL content is never stored—only its local digest.
+- [x] Add a typed `record_harness_generation` transaction and replay/conflict
   receipt.
-- [ ] Pin one generation at private session start and pass its id into sensor
+- [x] Pin one generation at private session start and pass its id into sensor
   calls; do not recompute halfway through a session.
-- [ ] Add a readback/reconciliation API.
-- [ ] Add a deterministic SessionStart host entrypoint that runs after the
+- [x] Add a readback/reconciliation API.
+- [x] Add a deterministic SessionStart host entrypoint that runs after the
   local stack is ready, records/reconciles the generation, and exports/persists
   the pinned id for the session without exposing SOUL content.
-- [ ] Require every session capable of emitting RunEvents—not only private buddy
+- [x] Require every session capable of emitting RunEvents—not only private buddy
   sessions—to pass that same pinned id unchanged to every event.
-- [ ] Test that a mid-session file/policy change does not change the session's
+- [x] Test that a mid-session file/policy change does not change the session's
   pinned id; only a new session receives a new generation.
 
 **Gate:** RunEvent work cannot begin until generation id is required and stable.
+
+**Accepted Milestone A residual (not blocking Task 4):** the dual-process
+**active** pin under `$DIGITAL_BRAIN_STATE_DIR/active/` is last-writer-wins
+across concurrent host sessions. Exact concurrent-session MCP attribution
+requires per-request pin injection or session-keyed active pins (later). For
+single interactive SessionStart this is acceptable; multi-session parallel
+instrumentation must pass `DIGITAL_BRAIN_HARNESS_GENERATION_ID` per host or use
+`sessions/<id>/` pins. See README “Shared harness pin”.
 
 **Suggested commit:** `feat: pin versioned buddy harness generations`
 
@@ -324,23 +332,28 @@ id when known, schema version, and taxonomy version.
 caps, bounded reference arrays, required generation id, no embeddings, no
 JournalEntry, separate removable raw payload, and explicit outcome source.
 
-- [ ] Write replay-vs-conflict tests for every write tool.
-- [ ] Test malformed enums, oversized summaries, invalid sensitivities, excessive
+- [x] Write replay-vs-conflict tests for every write tool.
+- [x] Test malformed enums, oversized summaries, invalid sensitivities, excessive
   references, and missing generation id.
-- [ ] Test that model-facing `record_run_event` is forced to
+- [x] Test that model-facing `record_run_event` is forced to
   `model_advisory`; callers cannot claim MCP/user authority.
-- [ ] Test deterministic tool outcome recording independently of model prose.
-- [ ] Instrument and test meaningful READ empty/fail plus WRITE conflict/timeout
+- [x] Test deterministic tool outcome recording independently of model prose.
+- [x] Instrument and test meaningful READ empty/fail plus WRITE conflict/timeout
   paths; each event must carry deterministic/advisory source correctly and the
   unchanged session-pinned HarnessGeneration id.
-- [ ] Test that no sensor path calls embeddings or journal-chain code.
-- [ ] Store raw Feedback payload separately so redaction can remove it while
+- [x] Test that no sensor path calls embeddings or journal-chain code.
+- [x] Store raw Feedback payload separately so redaction can remove it while
   immutable evidence metadata/request fingerprint remains.
-- [ ] Add receipt reconciliation to the client; write calls never blind-retry.
-- [ ] Update MCP documentation and plugin `.mcp.json` tool note.
+- [x] Add receipt reconciliation to the client; write calls never blind-retry.
+- [x] Update MCP documentation and plugin `.mcp.json` tool note.
 
 **Gate:** no sensor may be written through generic Cypher or enter the journal
 vector index. A timeout must reconcile by receipt.
+
+**Instrumentation note:** MCP query/transport timeouts emit
+`tool_outcome=timeout` with `error_class=query_timeout`; host transport
+timeouts emit `tool_outcome=timeout` with host error classes. Non-timeout
+errors remain `tool_outcome=fail`.
 
 **Suggested commit:** `feat: add typed versioned quality sensors`
 

@@ -59,11 +59,13 @@ and writes a well-known **active** pin under `$DIGITAL_BRAIN_STATE_DIR/active/`
 mount tracks the same path the pin script writes. Dual-process emit requires
 this shared state pin.
 
-**Limitation:** the active pin is a single well-known path
-(`active/harness_generation.{id,json}`), so only one host session’s pin is
-“active” for MCP at a time. Concurrent SessionStarts overwrite it; use
-per-session env (`DIGITAL_BRAIN_HARNESS_GENERATION_ID`) or session pin files
-under `sessions/<id>/` when multiple sessions must instrument in parallel.
+**Limitation (accepted for Milestone A):** the active pin is a single well-known
+path (`active/harness_generation.{id,json}`), so only one host session’s pin is
+“active” for MCP at a time (last-writer-wins). Concurrent SessionStarts
+overwrite it; this does **not** provide exact concurrent multi-session MCP
+attribution. Use per-session env (`DIGITAL_BRAIN_HARNESS_GENERATION_ID`) or
+session pin files under `sessions/<id>/` when multiple sessions must instrument
+in parallel. A session-keyed or per-request pin injection is deferred.
 Host timeout paths use an in-process QualityStore recorder (not model-facing
 `record_run_event`).
 

@@ -11,6 +11,49 @@ import digital_brain.services.consistency_checker as consistency_checker
 
 
 class ConsistencyCheckerReportOnlyTests(IsolatedAsyncioTestCase):
+    async def test_find_duplicate_candidates_survives_raise_on_write_stub(self) -> None:
+        """Plan Task 1: generic write/MCP mutation stub always raises; detection still works.
+
+        Proves duplicate discovery does not call the mutation surface even when that
+        surface is wired to fail hard on any use.
+        """
+        sample_rows = [
+            {
+                "id_a": "person_a",
+                "name_a": "Sasha",
+                "id_b": "person_b",
+                "name_b": "Sashka",
+                "similarity_score": 1.0,
+                "evidence_kind": "name_similarity",
+            }
+        ]
+
+        async def _write_stub(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("generic write/MCP mutation stub must not be called")
+
+        write_stub = AsyncMock(side_effect=_write_stub)
+
+        with (
+            patch(
+                "digital_brain.tools.mcp_client.call_mcp_tool",
+                new=write_stub,
+            ),
+            patch.object(
+                consistency_checker,
+                "execute_cypher",
+                new=AsyncMock(return_value=sample_rows),
+            ) as mock_read,
+        ):
+            candidates = await consistency_checker.find_duplicate_candidates()
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["id_a"], "person_a")
+        self.assertEqual(candidates[0]["id_b"], "person_b")
+        self.assertNotIn("remove_id", candidates[0])
+        write_stub.assert_not_awaited()
+        write_stub.assert_not_called()
+        mock_read.assert_awaited()
+
     async def test_find_duplicate_candidates_uses_read_only_execute_cypher(self) -> None:
         """Discovery reads via execute_cypher only; no MCP write/mutation surface."""
         sample_rows = [
