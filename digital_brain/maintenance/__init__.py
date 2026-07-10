@@ -1,5 +1,18 @@
-"""Harness and maintenance helpers for quality-plane version pinning."""
+"""Harness and maintenance helpers for quality-plane version pinning.
 
+Pin / session-open path is **stdlib-only** (generation, session, models, privacy)
+so host agents can run ``scripts/pin_harness_generation.py`` with bare
+``python3`` inside Grok/Claude/Codex without requiring the full dev venv.
+
+Heavier dream/analyzer modules load lazily on attribute access so
+``from digital_brain.maintenance.generation import …`` does not pull pydantic.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+# --- Eager, stdlib-only (session pin / harness open) ---
 from .generation import (
     collect_harness_generation,
     get_or_pin_session_generation,
@@ -48,82 +61,101 @@ from .privacy import (
     redact_evidence_record,
     redact_packet,
 )
-from .runner import (
-    MAINTAINER_ALLOWED_OPERATIONS,
-    MAINTAINER_FORBIDDEN_OPERATIONS,
-    DreamRunCheckpoint,
-    DreamRunResult,
-    DreamRunner,
-    assert_no_activation_capability,
-    maintainer_tool_profile,
-    run_report_only_dream,
-)
-from .retention import (
-    BACKUP_RETENTION_LIMITATION,
-    RETENTION_ACTIONS,
-    RETENTION_SCHEMA_VERSION,
-    RetentionConfig,
-    RetentionPlan,
-    assert_apply_permitted,
-    compute_retention_config_digest,
-    default_demo_config,
-    load_retention_config,
-    select_retention_candidates,
-)
-from .snapshot import (
-    EvidenceItem,
-    FrozenSnapshot,
-    SnapshotPolicy,
-    compute_source_ids_digest,
-    freeze_snapshot,
-    load_evidence_fixture,
-)
-from .analyzer import (
-    ANALYZER_VERSION,
-    ChangeIntent,
-    SanitizedEvidenceSnapshot,
-    analyze,
-)
-from .analyzer import Finding as AnalyzerFinding
-from .evaluation import (
-    EVALUATOR_VERSION,
-    EvaluationGateError,
-    assert_evaluation_present_for_transition,
-    evaluate,
-)
-from .invariants import (
-    INVARIANT_CATEGORIES,
-    InvariantScenario,
-    default_scenarios,
-    load_scenarios,
-)
-from .artifacts import (
-    ARTIFACT_SCHEMA_VERSION,
-    DEFAULT_ISOLATED_VALIDATION_COMMANDS,
-    ISOLATED_VALIDATION_COMMANDS,
-    IsolatedValidationError,
-    IsolatedValidationResult,
-    QuarantineBundle,
-    ValidationCommandError,
-    compute_patch_sha256,
-    resolve_secure_state_dir,
-    validate_quarantine_isolated,
-    write_quarantine_bundle,
-)
-from .compiler import (
-    COMPILER_VERSION,
-    BaseDriftError,
-    CompileRequest,
-    CompileResult,
-    CompilerError,
-    EngineeringLaneError,
-    compile_change_intent,
-    compile_to_quarantine,
-)
-from .overlay_rules import (
-    load_locked_rules,
-    load_overlay_slots,
-)
+
+# Lazy submodule attribute → (module_path, attr_name | None for whole-module re-export map)
+_LAZY_ATTRS: dict[str, tuple[str, str]] = {
+    # runner
+    "MAINTAINER_ALLOWED_OPERATIONS": (".runner", "MAINTAINER_ALLOWED_OPERATIONS"),
+    "MAINTAINER_FORBIDDEN_OPERATIONS": (".runner", "MAINTAINER_FORBIDDEN_OPERATIONS"),
+    "DreamRunCheckpoint": (".runner", "DreamRunCheckpoint"),
+    "DreamRunResult": (".runner", "DreamRunResult"),
+    "DreamRunner": (".runner", "DreamRunner"),
+    "assert_no_activation_capability": (".runner", "assert_no_activation_capability"),
+    "maintainer_tool_profile": (".runner", "maintainer_tool_profile"),
+    "run_report_only_dream": (".runner", "run_report_only_dream"),
+    # retention
+    "BACKUP_RETENTION_LIMITATION": (".retention", "BACKUP_RETENTION_LIMITATION"),
+    "RETENTION_ACTIONS": (".retention", "RETENTION_ACTIONS"),
+    "RETENTION_SCHEMA_VERSION": (".retention", "RETENTION_SCHEMA_VERSION"),
+    "RetentionConfig": (".retention", "RetentionConfig"),
+    "RetentionPlan": (".retention", "RetentionPlan"),
+    "assert_apply_permitted": (".retention", "assert_apply_permitted"),
+    "compute_retention_config_digest": (".retention", "compute_retention_config_digest"),
+    "default_demo_config": (".retention", "default_demo_config"),
+    "load_retention_config": (".retention", "load_retention_config"),
+    "select_retention_candidates": (".retention", "select_retention_candidates"),
+    # snapshot
+    "EvidenceItem": (".snapshot", "EvidenceItem"),
+    "FrozenSnapshot": (".snapshot", "FrozenSnapshot"),
+    "SnapshotPolicy": (".snapshot", "SnapshotPolicy"),
+    "compute_source_ids_digest": (".snapshot", "compute_source_ids_digest"),
+    "freeze_snapshot": (".snapshot", "freeze_snapshot"),
+    "load_evidence_fixture": (".snapshot", "load_evidence_fixture"),
+    # analyzer
+    "ANALYZER_VERSION": (".analyzer", "ANALYZER_VERSION"),
+    "ChangeIntent": (".analyzer", "ChangeIntent"),
+    "SanitizedEvidenceSnapshot": (".analyzer", "SanitizedEvidenceSnapshot"),
+    "analyze": (".analyzer", "analyze"),
+    "AnalyzerFinding": (".analyzer", "Finding"),
+    # evaluation
+    "EVALUATOR_VERSION": (".evaluation", "EVALUATOR_VERSION"),
+    "EvaluationGateError": (".evaluation", "EvaluationGateError"),
+    "assert_evaluation_present_for_transition": (
+        ".evaluation",
+        "assert_evaluation_present_for_transition",
+    ),
+    "evaluate": (".evaluation", "evaluate"),
+    # invariants
+    "INVARIANT_CATEGORIES": (".invariants", "INVARIANT_CATEGORIES"),
+    "InvariantScenario": (".invariants", "InvariantScenario"),
+    "default_scenarios": (".invariants", "default_scenarios"),
+    "load_scenarios": (".invariants", "load_scenarios"),
+    # artifacts
+    "ARTIFACT_SCHEMA_VERSION": (".artifacts", "ARTIFACT_SCHEMA_VERSION"),
+    "DEFAULT_ISOLATED_VALIDATION_COMMANDS": (
+        ".artifacts",
+        "DEFAULT_ISOLATED_VALIDATION_COMMANDS",
+    ),
+    "ISOLATED_VALIDATION_COMMANDS": (".artifacts", "ISOLATED_VALIDATION_COMMANDS"),
+    "IsolatedValidationError": (".artifacts", "IsolatedValidationError"),
+    "IsolatedValidationResult": (".artifacts", "IsolatedValidationResult"),
+    "QuarantineBundle": (".artifacts", "QuarantineBundle"),
+    "ValidationCommandError": (".artifacts", "ValidationCommandError"),
+    "compute_patch_sha256": (".artifacts", "compute_patch_sha256"),
+    "resolve_secure_state_dir": (".artifacts", "resolve_secure_state_dir"),
+    "validate_quarantine_isolated": (".artifacts", "validate_quarantine_isolated"),
+    "write_quarantine_bundle": (".artifacts", "write_quarantine_bundle"),
+    # compiler
+    "COMPILER_VERSION": (".compiler", "COMPILER_VERSION"),
+    "BaseDriftError": (".compiler", "BaseDriftError"),
+    "CompileRequest": (".compiler", "CompileRequest"),
+    "CompileResult": (".compiler", "CompileResult"),
+    "CompilerError": (".compiler", "CompilerError"),
+    "EngineeringLaneError": (".compiler", "EngineeringLaneError"),
+    "compile_change_intent": (".compiler", "compile_change_intent"),
+    "compile_to_quarantine": (".compiler", "compile_to_quarantine"),
+    # overlay_rules
+    "load_locked_rules": (".overlay_rules", "load_locked_rules"),
+    "load_overlay_slots": (".overlay_rules", "load_overlay_slots"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _LAZY_ATTRS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_path, attr = target
+    from importlib import import_module
+
+    mod = import_module(module_path, __name__)
+    value = getattr(mod, attr)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(__all__))
+
 
 __all__ = [
     "ANALYZER_VERSION",
