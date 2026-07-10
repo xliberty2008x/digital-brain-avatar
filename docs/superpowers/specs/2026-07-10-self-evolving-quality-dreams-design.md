@@ -1,97 +1,83 @@
-# Design: Self-Evolving Quality Program + Memory Hygiene (Dreams)
+# Design: Self-Evolving Quality + Maintenance (Dreams)
 
-**Status:** Draft **rev 3** — critics panel amendments incorporated (2026-07-10)  
+**Status:** Draft **rev 4** — sensors beyond Feedback; harness file patch pipeline  
+**Date:** 2026-07-10  
 **Repo:** `avatar_digital_brain`  
-**Companions (gitignored):**  
-- `tmp/2026-07-10-self-evolving-quality-design.html`  
-- `tmp/2026-07-10-critics-panel-quality-dreams.html`  
-**Related:** journal append protocol (`mcp_servers/cypher`), buddy plugin (`plugins/digital-brain-buddy`), entity resolver / Alias / LearningLog
+
+**Tracked source of truth:** this file  
+
+**Visual companions (gitignored, not the spec):**  
+- `tmp/2026-07-10-self-evolving-quality-design.html` — readable design (rev 4)  
+- `tmp/2026-07-10-critics-panel-quality-dreams.html` — 12-critic panel  
+- `tmp/2026-07-10-harness-architecture-with-proposals.html` — harness diagrams  
+
+**Related runtime:**  
+- Plugin harness: `plugins/digital-brain-buddy/` (skills, agents, SOUL)  
+- MCP: `mcp_servers/cypher/` (append protocol, write guards)  
+- Graph contracts: `docs/GRAPH_SCHEMA_CONTRACT.md`
 
 ---
 
-## 0. Critics panel (rev 3)
+## 0. What this system is
 
-Twelve independent critics reviewed rev 2. **No unconditional ship.** Consensus: keep the spine; harden contracts; resequence; demote mythology.
+### Harness (behaviour)
 
-| Critic | Vote | Core attack |
+The **agentic harness** is **not** the graph:
+
+| Piece | Location | Role |
 | --- | --- | --- |
-| #1 Anti-sink | Conditional fail | Archive ≠ shrink; correction journals re-vectorize noise |
-| #2 Security | Conditional fail | Free-text policy + soft confirm + Alias = self-corruption |
-| #3 Journal protocol | Conditional fail | Write matrix unlocked; dual-writer races |
-| #4 Metrics | Fail as science / pass as telemetry | No denominators; Goodhart; selection bias |
-| #5 Parse/UX | Conditional ship | False FEEDBACK worse than missed FEEDBACK |
-| #6 Dream ops | Conditional fail | Neglect default; no lease/budget/quiet hours |
-| #7 Identity | Conditional fail | Live `DETACH DELETE` merge contradicts design |
-| #8 Harness hybrid | Conditional fail | Dual SoT without precedence |
-| #9 Feasibility | Ship v0–v1 if tool exists | Need `create_feedback` MCP first |
-| #10 Grounding | Conditional fail | No claim unit; demote-Person collateral |
-| #11 Privacy | Fail ethics until redaction | Intimate raw survives archive |
-| #12 Architecture | Resequence + simplify | Maintenance not “soul dreams”; fix entity/write first |
+| Skills | MD under plugin | Routing, procedures, write rules |
+| Agents / subagents | plugin `agents/` | Reader, writer, entity-check |
+| SOUL | `SOUL.MD` (local) | Voice / stance |
+| MCP tools | mcp-cypher | What mutations are possible |
+| Soft `AgentPolicy` | Neo4j JSON (optional) | Enum/numeric nudges only |
 
-### Amendments locked by panel (non-negotiable for plan)
+### Digital brain (memory + sensors)
 
-1. **Write matrix + first-class Feedback tool**  
-2. **Hard confirm** for irreversible ops (not free-form “yes” alone)  
-3. **Kill auto DETACH DELETE** merge on wake path (report-only dupes)  
-4. **Archive redaction + regret path** (anti-sink is storage, not just context)  
-5. **Structured AgentPolicy only** (JSON enums); files beat policy  
-6. **Rename product frame:** dreams = **memory hygiene / maintenance**; evolution = diary of approved patches  
-7. **Resequence:** sensor + identity safety before harness self-mod  
-8. **Metrics = process health** until sampled labels/denominators exist  
-9. **Thin Claim layer deferred** unless invent recurrence stays high after A–B fixes  
+Neo4j holds **life memory**, **ops learning** (Alias…), and **sensors** (Feedback, RunEvent…), not the full plugin source tree.
 
-### Kill criteria (do not ship past)
+### Self-evolution = two paths
 
-- Free-text `AgentPolicy` body injected as system/instructions at BOOTSTRAP  
-- Alias/demote applied on free-form “yes” without a **pending structured proposal**  
-- Any production path auto-`DETACH DELETE`s Person/Org on name similarity alone  
-- Feedback requires journal embeddings or enters `journal_entry_embedding_index`  
-- Intimate Feedback `raw_text` in default backups/metrics/exports after archive  
-- Unattended SOUL rewrite  
-- Open Feedback unbounded across 2+ maintenance cycles with no hard gate  
-- Concurrent multi-host maintenance writers without a lease  
-- Harness auto-promote claiming “truth improved” without holdout / min sample  
+```text
+Maintenance / dream
+├── Memory path  → Neo4j (Alias, trust, rare journals, archive sensors)
+└── Harness path → files (skill diffs / learned overlays) [+ optional policy JSON]
+                   human merge → next session loads better behaviour
+```
+
+**Optional policy alone is not self-evolution of the harness.** Real procedure change lands in **MD skills/overlays**.
 
 ---
 
 ## 1. Problem
 
-The digital brain has strong **structural** safety (server-owned journal append, alias-first resolution, entity-check) but almost no measured loop for “is the memory/answer true?”
+Strong structural safety (append protocol, alias-first, entity-check) but weak closed loop for:
 
-Known failure modes:
-
-- Wrong or duplicate entities (e.g. typo orgs)  
-- Retrieval misses or noise  
-- Buddy claims without graph evidence  
-- Write routing that could journal junk or miss durable facts  
-- If every human correction becomes an immortal retrieval-heavy row, the system **fills up instead of evolving**  
-- Existing reflex merge paths can **`DETACH DELETE`** “duplicates” — unsafe and conflicts with append-only identity learning  
-
-We need: a **sensor** (live feedback), an **online thin loop** (structured propose & confirm), and **offline maintenance** (hygiene / “dreams”) that promotes durable ops learning and, gated, harness patches — without drowning context or immortalizing intimate correction text.
+- User-visible mistakes (wrong entity, invent, miss)  
+- Tool/approach failures (timeouts, empty retrieval, chain conflict)  
+- Tool/approach **successes** worth reinforcing (“gotchas” that worked)  
+- Improving **skills** without stuffing the whole harness into Neo4j  
+- Not drowning context in immortal correction/telemetry text  
 
 ---
 
 ## 2. Goals
 
-1. **Full-stack quality (A–D):** retrieval, identity, write decisions, answer grounding — **process metrics first**, not fake causal “truth scores.”  
-2. **Live human sensor (v1):** free-form in-chat corrections as the signal (no offline gold required to start).  
-3. **Propose-and-confirm ops learning:** audit always; irreversible graph effects only after **hard confirm**.  
-4. **Anti-sink (context + storage):** Feedback is staging; archive redacts; promote few durable artifacts.  
-5. **Maintenance sessions:** offline digest (dreams renamed in product language) that archives noise and proposes patches.  
-6. **Append-only life history:** no DELETE of disputed journals; corrections move truth forward.  
-7. **Identity safety first:** no silent destructive merge; Alias reversible via audit.  
+1. Full-stack quality (retrieval · identity · writes · grounding) with **process metrics** first.  
+2. **Sensors:** user Feedback **and** RunEvent (success/fail + approach).  
+3. Online **hard confirm** for irreversible memory ops.  
+4. Offline **maintenance** (dreams): graph hygiene **and** harness patch proposals.  
+5. Anti-sink for sensors (hot → digest → redact/archive/aggregate).  
+6. Append-only life history; no auto DETACH DELETE identity “fixes.”  
+7. Harness remains **files-first** (reviewable); graph never becomes second SOUL via free-text policy.  
 
-### Non-goals (v1–v1.5)
+### Non-goals
 
-- Storing the entire plugin source tree in Neo4j  
-- Silent SOUL rewrites (wake or unattended maintenance)  
-- Loading full Feedback history into BOOTSTRAP  
-- `DETACH DELETE` of life entities as default “fix”  
-- Multi-user social trust  
-- Free-text policies as a second SOUL  
-- Claiming causal quality improvement from free-form rates alone  
-- Full Claim graph in v0–v1 (deferred)  
-- Requiring offline gold labels before shipping the sensor  
+- Whole plugin source stored in Neo4j  
+- Silent SOUL rewrite  
+- Full graph weight recompute / bulk relation restructure as dream job  
+- Free-text AgentPolicy as system prompt  
+- Metrics that claim causal “truth” from free-form rates alone  
 
 ---
 
@@ -99,400 +85,328 @@ We need: a **sensor** (live feedback), an **online thin loop** (structured propo
 
 | Question | Choice |
 | --- | --- |
-| Scope | Full stack, but **resequenced** (sensor + identity → maintenance → soft policy → claims/harness PR) |
-| Ground truth (v1) | Live human feedback as **sensor**; optional later sampled rubrics |
-| Channel | Free-form chat for *signals*; **structured confirms** for *mutations* |
-| Learning aggressiveness | Propose & **hard** confirm for Alias/demote/policy activate |
-| History | Append-only journals; Alias / claim-or-entity dispute — never auto DETACH |
-| Offline sessions | **Memory hygiene / maintenance** (internal name may stay “dream”) |
-| Harness landing | Hybrid: structured graph policy (demoted) + gated **file** diffs; SOUL file-only |
-| Whole plugin in DB? | **No** |
-| Product frame | Instrument + human gate; not “soul evolves while you sleep” |
+| Spec location | This file under `docs/superpowers/specs/` |
+| Harness source of truth | Skill/agent/SOUL **files** |
+| Sensors | Feedback + **RunEvent** (success/fail/approach) |
+| Online learning | Propose + **hard confirm** for Alias/demote |
+| Offline | Maintenance digests sensors → memory ops + harness patches |
+| Harness upgrade mechanism | **Diff / learned overlay** (+ optional structured policy) |
+| Soft policy | Structured JSON enums only; files win on conflict |
+| Life journals | `append_journal_entry` only |
 
 ---
 
-## 4. Three memory layers
+## 4. Sensors — mistakes, successes, gotchas
 
-| Layer | Content | Lifetime | Examples |
-| --- | --- | --- | --- |
-| **Life memory** | Journal chain, people, orgs, events | Forever (append-only) | EPAM, Audi, Іра |
-| **Operational learning** | Identity and dispute fixes | Durable, small | `Alias CarPlace→CarID` |
-| **Harness evolution** | How the agent behaves | Versioned, gated | FEEDBACK routing, structured policy, skill patches |
+User Feedback is necessary but **not sufficient**. Self-evolution needs operational telemetry.
 
-**Feedback is not a fourth long-term memory.** Lifecycle: hot sensor → confirm/promote few effects → **archive with redaction** → metrics on aggregates. Buddy never loads archived Feedback by default.
+### 4.1 Feedback (human)
 
----
-
-## 5. Wake vs maintenance (dreams)
-
-### Product language
-
-| Internal | User-facing preferred |
-| --- | --- |
-| Dream / DreamRun | Memory hygiene run / maintenance report |
-| Self-evolving agent | Quality loop + approved patches |
-
-### Wake (buddy)
-
-- Routes: `SKIP` | `READ` | `WRITE` | `FEEDBACK`  
-- Life WRITE → `append_journal_entry` only  
-- FEEDBACK → thin audit via **`create_feedback`** (+ optional one-shot propose / hard confirm)  
-- Does **not** rewrite skills mid-conversation  
-- BOOTSTRAP: people, heavy nodes, recent journals, **active structured AgentPolicy (bounded K)**  
-- Never loads archived Feedback; never loads Feedback `raw_text` for intimate tier into multi-user sessions  
-
-### Maintenance (dream / hygiene)
-
-- Trigger: primary **scheduled window** (e.g. weekly local business hours) + manual `/digital-brain-dream` boost + heartbeat **only if** `open_fb > N` **and** outside quiet hours **and** cooldown elapsed  
-- Single **run lease** (one host at a time); host tag on `DreamRun`  
-- Bounded budget (max Feedback rows, max proposals, max tokens/RAM)  
-- Unattended default: **propose-only** for harness; may auto-apply only allowlisted low-risk digests (archive + counters) after prior human policy  
-- Cap high-risk skill diffs ≤ 5 per run; rest summarize/defer  
-- Stages with run id: ingest → propose → apply(allowlist) → archive → report (idempotent resume)  
-- Output: short ops report — **counts, not intimate quotes**
-
-```text
-wake                                   maintenance
-────                                   ───────────
-talk, life WRITE                       batch open Feedback + dupe report
-FEEDBACK → create_feedback             distill by kind
-propose + hard confirm (ops)           graph effects (confirmed/allowlist)
-                                       propose file/policy diffs (gated)
-                                       redact+archive → DreamRun
-```
-
----
-
-## 6. Anti-sink rules
-
-| Rule | Mechanism |
-| --- | --- |
-| Hot set only | Only `open` / `proposed` (briefly `accepted` pre-apply) active |
-| **Hard open gate** | If `open_feedback_count > N`, refuse new Feedback **or** coalesce; force maintenance flag — not soft nudge only |
-| Archive = shrink | On archive: set status `archived`; **strip or hash `raw_text` / `assistant_claim`** (always for `intimate`, default for all after absorb window); keep kind, target ids, timestamps |
-| No journal vector pollution | Feedback never in `journal_entry_embedding_index` |
-| Promote, don’t pile | Prefer Alias/demote over correction journals; **cap** correction journals per maintenance run / week |
-| Praise without nodes | `praise` increments counters / session stats; **no Feedback node** (or 1/N sample) |
-| Metrics ≠ context | Daily/weekly **aggregate** nodes or Cypher rollups — not full raw history in buddy packs |
-| GC | Drop or soft-unlink `ABOUT` after archive; one active policy per key; GC inactive policy versions; slim DreamRun (counters, not full text dumps) |
-| TTL stuck states | `open|proposed` max age → auto-park; `accepted` not applied in T → re-open or force archive |
-
-**Lifecycle:**  
-`created (open) → proposed → accepted|rejected → applied → archived(redacted)`  
-
-**Regret path:** `revoke_feedback(id)` → redact + archive; reverse unconfirmed Alias if still reversible; deactivate derived policy; for correction journals append superseding note (never silent chain delete).
-
----
-
-## 7. Online feedback loop (wake)
-
-1. **Detect** — FEEDBACK only if: (a) pending proposal, or (b) explicit correction cue + grounded entity from last 1–2 assistant turns, or (c) high-confidence entity rewrite span. Else CHAT / silent park. Prefer **false park over false write**.  
-2. **Parse** — `kind` + targets; heuristics first (negation + entity, “not X—Y”, invent phrases); LLM only if ambiguous.  
-3. **Audit** — `create_feedback` (hot). Praise → counter only.  
-4. **Propose** — one-line reversible proposal **or** silent park for maintenance. Max **1 confirm prompt per user turn**.  
-5. **Hard confirm** — soft acks (`👍`, `ok`, `yes`, `да`) valid **only** if a pending proposal is open; irreversible Alias/demote require explicit `APPLY alias:<id>`-style token **or** unambiguous restatement of the proposed mapping.  
-6. **Apply or park** — writer MERGE Alias / demote / optional journal; always LearningLog; else leave open for maintenance.  
-
-### Feedback kinds
-
-| kind | Example | Wake behavior |
+| kind | Example | Typical promote |
 | --- | --- | --- |
-| `entity_wrong` | “not CarPlace — CarID” | Propose Alias after entity-check |
-| `claim_false` | “that never happened” | Dispute target claim/edge (not whole Person); park if unclear |
-| `miss` | “you forgot EPAM Dec” | Propose life WRITE via append |
-| `invent` | “you made that up” | Log; session negation cache; maintenance may draft structured policy |
-| `praise` | “exactly”, “👍” | Counter only — never life journal, rarely Feedback node |
+| `entity_wrong` | “not CarPlace — CarID” | Alias after hard confirm |
+| `claim_false` | “that never happened” | Dispute claim/edge (not whole Person) |
+| `miss` | “you forgot EPAM Dec” | Life WRITE via append |
+| `invent` | “you made that up” | Session blocklist; later grounding skill/policy |
+| `praise` | “exactly”, “👍” | **Counter only** — not a life journal |
 
-### Park for maintenance when
+### 4.2 RunEvent (machine) — mistakes **and** successes
 
-- Ambiguous targets  
-- Would change SOUL / skill wording  
-- Pattern seen repeatedly (harness candidate)  
-- User defers  
-- Open Feedback high / confirm budget exhausted  
-
----
-
-## 8. Confirm hardness & identity safety
-
-### Confirm
-
-| Op | Gate |
-| --- | --- |
-| Soft praise / “ok” | Only closes pending proposal of equal or lower risk |
-| Alias create/repoint | Pending proposal + hard confirm + entity-check authorized |
-| Demote / dispute | Pending proposal + hard confirm; **pinned** entities need elevated confirm |
-| AgentPolicy activate | Never free-form chat alone; maintenance propose + explicit accept per key |
-| SOUL / skill file | Human merge only; never unattended apply |
-
-### Pinned set
-
-User-defined (and defaults for core graph people/orgs) immune to demote/Alias without elevated confirm + LearningLog reason.
-
-### Identity ops (P0 vs live code)
-
-| Rule | Detail |
-| --- | --- |
-| No auto DETACH DELETE | Disable/remove wake-path merge that deletes nodes; dupe = **report only** |
-| Real collapse later | Transfer rels or soft-collapse (`ALIAS_OF` / `active=false`) — never drop edges first |
-| Alias-first resolver | Follow chain max depth 3; cycle fail; no bind to missing canonical |
-| Unalias | First-class reverse: freeze old mapping, LearningLog, retrieval ignores inactive |
-| Ambiguous names | Never `CONTAINS` + `LIMIT 1` as sole resolution; ask or create parallel with audit |
-| Shared connections alone | Insufficient for “same entity” |
-
----
-
-## 9. Maintenance pipeline
-
-1. **Acquire lease** — fail if another host holds run  
-2. **Load (bounded)** — open Feedback (structured fields preferred), last DreamRun summary (ops-only), dupe candidates  
-3. **Cluster** by kind / entity / theme  
-4. **Graph effects** — only pre-confirmed or allowlisted low-risk; Alias/demote templates; rare correction journals (budget)  
-5. **Harness effects** — structured policy drafts; file diffs with **base commit SHA** when possible; never silent SOUL  
-6. **Redact + archive** Feedback; absorb id → DreamRun  
-7. **Report** — ops counts + proposal list for human  
-
-Sanitize: the model context that **authors** policy/skill text must not include full intimate `raw_text` (use kind, ids, short hashes).
-
----
-
-## 10. Harness landing (hybrid + precedence)
-
-| Layer | Role |
-| --- | --- |
-| Skill / SOUL **files** | Hard behavior; wins on conflict |
-| Structured `AgentPolicy` | Demoted overlay: enum keys + typed values only (e.g. `grounding_threshold`, `retrieval_bias`) |
-| Model default | Fallback |
-
-**Precedence:** hard skill/SOUL text → active structured policy (named slots only) → model default.  
-Policy **cannot** invent new routes or silence safety lines.  
-**One active version per `key`.** Accept deactivates prior; GC old versions.  
-BOOTSTRAP: max K actives, total chars ≤ C, order `(priority, updated_at)`; log drops.  
-**Host pin:** record `workspace_root`, `soul_sha256`, skill manifest hash; mismatch → warn and prefer files only.  
-DreamRun stores `base_commit` / policy versions applied when possible.
-
----
-
-## 11. Full-stack levers (A–D)
-
-| Layer | Improvements |
-| --- | --- |
-| **A Retrieval** | Hybrid; respect disputes; Alias expand; never archived Feedback; prefer time/order when conflict |
-| **B Identity** | Entity-check; hard-confirm Alias; dupe report only; no auto DETACH |
-| **C Writes** | FEEDBACK route; `create_feedback`; praise ≠ journal; write matrix locked |
-| **D Grounding** | Fact vs inference; session blocklist after invent/claim_false; **thin Claim deferred** until needed |
-
-### Deferred: thin Claim layer
-
-If invent re-assertion rate stays high after A–B:
+Every meaningful tool/approach outcome can emit a compact event:
 
 ```text
-Claim { id, text, status: asserted|disputed|retracted|inferred,
-        trust, subject_ids[], evidence[], supersedes_id? }
+RunEvent {
+  id, timestamp, session_ref?, host?,
+  route: SKIP|READ|WRITE|FEEDBACK|MAINTAIN,
+  approach: string,           // short label, e.g. "vector_only", "alias_first+entity_check"
+  tool: string?,              // append_journal_entry, read_neo4j_cypher, ...
+  outcome: success | fail | empty | conflict | timeout,
+  error_class: string?,       // chain_conflict, embed_down, no_hits, ...
+  entity_ids: [], journal_ids: [],
+  latency_ms?: number,
+  notes?: string,             // short, no intimate dump
+  sensitivity: public_ops | personal | intimate
+}
 ```
 
-Demote **claims/edges**, not whole Persons. Optional citation `[j:…]` on memory asserts.
+| Signal | Example | Harness use |
+| --- | --- | --- |
+| **Fail** | append version conflict | Skill: always receipt + retry with same append_key |
+| **Empty** | vector READ no hits | Skill: fall back recent + Alias expand |
+| **Success gotcha** | entity-check denied duplicate correctly | Overlay: “always entity-check before CREATE org-like names” |
+| **Success gotcha** | hybrid READ found right person | Reinforce retrieval order in skill |
+| **Timeout** | Ollama/MCP | Infra note + fail-soft language; not a life journal |
+
+### 4.3 Sensor rules
+
+- Sensors feed **maintenance**, not full buddy BOOTSTRAP.  
+- Prefer structured fields over long free text.  
+- Same anti-sink: hot window → digest → archive/aggregate; redact intimate raw.  
+- **Praise / success gotchas** must not pollute journal vector index.  
+
+### 4.4 Storage options for RunEvent
+
+| Option | Where | Notes |
+| --- | --- | --- |
+| Graph `:RunEvent` | Neo4j | Queryable with Feedback; needs retention |
+| JSONL | `logs/run-events/YYYY-MM-DD.jsonl` (gitignored) | Cheap; maintenance reads files |
+| Hybrid | fail/conflict in graph; verbose in JSONL | Practical default |
+
+**Recommendation:** hybrid — graph for high-signal fails + accepted Feedback; JSONL for volume.
 
 ---
 
-## 12. Evaluation — process health first
+## 5. Three memory / store grades
 
-Live free-form feedback is a **sensor**, not a valid sole estimator of quality.
+| Grade | Content | Lifetime in context |
+| --- | --- | --- |
+| **Life memory** | Journal chain, entities, relations | Forever (append-only) |
+| **Ops learning** | Alias, LearningLog, light trust/dispute | Durable, small |
+| **Sensors** | Feedback, RunEvent | Hot then redacted/archived |
+| **Harness** | Skills, SOUL, overlays, soft policy | Files (+ optional policy nodes) |
 
-### v1 process metrics (ship)
+---
 
-| Metric | Role |
+## 6. Wake path (buddy)
+
+Routes: `SKIP` | `READ` | `WRITE` | `FEEDBACK`
+
+| Route | Graph | Telemetry |
+| --- | --- | --- |
+| SKIP | none | optional low-priority RunEvent |
+| READ | read only | RunEvent success/empty/fail + approach |
+| WRITE | append + MERGE links | RunEvent + entity-check result |
+| FEEDBACK | create_feedback; maybe Alias after hard confirm | Feedback + confirm outcome |
+
+### FEEDBACK online loop
+
+1. Intent gate (pending proposal **or** grounded correction cue; prefer silent park).  
+2. `create_feedback` (hot).  
+3. One-line proposal **or** park for maintenance.  
+4. **Hard confirm** for irreversible ops (soft “yes” only if pending proposal; prefer `APPLY alias:<id>` style).  
+5. Apply Alias/demote/miss WRITE + LearningLog, or leave open.  
+
+Max one confirm prompt per user turn. Praise → counters only.
+
+### Identity safety (P0)
+
+- No auto `DETACH DELETE` merge on wake.  
+- Dupe candidates = report only until gated merge.  
+- Alias-first with chain limits; unalias supported; pinned entities elevated confirm.  
+
+---
+
+## 7. Maintenance (dreams) — dual path
+
+**Product language:** memory hygiene / maintenance run.  
+**Internal:** DreamRun.
+
+### Triggers
+
+- Primary: scheduled local window (e.g. weekly)  
+- Manual: `/digital-brain-dream`  
+- Heartbeat only if open sensors high **and** outside quiet hours **and** cooldown  
+
+### Constraints
+
+- Exclusive **lease** (one host)  
+- Budget: max sensors, max proposals, tokens/RAM  
+- Unattended: **propose-only** for harness files; allowlisted low-risk archive may auto  
+- Stages: ingest → cluster → memory apply → harness draft → archive → report  
+- Report: **ops counts**, not intimate quotes  
+
+### 7.1 Memory path outputs
+
+| Output | Notes |
 | --- | --- |
-| `open_feedback_count` | Anti-sink health (must stay bounded) |
-| `dream_absorb_rate` / archive rate | Maintenance digests |
-| `proposal_accept_rate` | Parser + proposal quality |
-| `error_recurrence` | Same **stable error key** after apply (entity_id + kind + claim_hash) |
-| `kind_mix` | Exploratory only (parse noise) |
-| `feedback_rate` | Trend only; ambiguous without denominators |
+| Alias / unalias | Primary digital-brain self-evolution |
+| LearningLog | Always on identity ops |
+| Dispute / trust | Light; not whole-Person nuke |
+| Rare correction journals | Append only; **capped** |
+| Archive/redact sensors | Strip raw for intimate / default |
 
-### Later (science upgrade)
+**Not in scope:** global weight recompute, bulk relation rewrite, silent journal DELETE.
 
-- **Exposure denominators:** rates per factual claim / graph write / retrieval, not only per turn  
-- **Active sampling:** ~5–10% turns, 1-tap rubric (correct / invent / wrong entity / meh)  
-- **Holdouts** before harness auto-promote  
-- **Anti-Goodhart:** joint invent↓ + claim coverage / utility — refuse pure invent optimization  
-- Dual parse (rules + LLM); drop low-confidence kinds from mix  
+### 7.2 Harness path outputs
 
-Reporting: Cypher / weekly aggregates — **no raw intimate samples** in default dumps.
+| Mechanism | Description | Gate |
+| --- | --- | --- |
+| **A · Unified diff** | Patch against skill/agent MD | Human merge/commit |
+| **B · Learned overlay** | Write `learned/<topic>.md`; core skill includes if present | Human approve; easy disable |
+| **C · Structured AgentPolicy** | JSON enums in Neo4j | Explicit activate; files still win |
+
+**Recommended:** A + B for real behaviour change; C for knobs only.
+
+**SOUL:** never silent-write; explicit human edit only.
+
+### 7.3 How MD harness improves (even though skills are files)
+
+```text
+1 Sensors (Feedback + RunEvent success/fail/gotcha)
+2 Maintenance clusters failure classes + success gotchas
+3 Draft harness change (diff and/or overlay and/or policy)
+4 Human gate
+5 Merge into plugins/digital-brain-buddy/...
+6 Next session host reloads skills → new behaviour
+```
+
+Files are the **deployable harness**. Graph/logs are the **evidence warehouse**. Maintenance is the **compiler** from evidence → proposed harness patches.
+
+### 7.4 Precedence
+
+1. Hard skill / SOUL / overlay files  
+2. Active structured AgentPolicy (named slots only)  
+3. Model default  
 
 ---
 
-## 13. Schema sketch
+## 8. Write matrix
+
+| Node / artifact | Path | Notes |
+| --- | --- | --- |
+| JournalEntry | `append_journal_entry` only | Embedding server-side |
+| Feedback | `create_feedback` MCP (preferred) | No journal embedding index |
+| RunEvent | MERGE graph and/or JSONL append | No journal index |
+| Alias, LearningLog, DreamRun, AgentPolicy | `write_neo4j_cypher` MERGE | No DELETE default |
+| Skill overlays / diffs | filesystem | Outside Neo4j |
+
+---
+
+## 9. Schema sketch (additions)
 
 ### Feedback
 
 ```text
 (:Feedback {
-  id: UUID,                    // MERGE key
-  raw_text: string?,           // stripped/null after archive (esp. intimate)
-  raw_hash: string?,
-  kind: entity_wrong | claim_false | miss | invent | praise | other,
-  status: open | proposed | accepted | rejected | applied | archived,
-  sensitivity: public_ops | personal | intimate | legal,
-  assistant_claim: string?,    // stripped on archive
-  proposal_id: string?,
-  session_ref: string?,
-  created_at, resolved_at?,
-  absorbed_by_dream_id: string?
+  id, kind, status, sensitivity,
+  raw_text?, raw_hash?, assistant_claim?,
+  proposal_id?, created_at, resolved_at?,
+  absorbed_by_dream_id?
 })
 ```
 
-### DreamRun (maintenance run)
+Statuses: `open | proposed | accepted | rejected | applied | archived`
+
+### RunEvent
+
+```text
+(:RunEvent {
+  id, timestamp, route, approach, tool?,
+  outcome, error_class?, latency_ms?,
+  session_ref?, host?, sensitivity,
+  notes?, absorbed_by_dream_id?
+})
+```
+
+### DreamRun
 
 ```text
 (:DreamRun {
-  id: UUID,
-  host_tag: string?,
-  started_at, finished_at,
-  stage: ingest|propose|apply|archive|done|failed,
-  summary: string,             // ops-only; no intimate quotes
-  metrics_json: string,        // counters only
-  base_commit: string?,
-  lease_until: datetime?
+  id, host_tag?, stage, started_at, finished_at,
+  summary,              // ops-only
+  metrics_json,         // counters
+  base_commit?,         // for skill diffs
+  harness_patch_paths?, // relative paths proposed
+  lease_until?
 })
 ```
 
-### AgentPolicy (structured only)
+### AgentPolicy
 
 ```text
 (:AgentPolicy {
-  key: string,                 // enum-like controlled vocabulary
-  version: int,
-  body_json: string,           // JSON object, schema-validated at write
-  active: boolean,             // at most one active per key
-  source_dream_id: string?,
-  expires_at: datetime?,       // required for relationship-domain policies
-  domain: ops | retrieval | grounding | relationship
+  key, version, body_json,  // schema-validated JSON
+  active, domain, expires_at?, source_dream_id?
 })
 ```
 
-### Relationships
-
-```text
-(:Feedback)-[:ABOUT]->(entity|journal)
-(:Feedback)-[:ABSORBED_BY]->(:DreamRun)
-(:DreamRun)-[:PROPOSED_POLICY]->(:AgentPolicy)
-```
+At most one `active` per `key`. Reject free-text instruction bodies.
 
 ### Existing
 
-- `Alias {from_name, to_name, canonical_id, active?}`  
-- `LearningLog {type, entity, timestamp, feedback_id?, reason?}`  
-- JournalEntry **only** via `append_journal_entry`  
-
-### Write matrix (hard rules)
-
-| Node | Path | Shape |
-| --- | --- | --- |
-| JournalEntry (life + rare corrections) | `append_journal_entry` | CAS + server embedding |
-| Feedback | **`create_feedback` / `upsert_feedback` MCP tool** (preferred); else MERGE Cypher template | No embedding |
-| DreamRun, AgentPolicy, Alias, LearningLog | `write_neo4j_cypher` | **MERGE** on stable id/key; property SET; no DELETE |
-| Status / archive / activate | same | CAS-friendly status transitions |
-
-- Feedback **never** in journal embedding index  
-- Unique constraints: `Feedback.id`, `DreamRun.id`, `AgentPolicy(key,version)`; single active per `key`  
-- Policy write rejects free-text instruction bodies / unknown keys  
-- Dual writers: Feedback status CAS; dream exclusive lease  
+- Alias, LearningLog, JournalChain / FOLLOWS / HEAD via append protocol only  
 
 ---
 
-## 14. Session protocols (skills)
+## 10. Evaluation (process health)
 
-### Buddy
-
-- Routes: `SKIP | READ | WRITE | FEEDBACK`  
-- FEEDBACK intent gates (section 7); never `append_journal_entry` for praise/👎  
-- Hard confirm for Alias/demote  
-- BOOTSTRAP: structured active policies only; no archived Feedback  
-- Session negation cache for recent claim_false / invent  
-
-### Maintenance skill
-
-- Name: `digital-brain-dream` / command `/digital-brain-dream` (user copy: “memory hygiene”)  
-- Lease → bounded load → cluster → effects → redact archive → DreamRun  
-- Unattended propose-only for harness  
-- Never buddy-tone monologue; never silent SOUL  
-
----
-
-## 15. Privacy / sensitivity
-
-| Control | Rule |
+| Metric | Role |
 | --- | --- |
-| Sensitivity tier | Tag Feedback (and optionally journals/policies): `public_ops` \| `personal` \| `intimate` \| `legal` |
-| Redaction | Intimate raw stripped on archive; default strip all raw after absorb |
-| Dream summaries | Ops counts only in default report |
-| Relationship policies | ≥N confirms over ≥D days + `expires_at`; no third-party character judgments as permanent policy |
-| Regret | `revoke_feedback` cascade (section 6) |
-| Export | Profiles; default scrub intimate Feedback text; metrics without raw samples |
-| Shared sessions | Never load intimate policies/Feedback outside main private session |
+| `open_feedback_count` / open high-signal RunEvents | Anti-sink |
+| `error_recurrence` (stable keys) | Same mistake after fix |
+| `success_gotcha_promote_rate` | Useful successes became overlay/skill rules |
+| `proposal_accept_rate` | Confirm UX / parse quality |
+| `harness_diff_accept` | Human merged skill patches |
+| `tool_fail_rate` by `error_class` | Infra / skill procedure health |
+| free-form `feedback_rate` | Trend only — not causal truth |
+
+Later: exposure denominators, sampled rubrics, holdouts before auto harness promote.
 
 ---
 
-## 16. Phased rollout (resequenced)
+## 11. Privacy
+
+- Sensitivity tiers on Feedback / RunEvent  
+- Redact raw on archive  
+- Dream summaries = counts  
+- `revoke_feedback` regret path  
+- Default exports scrub intimate sensor text  
+- Shared sessions: no intimate sensors/policies  
+
+---
+
+## 12. Phased rollout
 
 | Phase | Deliverable |
 | --- | --- |
-| **v0.0** | Disable/report-only auto DETACH merge on wake path |
-| **v0** | `create_feedback` MCP + FEEDBACK route + heuristics; hot only; **not** in BOOTSTRAP; process metrics on open_count |
-| **v1** | Structured propose + hard confirm; Alias/demote templates; LearningLog; unalias; pin set |
-| **v1.1** | Sensitivity + archive redaction + revoke_feedback |
-| **v1.5** | Maintenance skill: lease, budget, digest, redact archive, DreamRun; file diffs as text + base SHA; structured AgentPolicy optional |
-| **v2** | Optional high-precision auto-Alias (same hard gates); harness PR loop; sampled labels; thin Claim if invent persists |
+| **v0.0** | Disable/report-only auto DETACH merge |
+| **v0** | `create_feedback` + FEEDBACK route; sensors out of BOOTSTRAP |
+| **v0.5** | RunEvent logging (JSONL and/or graph) for success/fail/approach |
+| **v1** | Hard confirm + Alias/demote + LearningLog + unalias |
+| **v1.1** | Redaction + revoke |
+| **v1.5** | Maintenance: memory hygiene + skill **diff/overlay** proposals + DreamRun |
+| **v2** | Gated auto-Alias; richer harness PR loop; optional thin Claim if invent persists |
 
 ---
 
-## 17. Risks and mitigations
+## 13. Critics panel summary (rev 3, still in force)
 
-| Risk | Mitigation |
-| --- | --- |
-| Feedback sink (storage) | Redaction, hard open gate, praise counters, GC |
-| Soft confirm abuse | Pending proposal + hard token for irreversible ops |
-| Self-injection via policy | Structured JSON only; files win; sanitize authoring context |
-| Auto-merge destruction | Kill DETACH path; report-only dupes |
-| Dream neglect | Scheduled primary window; hard gate; last_run nag |
-| Dual host races | Exclusive lease + status CAS |
-| Goodhart metrics | Process health only until sampling/holdouts |
-| Intimate residue | Sensitivity tiers, redaction, export scrub, regret |
-| Journal pollution | Write matrix + skill “never append on FEEDBACK” |
-| False FEEDBACK | Intent gates; silent park; confirm budget |
+Hard amendments: write matrix + create_feedback; hard confirm; kill auto DETACH; archive redaction; structured policy only; resequence; metrics as process health; maintenance framing not “soul dreams.”
+
+**Kill criteria:** free-text policy as system prompt; Alias on soft yes; auto DETACH merge; sensors in journal vectors; silent SOUL rewrite; whole plugin in Neo4j; unbounded open sensors without hard gate.
 
 ---
 
-## 18. Direct answers (design Q&A)
+## 14. FAQ
 
 | Question | Answer |
 | --- | --- |
-| How not to sink in feedback? | Staging + hard open gate + **redacting archive** + promote Alias/policy + maintenance absorb + praise without nodes |
-| Evolution sessions? | **Yes — maintenance/hygiene** (dreams), separate from buddy wake |
-| Plugin in DB? | **No whole plugin.** Graph: life + Alias + structured policy. Files: skills/SOUL via gated diffs |
-| What are dreams? | Offline **maintenance** that digests sensors and proposes approved patches — not overnight personality rewrite |
-| How know it’s true? | Recurrence of **stable error keys** + process health; free-form rate is not causal truth; sampling later |
+| Where is the spec? | **This file** — `docs/superpowers/specs/2026-07-10-self-evolving-quality-dreams-design.md` |
+| What about the HTML? | Readable companion under `tmp/` (gitignored), not source of truth |
+| Self-evolving how? | Sensors → maintenance → **memory ops + harness file patches** |
+| Only Feedback? | **No** — also success/fail RunEvents and approach gotchas |
+| Only optional policy? | **No** — policy is thin; skills/overlays are the real harness change |
+| How if skills are MD? | Maintenance emits diffs/overlays; human merges; host reloads |
 
 ---
 
-## 19. Implementation notes (for plan)
+## 15. Implementation notes (for plan)
 
-- MCP: `create_feedback` / `upsert_feedback`, optional `record_dream_run`, `revoke_feedback`  
-- Unique constraints + AgentPolicy schema validation at write  
-- Remove or gate `consistency_checker` DETACH DELETE  
-- Buddy skill FEEDBACK route + confirm state machine  
-- Maintenance skill + lease file or graph lease node  
-- Metrics Cypher on aggregates  
-- Tests: bootstrap excludes Feedback; no embed on Feedback; hard confirm required for Alias; archive redaction; lease exclusivity; MERGE idempotency  
+- MCP: `create_feedback`, optional `record_run_event`, `record_dream_run`, `revoke_feedback`  
+- Skill: emit RunEvent on WRITE/READ failures and notable successes  
+- `learned/` overlay convention + session skill include rule  
+- Maintenance skill + lease  
+- Disable consistency_checker DETACH path  
+- Tests: sensors not in bootstrap; hard confirm; archive redaction; harness patch is propose-only unattended  
 
 ---
 
-## 20. Approval
+## 16. Approval history
 
 | Rev | Note |
 | --- | --- |
-| rev 1–2 | Direction approved in principle (“I like it so far”) |
-| rev 3 | Critics panel amendments incorporated; user asked to patch spec |
+| 1–2 | Direction OK (“I like it so far”) |
+| 3 | Critics panel amendments |
+| 4 | Sensors beyond Feedback; harness file evolution; explicit dual path |
 
-**Next:** user reviews rev 3; then implementation plan (writing-plans). No implementation until explicit go-ahead after plan review.
+**Next:** implementation plan when user green-lights rev 4. No implementation until plan approval.
