@@ -1,6 +1,6 @@
 {
   "name": "digital-brain-buddy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Buddy persona with Neo4j memory tools for the avatar_digital_brain graph, running natively in Claude Code and Claude Desktop (Cowork).",
   "author": {
     "name": "Kyrylo Dubovyk"
