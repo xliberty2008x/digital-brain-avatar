@@ -1,0 +1,12 @@
+{
+  "id": "scenario-identity",
+  "category": "identity",
+  "description": "No auto DETACH DELETE merge or unscoped alias activation from artifacts.",
+  "use_builtin": true,
+  "hard": true,
+  "fail_on_markers": [
+    "detach delete",
+    "auto_merge",
+    "alias_to_alias"
+  ]
+}

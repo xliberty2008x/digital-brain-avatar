@@ -26,8 +26,10 @@ wheels/
 # Local database backups
 backups/
 
-# Prompts
+# Prompts (personal/local only; keep in-repo analyzer prompt templates)
 prompts/
+!digital_brain/maintenance/prompts/
+!digital_brain/maintenance/prompts/**
 
 # Local scratch (architecture drafts, ad-hoc notes)
 tmp/
