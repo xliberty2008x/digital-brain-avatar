@@ -722,20 +722,20 @@ housekeeping, waiting proposals, and ambiguity left untouched. Evidence uses
 progressive disclosure. Approval, application, deployment, and effectiveness
 are separate messages.
 
-- [ ] Give Claude/Grok maintainer agents explicit read + typed proposal tool
+- [x] Give Claude/Grok maintainer agents explicit read + typed proposal tool
   allowlists; omit Bash/Edit/generic write/activation.
-- [ ] For Codex, rely on server-side capability separation because
+- [x] For Codex, rely on server-side capability separation because
   `agents/openai.yaml` is not a hard per-worker tool boundary.
-- [ ] Add commands for run/status/review/show/try/apply/defer/reject/undo/history/privacy,
+- [x] Add commands for run/status/review/show/try/apply/defer/reject/undo/history/privacy,
   but only expose apply/try once operator paths and phase gates exist.
-- [ ] Test that the skill never directs unattended identity, policy, overlay,
+- [x] Test that the skill never directs unattended identity, policy, overlay,
   code, SOUL, or journal changes.
-- [ ] Test exact-token intent does not claim to be authorization.
-- [ ] Test reports contain counts/ids and processing mode, not raw quotes.
-- [ ] Bump the plugin to `0.3.0` because MCP tools and the session contract
+- [x] Test exact-token intent does not claim to be authorization.
+- [x] Test reports contain counts/ids and processing mode, not raw quotes.
+- [x] Bump the plugin to `0.3.0` because MCP tools and the session contract
   change; update all host/cache manifests including `.agents` marketplace and
   create a fresh Codex suffix.
-- [ ] Validate manifests and hosts:
+- [x] Validate manifests and hosts:
 
   ```bash
   python3 -m json.tool plugins/digital-brain-buddy/.mcp.json

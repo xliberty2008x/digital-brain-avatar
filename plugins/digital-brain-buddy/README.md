@@ -7,7 +7,7 @@ a SessionStart compose hook, and Neo4j Cypher MCP config.
 **Personal identity:** `SOUL.MD` in the plugin root is created per user (from
 `assets/SOUL.template.md`) and is **gitignored**. Do not commit a personal SOUL.
 
-**Version:** see `version.json` (currently `0.2.0`).  
+**Version:** see `version.json` (currently `0.3.0`).  
 **License:** MIT (same as the repository root).
 
 ## What you get
@@ -15,11 +15,13 @@ a SessionStart compose hook, and Neo4j Cypher MCP config.
 | Piece | Purpose |
 | --- | --- |
 | `assets/SOUL.template.md` + local `SOUL.MD` | Shipped template; per-user identity (gitignored) |
-| `digital-brain-buddy-session` | Main session workflow |
+| `digital-brain-buddy-session` | Main session workflow (incl. FEEDBACK) |
 | `digital-brain-buddy-read-memory` | Bounded graph reads |
 | `digital-brain-buddy-write-memory` | Server-owned JournalEntry append |
+| `digital-brain-buddy-maintenance` | Guided report-only DreamRun / proposal review |
 | `digital-brain-buddy-graph-mcp` | Low-level Cypher / MCP patterns |
 | `/digital-brain-up` + SessionStart hook | Bring up local Compose stack |
+| `/digital-brain-dream` | Manual maintenance command surface |
 
 ## Install (local marketplace)
 
@@ -40,7 +42,7 @@ From the **repository root** (this checkout is the marketplace source):
 MCP URL (literal, loopback): `http://localhost:8000/api/mcp/`  
 Configured in `.mcp.json`. Hosts that do not expand env vars need the literal URL.
 
-## Journal write contract (0.2.0)
+## Journal write contract (0.2.0+)
 
 Writers must **not** create JournalEntry / FOLLOWS / HEAD with raw Cypher.
 
@@ -52,6 +54,23 @@ Writers must **not** create JournalEntry / FOLLOWS / HEAD with raw Cypher.
 
 Details: skill `digital-brain-buddy-write-memory` and repo
 `mcp_servers/cypher/README.md`.
+
+## Maintenance / DreamRun (0.3.0)
+
+Manual, **report-only** by default. Prefer:
+
+```bash
+uv run python scripts/digital_brain_dream.py run \
+  --evidence tests/fixtures/dreams/evidence/sample_ledger.json \
+  --cutoff 2026-07-10T12:00:00Z \
+  --generation-id <pinned-id> \
+  --dry-store
+```
+
+Or the host command `/digital-brain-dream run`. Reports expose counts, ids, and
+`processing_mode` — not raw intimate quotes. Activation (Alias, overlay trial)
+stays on interactive operator scripts; maintainer agents omit Bash/Edit and
+activation tools. No scheduled run or heartbeat by default.
 
 ## Versioning
 

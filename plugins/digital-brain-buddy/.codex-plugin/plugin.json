@@ -1,7 +1,7 @@
 {
     "name": "digital-brain-buddy",
-    "version": "0.2.0+codex.20260710013006",
-    "description": "Repo-local buddy-session plugin for the avatar_digital_brain persona, SOUL file, and Neo4j MCP memory workflow.",
+    "version": "0.3.0+codex.20260710114315",
+    "description": "Repo-local buddy-session plugin for the avatar_digital_brain persona, SOUL file, Neo4j MCP memory workflow, quality sensors, and guided report-only maintenance.",
     "author": {
         "name": "Kyrylo Dubovyk"
     },
@@ -11,14 +11,16 @@
         "neo4j",
         "buddy",
         "memory",
-        "persona"
+        "persona",
+        "maintenance",
+        "dreams"
     ],
     "skills": "./skills/",
     "mcpServers": "./.mcp.json",
     "interface": {
         "displayName": "Digital Brain Buddy",
-        "shortDescription": "Buddy persona with Neo4j memory tools",
-        "longDescription": "Run a direct, pattern-aware buddy session on top of the avatar_digital_brain memory graph. The default internal pattern is: main session agent keeps the conversation, a reader gathers graph evidence, and a writer persists bounded memory updates when needed. Bundles the SOUL file, session workflow, delegated read/write memory skills, identity bootstrap guidance, and Neo4j Cypher MCP configuration in one repo-local plugin. v0.2 ships the server-owned JournalEntry append protocol (CAS head, receipts, hardened generic Cypher).",
+        "shortDescription": "Buddy persona with Neo4j memory and guided maintenance",
+        "longDescription": "Run a direct, pattern-aware buddy session on top of the avatar_digital_brain memory graph. The default internal pattern is: main session agent keeps the conversation, a reader gathers graph evidence, and a writer persists bounded memory updates when needed. v0.3 adds typed quality sensors (FEEDBACK), harness generation pins, and a guided report-only maintenance skill (/digital-brain-dream) with a capability-fenced maintainer worker — activation stays on operator scripts only.",
         "developerName": "Kyrylo Dubovyk",
         "category": "Productivity",
         "capabilities": [
@@ -29,7 +31,8 @@
             "Start a buddy session and use graph memory",
             "Read my Digital Brain before answering",
             "Store this thought using buddy rules",
-            "Use the plugin's default delegated memory workflow"
+            "Use the plugin's default delegated memory workflow",
+            "Run a report-only digital-brain maintenance dream"
         ],
         "brandColor": "#1F6B5C",
         "screenshots": []

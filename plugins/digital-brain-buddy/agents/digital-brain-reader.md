@@ -26,3 +26,5 @@ directly and do not write to the graph.
 - FEEDBACK evidence (`create_feedback`) and review cards belong to the parent
   session agent, not this worker.
 - Alias apply/revoke is operator-only and never part of read retrieval.
+- DreamRun / maintenance activation is out of scope; use
+  `digital-brain-maintainer` + operator CLIs for report-only maintenance.

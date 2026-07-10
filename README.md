@@ -13,11 +13,12 @@ and Neo4j endpoints are unauthenticated. See [SECURITY.md](SECURITY.md).
 | --- | --- | --- |
 | Cypher MCP | `mcp_servers/cypher/` | Read/write Cypher + server-owned JournalEntry append |
 | Compose stack | `docker-compose.yml` | Neo4j Enterprise, mcp-cypher, Ollama (`bge-m3`) |
-| Buddy plugin | `plugins/digital-brain-buddy/` | SOUL, skills, SessionStart compose hook |
+| Buddy plugin | `plugins/digital-brain-buddy/` | SOUL, skills, SessionStart compose hook, maintenance |
 | ADK agents | `digital_brain/` | Multi-agent WRITE/READ paths (optional) |
+| Maintenance | `digital_brain/maintenance/`, `scripts/digital_brain_*.py` | Report-only DreamRun + operator apply |
 | Schema contract | `docs/GRAPH_SCHEMA_CONTRACT.md` | Node/relationship rules |
 
-**Plugin version (host cache):** `0.2.0` — server-owned append protocol.  
+**Plugin version (host cache):** `0.3.0` — quality sensors + guided maintenance.  
 **Python package version** (`pyproject.toml`): independent scaffolding version.
 
 ## Requirements

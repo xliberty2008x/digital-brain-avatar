@@ -10,6 +10,8 @@ The goal is consistency:
 - writer worker persists one bounded memory update
 - FEEDBACK evidence and review cards stay with the parent session agent
   (subagents never mint ActivationAuthority or apply Alias)
+- maintenance / DreamRun review uses `digital-brain-maintainer` (report-only;
+  no Bash/Edit/activation)
 
 If the host runtime has an explicit permission gate for subagents, this file still defines the default intended pattern. The parent session agent should switch to it as soon as that gate is satisfied.
 
@@ -161,6 +163,30 @@ Constraints:
 - do not create Alias, ActivationAuthority, or EntityProtection nodes
 - do not treat FEEDBACK / claim_false as a journal write path
 - do not produce buddy-tone prose for the user
+```
+
+## Maintainer Worker (report-only)
+
+Use for DreamRun report framing and proposal review cards. Never for activation.
+
+```text
+Use $digital-brain-buddy-maintenance (or native digital-brain-maintainer).
+
+Task type: MAINTENANCE_REVIEW
+processing_mode expectation: report_only / local_only
+
+What I need from you:
+- summarize the public DreamRun report: counts, ids, processing_mode
+- list waiting_for_owner proposal ids and deliberately_left_alone ids
+- prepare at most one progressive-disclosure review card when asked
+- never paste raw intimate Feedback/journal quotes in the default report
+
+Constraints:
+- host tools: Read/Grep/Glob only — no Bash, Edit, Write, or activation
+- do not call apply/activate scripts or mint ActivationAuthority
+- exact-token APPLY alias:<id> is intent only, not authorization
+- no scheduled run, no heartbeat, no shared-session private proposal queue
+- approval, application, deployment, and effectiveness are separate messages
 ```
 
 ## Parent-Agent Reminder

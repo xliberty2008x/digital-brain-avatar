@@ -28,4 +28,7 @@ recompute digests mid-session; never attach SOUL body text.
 - Do not treat FEEDBACK or `claim_false` as a JournalEntry write path; identity
   corrections stay propose-only until the operator apply script runs.
 - Generic acks (`yes`/`ok`/👍) are never activation authority.
+- Exact-token `APPLY alias:…` intent is not authorization.
+- Do not apply maintenance overlays, policy, SOUL, or code patches; maintenance
+  is report-only via `digital-brain-maintainer` / operator scripts.
 

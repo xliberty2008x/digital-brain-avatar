@@ -136,12 +136,18 @@ acknowledgements alone (`yes`, `ok`, `👍`, “sure”) are **not** FEEDBACK an
 - Generic ack rejection: `yes` / `ok` / 👍 / “sure” / “go ahead” never apply
   Alias, EntityProtection, policy, overlay, or SOUL changes.
 - User may express intent with an exact stable token such as
-  `APPLY alias:<proposal_id>`. That token is **intent only** — a separately
-  permissioned host/operator script
+  `APPLY alias:<proposal_id>`. That token is **intent only — not authorization**
+  — a separately permissioned host/operator script
   (`scripts/digital_brain_apply_proposal.py`) mints a single-use authority and
   applies the effect. Models and MCP tools cannot consume authority.
 - Operator credentials, coordinator secrets, and apply scripts must stay out of
   maintainer/analyzer toolsets. There is no unattended `--yes` apply path.
+- Offline **maintenance / DreamRun** is a separate product surface
+  (`../digital-brain-buddy-maintenance/SKILL.md`, command `/digital-brain-dream`,
+  native agent `digital-brain-maintainer`). Do not fold unattended identity,
+  policy, overlay, code, SOUL, or journal changes into the buddy session.
+  Default maintenance is manual report-only; no schedule/heartbeat; no private
+  proposal queue in shared/non-owner sessions.
 
 ### Evidence write
 
@@ -178,10 +184,12 @@ path. Park for maintenance when evidence is thin. Do not invent canonical ids.
 
 Use this mode by default when the host environment allows delegated execution.
 On Claude Code and Cowork, the reader/writer/entity-check subagents are
-`digital-brain-reader`, `digital-brain-writer`, and `digital-brain-entity-check`
-(see `../../agents/`). On Codex, use the delegation shape declared in each
-skill's `agents/openai.yaml` plus the prompt templates in
-`references/subagent-prompts.md`.
+`digital-brain-reader`, `digital-brain-writer`, `digital-brain-entity-check`,
+and (for maintenance only) `digital-brain-maintainer` (see `../../agents/`).
+On Codex, use the delegation shape declared in each skill's `agents/openai.yaml`
+plus the prompt templates in `references/subagent-prompts.md`. Note: Codex
+`agents/openai.yaml` is **not** a hard per-worker tool boundary — rely on
+server-side capability separation for maintenance.
 
 - Main session agent owns:
   - reading `SOUL.MD`
@@ -345,3 +353,6 @@ Do not store:
 - Do not load overlay files from draft/proposal trees, plugin paths, or bare
   presence; only manifest-listed exact digests under `dreams/active-overlays/`.
 - Do not call `scripts/digital_brain_activate_overlay.py` from the session agent.
+- Do not run unattended DreamRun activation from the buddy session; use
+  `/digital-brain-dream` + `digital-brain-buddy-maintenance` (report-only first).
+- Do not treat exact-token `APPLY alias:…` intent as authorization.

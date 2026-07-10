@@ -1,0 +1,33 @@
+{
+  "name": "avatar-digital-brain-local",
+  "interface": {
+    "displayName": "Avatar Digital Brain Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "digital-brain-buddy",
+      "version": "0.3.0",
+      "source": {
+        "source": "local",
+        "path": "./plugins/digital-brain-buddy"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "frontend-design",
+      "source": {
+        "source": "local",
+        "path": "./plugins/frontend-design"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Design"
+    }
+  ]
+}

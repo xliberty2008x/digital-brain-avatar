@@ -9,10 +9,11 @@ changes so installs land in a new cache path and reloads actually pick up work.
 
 | File | Role |
 | --- | --- |
-| `version.json` | Single source of truth: plain SemVer string, e.g. `"0.2.0"` |
+| `version.json` | Single source of truth: plain SemVer string, e.g. `"0.3.0"` |
 | `.claude-plugin/plugin.json` → `version` | Must equal `version.json` |
 | `.codex-plugin/plugin.json` → `version` | Base SemVer **or** `BASE+codex.YYYYMMDDHHMMSS` to force a new Codex cache dir |
 | repo `.claude-plugin/marketplace.json` → `plugins[].version` | Must equal `version.json` for the digital-brain-buddy entry |
+| repo `.agents/plugins/marketplace.json` → `plugins[].version` | Host/cache marketplace; must equal `version.json` for digital-brain-buddy |
 
 Do not invent a third number. If they disagree, fix them before merge.
 
@@ -22,8 +23,8 @@ While the major is `0`, treat the **middle** number as the product surface:
 
 | Bump | When | Examples |
 | --- | --- | --- |
-| **PATCH** `0.2.x` | Docs/skills wording only; no new tools; no change to write/read contract | Typo, clearer receipt outcomes, compose timeout tweak docs |
-| **MINOR** (middle digit: `0.2.0` → `0.3.0`) | New capability or **breaking agent contract**, still compatible with same MCP stack family | New MCP tools agents must call; append protocol; new hooks; renamed skills |
+| **PATCH** `0.3.x` | Docs/skills wording only; no new tools; no change to write/read/maintenance contract | Typo, clearer receipt outcomes, compose timeout tweak docs |
+| **MINOR** (middle digit: `0.2.0` → `0.3.0`) | New capability or **breaking agent contract**, still compatible with same MCP stack family | New MCP tools agents must call; append protocol; maintenance skill; new hooks; renamed skills |
 | **MAJOR** `1.0.0+` | Stable public surface, or intentional hard break for all hosts | Shipping as a published marketplace plugin; removing a skill agents rely on |
 
 Rule of thumb: **if buddy writers must change how they call MCP or how they
@@ -55,7 +56,7 @@ the **plugin package hosts cache**, not Docker layers.
 2. Copy the same base into `.claude-plugin/plugin.json`.
 3. Set `.codex-plugin/plugin.json` to the base or `BASE+codex.<utc stamp>`.
 4. Set the same base on the digital-brain-buddy entry in repo
-   `.claude-plugin/marketplace.json`.
+   `.claude-plugin/marketplace.json` **and** `.agents/plugins/marketplace.json`.
 5. Add a short entry to `CHANGELOG.md`.
 6. Merge to `master`.
 7. Refresh hosts so they install the new version:
@@ -64,7 +65,7 @@ the **plugin package hosts cache**, not Docker layers.
    - Grok: `grok plugin update digital-brain-buddy`
 8. Rebuild local MCP: `CLAUDE_PROJECT_DIR=$PWD bash plugins/digital-brain-buddy/scripts/compose-up.sh`
 
-## Why 0.2.0
+## Why 0.3.0
 
 `0.1.0` was the first local buddy packaging (skills, hooks, MCP URL).
 
@@ -72,3 +73,8 @@ the **plugin package hosts cache**, not Docker layers.
 receipts, hardened generic Cypher, append-first skills/agents, readiness and
 compose resource gates. Hosts still on a `0.1.0` cache teach the obsolete
 write path even when the MCP server rejects it.
+
+`0.3.0` is the **quality + maintenance session contract**: FEEDBACK sensors,
+harness generation pins, guided report-only DreamRun skill/command, and a
+capability-fenced maintainer agent. MCP tools and the agent contract change;
+hosts must pick up a new cache path (including a fresh Codex `+codex.` suffix).

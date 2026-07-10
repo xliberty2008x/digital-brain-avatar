@@ -13,6 +13,7 @@ wheels/
 *.json
 !plugins/**/*.json
 !.claude-plugin/*.json
+!.agents/plugins/marketplace.json
 !tests/fixtures/**/*.json
 .env
 .env.*

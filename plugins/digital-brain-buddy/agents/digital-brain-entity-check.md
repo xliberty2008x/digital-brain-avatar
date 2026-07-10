@@ -43,3 +43,4 @@ Never write to the graph and never produce final buddy-voice prose.
 - A positive shared-connections signal is evidence for a later operator-reviewed
   Alias proposal — not online activation.
 - FEEDBACK `entity_wrong` / `claim_false` paths stay outside this worker.
+- Do not run maintenance apply/try paths; operator-only scripts own activation.

@@ -1,7 +1,7 @@
 {
   "name": "digital-brain-buddy",
-  "version": "0.2.0",
-  "description": "Buddy persona with Neo4j memory tools for the avatar_digital_brain graph, running natively in Claude Code and Claude Desktop (Cowork).",
+  "version": "0.3.0",
+  "description": "Buddy persona with Neo4j memory tools, FEEDBACK quality sensors, and guided report-only maintenance (DreamRun) for the avatar_digital_brain graph.",
   "author": {
     "name": "Kyrylo Dubovyk"
   },
@@ -11,6 +11,8 @@
     "neo4j",
     "buddy",
     "memory",
-    "persona"
+    "persona",
+    "maintenance",
+    "dreams"
   ]
 }
