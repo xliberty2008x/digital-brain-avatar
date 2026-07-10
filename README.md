@@ -52,11 +52,20 @@ Health: `GET http://127.0.0.1:8000/readyz` checks Neo4j **and** a real 1024-dim 
 
 SessionStart / `compose-up.sh` pins a harness generation for the host session
 and writes a well-known **active** pin under `$DIGITAL_BRAIN_STATE_DIR/active/`
-(id only; no SOUL content). `docker-compose.yml` mounts that state directory
-into `mcp-cypher` so deterministic RunEvent instrumentation can resolve the pin
-even when the container does not inherit `DIGITAL_BRAIN_HARNESS_GENERATION_ID`.
+(id only; no SOUL content). Default state dir matches XDG
+(`$DIGITAL_BRAIN_STATE_DIR` or `$XDG_STATE_HOME/digital-brain` or
+`~/.local/state/digital-brain`). `compose-up.sh` resolves and exports
+`DIGITAL_BRAIN_STATE_DIR` before `docker compose up` so the mcp-cypher volume
+mount tracks the same path the pin script writes. Dual-process emit requires
+this shared state pin.
+
+**Limitation:** the active pin is a single well-known path
+(`active/harness_generation.{id,json}`), so only one host session’s pin is
+“active” for MCP at a time. Concurrent SessionStarts overwrite it; use
+per-session env (`DIGITAL_BRAIN_HARNESS_GENERATION_ID`) or session pin files
+under `sessions/<id>/` when multiple sessions must instrument in parallel.
 Host timeout paths use an in-process QualityStore recorder (not model-facing
-`record_run_event`). Dual-process emit requires this shared state pin.
+`record_run_event`).
 
 ## JournalEntry write contract (v0.2)
 

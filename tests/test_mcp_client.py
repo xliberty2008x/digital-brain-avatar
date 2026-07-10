@@ -1,3 +1,5 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
@@ -355,6 +357,52 @@ class McpClientTests(IsolatedAsyncioTestCase):
         self.assertEqual(args[0], "record_run_event")
         self.assertEqual(args[1]["harness_generation_id"], "hg-from-env")
         self.assertEqual(args[1]["outcome_source"], "mcp")
+
+    async def test_record_run_event_falls_back_to_active_pin_file(self) -> None:
+        """Host sensors resolve active pin when DIGITAL_BRAIN_HARNESS_GENERATION_ID is unset."""
+        response = {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        '{"outcome":"created","run_event_id":"re-active",'
+                        '"outcome_source":"model_advisory"}'
+                    ),
+                }
+            ]
+        }
+        with TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            active = state / "active"
+            active.mkdir(parents=True)
+            (active / "harness_generation.id").write_text(
+                "hg-from-active-pin\n", encoding="utf-8"
+            )
+            # Empty env pin keys force fallthrough to active pin under STATE_DIR.
+            with patch.dict(
+                "os.environ",
+                {
+                    "DIGITAL_BRAIN_STATE_DIR": str(state),
+                    "DIGITAL_BRAIN_HARNESS_GENERATION_ID": "",
+                    "DIGITAL_BRAIN_HARNESS_PIN_PATH": "",
+                },
+                clear=False,
+            ):
+                with patch(
+                    "digital_brain.tools.mcp_client.call_mcp_tool",
+                    new=AsyncMock(return_value=response),
+                ) as mocked_call:
+                    receipt = await record_run_event(
+                        id="re-active",
+                        route="READ",
+                        tool_outcome="empty",
+                        tool="read_neo4j_cypher",
+                        outcome_source="model_advisory",
+                    )
+
+        self.assertEqual(receipt["outcome"], "created")
+        args = mocked_call.await_args.args
+        self.assertEqual(args[1]["harness_generation_id"], "hg-from-active-pin")
 
     async def test_quality_write_timeout_reconciles_via_receipt_not_retry(self) -> None:
         async def side_effect(tool_name, arguments, **_kwargs):

@@ -96,6 +96,13 @@ if [ "$docker_memory_bytes" -lt "$MIN_DOCKER_MEMORY_BYTES" ]; then
   warn_and_exit "Docker has ${docker_memory_mib} MiB available; allocate at least 6 GiB in Docker Desktop before bringing up Neo4j + Ollama"
 fi
 
+# Resolve host state dir before any compose up that mounts it into mcp-cypher.
+# Must match digital_brain.maintenance.generation.resolve_state_dir / XDG rules
+# and the pin write location later in this script so the volume bind tracks pins.
+STATE_DIR="${DIGITAL_BRAIN_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/digital-brain}"
+export DIGITAL_BRAIN_STATE_DIR="$STATE_DIR"
+mkdir -p "$STATE_DIR"
+
 if ! docker compose up -d neo4j ollama; then
   warn_and_exit "failed to start neo4j/ollama, skipping mcp-cypher bring-up"
 fi
@@ -273,6 +280,7 @@ if ! "${PIN_CMD[@]}" "$PIN_SCRIPT" \
 fi
 
 # Load pin into this shell (pin script cannot export to the parent process).
+# STATE_DIR already resolved + exported before docker compose up (see above).
 STATE_DIR="${DIGITAL_BRAIN_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/digital-brain}"
 ENV_FILE="${STATE_DIR}/sessions/${DIGITAL_BRAIN_SESSION_ID}/harness_generation.env"
 if [ -f "$ENV_FILE" ]; then

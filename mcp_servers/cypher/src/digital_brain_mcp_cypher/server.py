@@ -308,6 +308,9 @@ def read_neo4j_cypher(
         )
         raise
     if not rows:
+        # Empty-result instrumentation: any zero-row READ emits a RunEvent.
+        # High-volume legitimate empty queries can fill the quality plane —
+        # prefer targeted reads when pinning sessions that instrument READs.
         _instrument_mcp_tool_outcome(
             tool="read_neo4j_cypher",
             tool_outcome="empty",

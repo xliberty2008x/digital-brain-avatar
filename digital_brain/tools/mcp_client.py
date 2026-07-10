@@ -491,16 +491,34 @@ async def get_quality_receipt(receipt_id: str) -> dict[str, Any]:
 
 
 def _session_harness_generation_id(explicit: str | None = None) -> str:
-    """Prefer explicit id; else require DIGITAL_BRAIN_HARNESS_GENERATION_ID."""
+    """Prefer explicit id; else env pin; else active pin file (quality.resolve).
+
+    Resolution order matches ``resolve_session_harness_generation_id``:
+    explicit → ``DIGITAL_BRAIN_HARNESS_GENERATION_ID`` → pin path env →
+    well-known active pin under ``DIGITAL_BRAIN_STATE_DIR``.
+    """
     if explicit is not None and str(explicit).strip():
         return str(explicit).strip()
     pinned = (os.getenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID") or "").strip()
-    if not pinned:
-        raise ValueError(
-            "harness_generation_id is required "
-            "(set DIGITAL_BRAIN_HARNESS_GENERATION_ID or pass explicitly)"
+    if pinned:
+        return pinned
+    # Dual-process / host consistency: fall back to pin path + active pin file.
+    _ensure_mcp_cypher_on_path()
+    try:
+        from digital_brain_mcp_cypher.quality import (  # type: ignore[import-not-found]
+            resolve_session_harness_generation_id,
         )
-    return pinned
+
+        resolved = resolve_session_harness_generation_id(None)
+        if resolved:
+            return resolved
+    except Exception:
+        pass
+    raise ValueError(
+        "harness_generation_id is required "
+        "(set DIGITAL_BRAIN_HARNESS_GENERATION_ID, pass explicitly, "
+        "or write $DIGITAL_BRAIN_STATE_DIR/active/harness_generation.id)"
+    )
 
 
 def _best_effort_host_tool_outcome(
