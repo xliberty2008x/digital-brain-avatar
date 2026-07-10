@@ -7,9 +7,9 @@ This file summarizes the actual Neo4j and MCP patterns used by the repo and the 
 Prefer these sources in this order:
 
 1. Live `get_neo4j_schema`
-2. Runtime code in `digital_brain/`
-3. Historical write traces in `digital_brain/misc/request.txt`
-4. Design docs in `docs/`
+2. Runtime code in `digital_brain/` and `mcp_servers/cypher/`
+3. Schema contract in `docs/GRAPH_SCHEMA_CONTRACT.md`
+4. Other design docs in `docs/`
 
 ## Actual Read Path
 

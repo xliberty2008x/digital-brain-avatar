@@ -14,7 +14,7 @@ This document defines the strict structure and rules for node creation and relat
 | **Topic**| `id`, `name` | `importance` | `name` (case-insensitive) | A specific subject, concept, or project the user is thinking about. |
 | **State**| `id`, `name` | `intensity` (0-1) | `name` (case-insensitive) | A psychological or emotional state, mood, or mental condition (e.g., Anxiety, Flow). |
 | **Event**| `id`, `type` | `timestamp`, `description`| `type` + `timestamp` | A specific occurrence in time described by the user. |
-| **Organization**| `id`, `name` | `industry`, `description` | `name` (case-insensitive) | A company, institution, or group (e.g., EPAM, Google). |
+| **Organization**| `id`, `name` | `industry`, `description` | `name` (case-insensitive) | A company, institution, or group (e.g., Acme Corp, Google). |
 | **Location**| `id`, `name` | `type` (City, Country), `coords` | `name` (case-insensitive) | A physical place, city, or country (e.g., Kyiv, Home). |
 | **Pet**| `id`, `name` | `species`, `breed` | `name` (fuzzy) | A non-human living being with significance (e.g., Barsik). |
 | **Object**| `id`, `name` | `type`, `description` | `name` (case-insensitive) | A physical object or item (e.g., Car, Laptop, Phone). |

@@ -15,11 +15,11 @@ from digital_brain.tools.mcp_client import execute_cypher
 
 
 PROBES = {
-    "father_family": "конфлікт з батьком сім'я не спілкуюсь з отцем",
-    "epam_work": "EPAM робота офер онбординг проект інтерв'ю",
-    "swimming": "плавання тренування змагання басейн тренер",
-    "digital_brain": "Digital Brain Neo4j цифровий аватар щоденник",
-    "ai_dependency": "страх залежності від ChatGPT психолог штучний інтелект",
+    "family": "conflict with father family not talking to parent",
+    "work": "job offer onboarding project interviews workplace",
+    "swimming": "swimming training competition pool coach",
+    "digital_brain": "Digital Brain Neo4j digital avatar journal",
+    "ai_dependency": "fear of ChatGPT dependency psychologist artificial intelligence",
 }
 
 

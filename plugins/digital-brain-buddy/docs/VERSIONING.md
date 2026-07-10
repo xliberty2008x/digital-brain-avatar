@@ -36,7 +36,9 @@ unchanged).
 - MCP tool set change (add/remove/rename tools agents are taught to use)
 - Skill or agent instructions that reverse a previous hard rule
 - SessionStart hook / compose bring-up behavior that operators rely on
-- SOUL or session contract changes that alter memory policy
+- SOUL **template** (`assets/SOUL.template.md`) or session contract changes that
+  alter default persona / memory policy (personal `SOUL.MD` is gitignored and
+  not part of the published package identity)
 
 ## What does not require a bump
 

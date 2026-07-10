@@ -9,7 +9,9 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
 
 ## Start Here
 
-1. Read `../../SOUL.MD` before writing user-facing text.
+1. Read `../../SOUL.MD` before writing user-facing text. If missing, initialize
+   from the template with `python3 ../../scripts/init_soul.py ../../SOUL.MD`
+   (or identity-bootstrap). `SOUL.MD` is local/per-user, not shipped personal data.
 
 2. Read `../digital-brain-buddy-graph-mcp/references/runtime-patterns.md` before generating Cypher or deciding what to fetch.
 

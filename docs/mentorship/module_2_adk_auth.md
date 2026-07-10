@@ -1,22 +1,40 @@
-# Модуль 2: Стратегії авторизації в ADK
+# Module 2: Authorization strategies in ADK
 
-Це розшифровка того уривка з документації, який ти скинув. Давай перекладемо це на "людську" мову в контексті нашого проєкту.
+How to think about “who is allowed to call which tool” in this project.
 
-## 1. Agent-Auth (Авторизація через ідентичність Агента)
-Уяви, що твій Агент — це окремий співробітник твоєї компанії. У нього є власний "корпоративний пропуск".
-- **Як це працює**: Коли Агент хоче щось записати в базу Neo4j, він показує *свій* токен. База знає: "О, це мій Writer-Agent, йому можна писати".
-- **Нащо це нам?**: Це ідеально для фонових задач, де Агент сам вирішує, що робити, і йому не потрібне підтвердження від тебе на кожну дію.
-- **Ризик**: Якщо Агента "зламають", він має доступ до всього, на що йому дали права, незалежно від того, хто до нього звернувся.
+## 1. Agent-auth (identity of the agent / system)
 
-## 2. User-Auth (Авторизація через ідентичність Користувача)
-Тут Агент — це просто твій "посильний". Він не має власних прав, він діє від твого імені.
-- **Як це працює**: Агент каже тобі: "Слухай, мені треба запостити це в Telegram, але в мене немає ключа. Дай мені свій тимчасовий ключ (OAuth token)". Ти даєш йому цей ключ. Тепер Агент може зробити *тільки те*, що можеш зробити ти.
-- **Нащо це нам?**: Це найнадійніший спосіб. Якщо Агент захоче видалити твої файли, а у тебе (користувача) немає на це прав — система його зупинить.
-- **Механіка**: Це і є той самий OAuth Flow, де з'являється вікно "Дозволити застосунку доступ до ваших даних?".
+The agent has its own system identity (service principal, machine JWT, etc.).
 
-## 3. Що ми будемо робити в проєкті?
-Ми почнемо з **Agent-Auth**, щоб ти зрозумів механіку JWT. Потім ми перейдемо до **User-Auth**, щоб ти побачив, як правильно делегувати права.
+- **How it works:** when the agent writes to Neo4j, it presents *its* token.
+  The backend trusts the writer-agent service account.
+- **Good for:** background jobs and system automation that should not require a
+  human click on every step.
+- **Risk:** if the agent is compromised, it has whatever power that system
+  identity was granted — independent of which end-user prompted it.
 
----
-### Твоє розуміння:
-Коли ти будеш проектувати архітектуру, подумай: цей інструмент має працювати "завжди" від імені системи (Agent-Auth), чи він має залежати від того, хто зараз спілкується з ботом (User-Auth)?
+## 2. User-auth (identity of the human)
+
+The agent is only a messenger. It acts with the **user’s** delegated rights.
+
+- **How it works:** external actions (post to Telegram, call GitHub) use an
+  OAuth token that belongs to the user, obtained via a consent screen.
+- **Good for:** least privilege — the agent cannot do more than the user can.
+- **Mechanics:** classic OAuth / OIDC delegated access.
+
+## 3. What this project does
+
+| Path | Auth model today |
+| --- | --- |
+| Local Compose MCP + buddy plugin | **None** — loopback trust; see `SECURITY.md` |
+| Experimental JWT helpers | Learning / future multi-user building blocks |
+| Target multi-user design | Prefer **user-auth** for user data; **agent-auth** only for fixed system tools |
+
+When designing a tool, ask: should this always run as the system (agent-auth),
+or must it depend on *who* is chatting (user-auth)?
+
+## Related
+
+- Module 1: JWT basics  
+- Module 3: OAuth / OIDC flows  
+- `docs/architecture/auth_architecture.md`  

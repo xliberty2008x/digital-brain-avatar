@@ -5,7 +5,7 @@
   "author": {
     "name": "Kyrylo Dubovyk"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "keywords": [
     "digital-brain",
     "neo4j",

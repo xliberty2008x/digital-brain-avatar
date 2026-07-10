@@ -10,7 +10,7 @@ import urllib.request
 
 
 SAMPLES = [
-    "конфлікт з батьком про роботу і складні рішення",
+    "conflict with father about work and hard decisions",
     "EPAM onboarding and project interviews after receiving an offer",
     "Digital Brain Neo4j MCP local embeddings journal memory",
 ]

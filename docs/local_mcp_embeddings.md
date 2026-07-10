@@ -6,16 +6,19 @@ keeping the current ADK/Gemini agent layer.
 ## Start Local Runtime
 
 ```bash
-cp .env.example .env.local
-docker compose --profile ollama up -d neo4j ollama
+cp .env.example .env
+# Prefer the plugin helper (builds mcp-cypher, waits for /readyz):
+CLAUDE_PROJECT_DIR="$(pwd)" bash plugins/digital-brain-buddy/scripts/compose-up.sh
+
+# Or bring services up manually:
+docker compose up -d neo4j ollama
 docker compose exec ollama ollama pull bge-m3
-docker compose --profile ollama up -d mcp-cypher
+docker compose up -d --build mcp-cypher
 ```
 
-`mcp-memory` is gated behind the opt-in `memory` compose profile and is not
-wired up yet: its build context (`./mcp-neo4j/servers/mcp-neo4j-memory`) is a
-submodule reference with no `.gitmodules` entry, so the directory is empty on
-a fresh checkout. Populate that submodule yourself before enabling it:
+`mcp-memory` is gated behind the opt-in `memory` compose profile. Its build
+context (`./mcp-neo4j/servers/mcp-neo4j-memory`) is a submodule reference; on a
+fresh checkout populate that path before enabling the profile:
 
 ```bash
 docker compose --profile memory up -d mcp-memory
@@ -26,6 +29,8 @@ The app defaults to:
 ```text
 DIGITAL_BRAIN_MCP_URL=http://localhost:8000/api/mcp/
 ```
+
+Ports are intended for **localhost only**. See root `SECURITY.md`.
 
 ## Model Candidates
 
@@ -56,6 +61,6 @@ python scripts/backfill_embeddings.py --label JournalEntry --batch-size 25
 python scripts/probe_embedding_quality.py --limit 5
 ```
 
-The fixed quality probes cover father/family, EPAM/work, swimming, Digital
-Brain, and AI dependency memories. Treat the probe output as a small acceptance
-suite before changing the selected embedding model.
+The fixed quality probes cover family, work, sports, project, and AI-dependency
+themed queries. Treat the probe output as a small acceptance suite before
+changing the selected embedding model.
