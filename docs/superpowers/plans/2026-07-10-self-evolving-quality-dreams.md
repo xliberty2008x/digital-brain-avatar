@@ -391,17 +391,17 @@ ActivationAuthority, Deployment, ExposureWindow, MaintenanceLease.
 These operations are called by deterministic coordinator code, not registered
 as FastMCP tools and not exposed to analyzer/evaluator agents.
 
-- [ ] Write legal/illegal state-transition tests before store code.
-- [ ] Acquire using database time and increment a monotonic epoch after expiry.
-- [ ] Require `run_id + epoch` on stage transitions and retention effects.
-- [ ] Test takeover: the expired holder cannot commit after a new epoch exists.
-- [ ] Test crash/replay after every stage using stable stage keys.
-- [ ] Keep observation lifecycle, proposal lifecycle, decision, application, and
+- [x] Write legal/illegal state-transition tests before store code.
+- [x] Acquire using database time and increment a monotonic epoch after expiry.
+- [x] Require `run_id + epoch` on stage transitions and retention effects.
+- [x] Test takeover: the expired holder cannot commit after a new epoch exists.
+- [x] Test crash/replay after every stage using stable stage keys.
+- [x] Keep observation lifecycle, proposal lifecycle, decision, application, and
   effectiveness as separate records/projections.
-- [ ] Define ActivationAuthority with nonce digest, proposal/decision/effect
+- [x] Define ActivationAuthority with nonce digest, proposal/decision/effect
   hashes, target/base binding, approver, expiry, minted/consumed/revoked state,
   and reconciliation receipt; do not expose mint/consume on model-facing MCP.
-- [ ] Add relationship/provenance tests: evidence may support multiple findings
+- [x] Add relationship/provenance tests: evidence may support multiple findings
   and proposals; no single `absorbed_by_dream_id` field.
 
 **Gate:** no dream runner is built until workflow schemas, legal transitions,
@@ -436,26 +436,26 @@ receipts, and stale-epoch rejection exist.
 typed Alias proposal. It never activates from prose. Existing Alias lookup
 becomes scoped, active-revision-aware, deterministic, and direct-to-canonical.
 
-- [ ] Add static plugin contract tests for the FEEDBACK route, one-prompt budget,
+- [x] Add static plugin contract tests for the FEEDBACK route, one-prompt budget,
   generic-ack rejection, and `claim_false` propose-only behavior.
-- [ ] Add migration/audit output for existing unscoped/conflicting/cyclic Alias
+- [x] Add migration/audit output for existing unscoped/conflicting/cyclic Alias
   nodes; require human review before new resolution semantics activate.
-- [ ] Implement operator-only Alias apply/revoke transactions validating
+- [x] Implement operator-only Alias apply/revoke transactions validating
   namespace, type, normalized source, target existence/type, uniqueness,
   provenance, before fingerprint, pinned target authority, and request hash.
-- [ ] Implement revisioned `EntityProtection` records and operator-only
+- [x] Implement revisioned `EntityProtection` records and operator-only
   set/revoke effects; pinned Alias source/target changes require authority scope
   `pinned_identity`.
-- [ ] Use a single-use expiring authority bound to proposal/effect/target/base
+- [x] Use a single-use expiring authority bound to proposal/effect/target/base
   and approver. Provide operator-only mint, receipt-read, and atomic
   consume-with-effect interfaces; reconcile a lost response to the linked
   EffectReceipt without minting a replacement implicitly.
-- [ ] Keep operator credentials and scripts out of maintainer/analyzer toolsets;
+- [x] Keep operator credentials and scripts out of maintainer/analyzer toolsets;
   provide no unattended `--yes` path.
-- [ ] Write replay, changed-payload conflict, stale target, wrong type, missing
+- [x] Write replay, changed-payload conflict, stale target, wrong type, missing
   target, duplicate active alias, Alias-target, authority replay/expiry, revoke,
   and rollback tests.
-- [ ] Make unalias a compensating revision/receipt, not delete.
+- [x] Make unalias a compensating revision/receipt, not delete.
 
 **Gate:** if activation remains reachable from the model-facing MCP/toolset or
 generic Cypher, ship proposal-only and defer Alias apply.
@@ -484,19 +484,19 @@ generic Cypher, ship proposal-only and defer Alias apply.
 **Initial mode:** manual, local-only, report-only. No retention, memory effect,
 policy change, patch compilation, or activation.
 
-- [ ] Freeze a deterministic snapshot binding cutoff, selected ids/hashes,
+- [x] Freeze a deterministic snapshot binding cutoff, selected ids/hashes,
   revocation projection, redaction version, generation, taxonomy/schema,
   graph bookmark, and base commit.
-- [ ] Partition proposal-generation evidence and hidden holdout ids now, even
+- [x] Partition proposal-generation evidence and hidden holdout ids now, even
   before patch evaluation exists.
-- [ ] Include supporting and contradicting evidence plus eligible exposures.
-- [ ] Use local keyed HMAC for retained low-entropy correlations.
-- [ ] Add late-event, revoked-event, counterevidence, deterministic digest,
+- [x] Include supporting and contradicting evidence plus eligible exposures.
+- [x] Use local keyed HMAC for retained low-entropy correlations.
+- [x] Add late-event, revoked-event, counterevidence, deterministic digest,
   disjoint holdout, and intimate-field exclusion tests.
-- [ ] Implement runner state checkpoints and crash resume through Task 5 tools.
-- [ ] Produce only counts/ids and three buckets: applied housekeeping (zero in
+- [x] Implement runner state checkpoints and crash resume through Task 5 tools.
+- [x] Produce only counts/ids and three buckets: applied housekeeping (zero in
   this phase), waiting for owner, deliberately left alone.
-- [ ] Prove an all-tools maintainer profile still has no activation capability.
+- [x] Prove an all-tools maintainer profile still has no activation capability.
 
 **Gate:** same ledger state/policy must produce the same snapshot; raw intimate
 data must not enter analyzer/report packets.
@@ -519,16 +519,16 @@ data must not enter analyzer/report packets.
 **Interface:** an owner-configured allowlist/TTL selects raw payload redaction,
 archive, or purge. The model cannot choose or expand the policy.
 
-- [ ] Represent retention configuration as a reviewed structured local setting
+- [x] Represent retention configuration as a reviewed structured local setting
   with schema/version/digest.
-- [ ] Test dry-run counts before any automatic effect.
-- [ ] Redact/delete removable raw payload in a dedicated quality transaction;
+- [x] Test dry-run counts before any automatic effect.
+- [x] Redact/delete removable raw payload in a dedicated quality transaction;
   keep immutable metadata, fingerprint, and EffectReceipt.
-- [ ] Test intimate raw fields disappear from normal reads and exports.
-- [ ] Test revoke excludes future snapshots and marks directly derived pending
+- [x] Test intimate raw fields disappear from normal reads and exports.
+- [x] Test revoke excludes future snapshots and marks directly derived pending
   proposals stale without rewriting journals or unrelated proposals.
-- [ ] Document backup limitations: historical backups may predate redaction.
-- [ ] Enable automatic retention only after explicit owner opt-in.
+- [x] Document backup limitations: historical backups may predate redaction.
+- [x] Enable automatic retention only after explicit owner opt-in.
 
 **Gate:** generic delete remains blocked; only the dedicated policy-bound
 transaction may remove raw payload, and every effect is receipted.
