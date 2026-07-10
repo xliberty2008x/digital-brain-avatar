@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import IsolatedAsyncioTestCase
@@ -359,7 +360,7 @@ class McpClientTests(IsolatedAsyncioTestCase):
         self.assertEqual(args[1]["outcome_source"], "mcp")
 
     async def test_record_run_event_falls_back_to_active_pin_file(self) -> None:
-        """Host sensors resolve active pin when DIGITAL_BRAIN_HARNESS_GENERATION_ID is unset."""
+        """Host sensors resolve session-scoped active pin when env generation id is unset."""
         response = {
             "content": [
                 {
@@ -375,14 +376,22 @@ class McpClientTests(IsolatedAsyncioTestCase):
             state = Path(tmp)
             active = state / "active"
             active.mkdir(parents=True)
-            (active / "harness_generation.id").write_text(
-                "hg-from-active-pin\n", encoding="utf-8"
+            (active / "harness_generation.json").write_text(
+                json.dumps(
+                    {
+                        "id": "hg-from-active-pin",
+                        "session_id": "host-chat-1",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
             )
-            # Empty env pin keys force fallthrough to active pin under STATE_DIR.
+            # Empty generation env forces fallthrough to session-matched active pin.
             with patch.dict(
                 "os.environ",
                 {
                     "DIGITAL_BRAIN_STATE_DIR": str(state),
+                    "DIGITAL_BRAIN_SESSION_ID": "host-chat-1",
                     "DIGITAL_BRAIN_HARNESS_GENERATION_ID": "",
                     "DIGITAL_BRAIN_HARNESS_PIN_PATH": "",
                 },

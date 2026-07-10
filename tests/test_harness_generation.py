@@ -547,7 +547,10 @@ def test_mcp_client_rejects_soul_content():
     asyncio.run(_run())
 
 
-def test_resolve_session_binding_sources():
+def test_resolve_session_binding_sources(monkeypatch: pytest.MonkeyPatch):
+    # Explicit None must not fall through to a polluted process env.
+    monkeypatch.delenv("DIGITAL_BRAIN_SESSION_ID", raising=False)
+
     sid, force = resolve_session_binding(
         env_session_id="env-sess",
         hook_session_id="hook-sess",

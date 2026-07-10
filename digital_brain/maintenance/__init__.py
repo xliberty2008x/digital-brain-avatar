@@ -8,6 +8,13 @@ from .generation import (
     resolve_state_dir,
     write_active_harness_pin,
 )
+from .session import (
+    SESSION_HANDLE_SCHEMA_VERSION,
+    SessionHandle,
+    handle_from_public_dict,
+    open_harness_session,
+    resolve_handle_for_chat,
+)
 from .models import (
     HARNESS_SCHEMA_VERSION,
     MAINTENANCE_SCHEMA_VERSION,
@@ -201,13 +208,18 @@ __all__ = [
     "load_scenarios",
     "load_session_pin",
     "maintainer_tool_profile",
+    "open_harness_session",
     "pin_session_generation",
     "redact_evidence_record",
     "redact_packet",
+    "resolve_handle_for_chat",
     "resolve_secure_state_dir",
     "resolve_state_dir",
     "run_report_only_dream",
     "select_retention_candidates",
+    "SESSION_HANDLE_SCHEMA_VERSION",
+    "SessionHandle",
+    "handle_from_public_dict",
     "stage_idempotency_key",
     "validate_quarantine_isolated",
     "write_active_harness_pin",

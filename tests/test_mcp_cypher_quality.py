@@ -663,9 +663,61 @@ def test_resolve_and_mint_helpers(
 def test_resolve_reads_active_pin_file_without_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """MCP dual-process path: active pin under state dir, no env injection."""
+    """Session-scoped active pin: match DIGITAL_BRAIN_SESSION_ID."""
     monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
     monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN", raising=False)
+    state = tmp_path / "state"
+    active = state / "active"
+    active.mkdir(parents=True)
+    gid = "hg-" + ("b" * 64)
+    (active / "harness_generation.json").write_text(
+        json.dumps({"id": gid, "session_id": "chat-42"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(state))
+    monkeypatch.setenv("DIGITAL_BRAIN_SESSION_ID", "chat-42")
+
+    assert resolve_session_harness_generation_id(None) == gid
+
+
+def test_resolve_skips_foreign_active_pin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Leftover verify active/ must not bind a different chat."""
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN", raising=False)
+    state = tmp_path / "state"
+    active = state / "active"
+    active.mkdir(parents=True)
+    gid = "hg-" + ("b" * 64)
+    (active / "harness_generation.json").write_text(
+        json.dumps(
+            {"id": gid, "session_id": "milestone-b-verify-1783677850"}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(state))
+    monkeypatch.setenv("DIGITAL_BRAIN_SESSION_ID", "grok-chat-now")
+
+    assert resolve_session_harness_generation_id(None) is None
+    assert (
+        resolve_session_harness_generation_id(
+            None, session_id="milestone-b-verify-1783677850"
+        )
+        == gid
+    )
+
+
+def test_resolve_skips_unscoped_active_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_SESSION_ID", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN", raising=False)
     state = tmp_path / "state"
     active = state / "active"
     active.mkdir(parents=True)
@@ -673,6 +725,12 @@ def test_resolve_reads_active_pin_file_without_env(
     (active / "harness_generation.id").write_text(gid + "\n", encoding="utf-8")
     monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(state))
 
+    assert resolve_session_harness_generation_id(None) is None
+    assert (
+        resolve_session_harness_generation_id(None, allow_unscoped_active=True)
+        == gid
+    )
+    monkeypatch.setenv("DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN", "1")
     assert resolve_session_harness_generation_id(None) == gid
 
 
@@ -704,7 +762,7 @@ def test_resolve_reads_pin_path_json_and_env_file(
 def test_try_record_uses_active_pin_file_only(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """Instrumentation records when only the well-known active pin is present."""
+    """Instrumentation records when session-scoped active pin matches."""
     monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
     monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", raising=False)
     state = tmp_path / "state"
@@ -715,6 +773,7 @@ def test_try_record_uses_active_pin_file_only(
         encoding="utf-8",
     )
     monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(state))
+    monkeypatch.setenv("DIGITAL_BRAIN_SESSION_ID", "s1")
 
     session = _FakeSession()
     store = _store_with(session)
@@ -726,6 +785,7 @@ def test_try_record_uses_active_pin_file_only(
         outcome_source="mcp",
         error_class="no_hits",
         event_id="re-active-pin-only",
+        session_ref="s1",
     )
     assert out is not None
     assert out["outcome"] == "created"

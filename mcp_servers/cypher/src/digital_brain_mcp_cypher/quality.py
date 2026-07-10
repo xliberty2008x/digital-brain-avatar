@@ -2408,20 +2408,71 @@ def _resolve_state_dir_for_pin() -> str | None:
     return None
 
 
+def _read_active_pin_payload(state_dir: str) -> dict[str, str] | None:
+    """Load ``active/harness_generation.json`` (id + optional session_id).
+
+    Falls back to id-only ``active/harness_generation.id`` with no session_id.
+    Never reads SOUL body content.
+    """
+    from pathlib import Path
+
+    base = Path(state_dir).expanduser()
+    json_path = base / "active" / "harness_generation.json"
+    if json_path.is_file():
+        try:
+            raw = json_path.read_text(encoding="utf-8")
+            data = json.loads(raw) if raw.strip().startswith("{") else None
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict):
+            gid = None
+            for key in ("id", "generation_id", "harness_generation_id"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    gid = value.strip()
+                    break
+            if gid:
+                out: dict[str, str] = {"id": gid}
+                sid = data.get("session_id")
+                if isinstance(sid, str) and sid.strip():
+                    out["session_id"] = sid.strip()
+                return out
+
+    id_path = base / "active" / "harness_generation.id"
+    if id_path.is_file():
+        gid = _read_generation_id_from_pin_file(str(id_path))
+        if gid:
+            return {"id": gid}
+    return None
+
+
+def _env_truthy(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def resolve_session_harness_generation_id(
     explicit: str | None = None,
+    *,
+    session_id: str | None = None,
+    allow_unscoped_active: bool | None = None,
 ) -> str | None:
     """Resolve the session-pinned harness generation id.
 
     Order:
-    1. Explicit argument
+    1. Explicit argument (always wins — model-facing sensors should pass this)
     2. ``DIGITAL_BRAIN_HARNESS_GENERATION_ID`` env
     3. ``DIGITAL_BRAIN_HARNESS_PIN_PATH`` (JSON pin, env-file, or id file)
-    4. Well-known active pin under ``DIGITAL_BRAIN_STATE_DIR``:
-       ``active/harness_generation.id`` or ``active/harness_generation.json``
+    4. Well-known ``active/`` pin **only when session-scoped**:
+       - active JSON has ``session_id`` and it matches ``session_id`` arg or
+         ``DIGITAL_BRAIN_SESSION_ID``
+       - unscoped active (id-only / no session_id) is used only when
+         ``allow_unscoped_active`` is true or
+         ``DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN=1``
 
-    Returns ``None`` when no pin is available (instrumentation must skip, not
-    fail the primary tool path). Never reads SOUL body content.
+    Foreign leftover pins (e.g. verify runs) are never adopted when the caller
+    has a different session id. Returns ``None`` when no safe pin is available
+    (instrumentation must skip, not fail the primary tool path).
+    Never reads SOUL body content.
     """
     if explicit is not None and str(explicit).strip():
         return str(explicit).strip()
@@ -2437,18 +2488,45 @@ def resolve_session_harness_generation_id(
             return from_path
 
     state_dir = _resolve_state_dir_for_pin()
-    if state_dir:
-        from pathlib import Path
+    if not state_dir:
+        return None
 
-        base = Path(state_dir).expanduser()
-        for candidate in (
-            base / "active" / "harness_generation.id",
-            base / "active" / "harness_generation.json",
-        ):
-            from_active = _read_generation_id_from_pin_file(str(candidate))
-            if from_active:
-                return from_active
+    active = _read_active_pin_payload(state_dir)
+    if active is None:
+        return None
 
+    expected_session = (
+        (session_id if session_id is not None else None)
+        or (os.getenv("DIGITAL_BRAIN_SESSION_ID") or "").strip()
+        or None
+    )
+    active_session = active.get("session_id")
+
+    if active_session:
+        if expected_session and expected_session == active_session:
+            return active["id"]
+        # Scoped active pin belongs to another (or unknown) session — skip.
+        _logger.debug(
+            "skip active pin id=%s: session mismatch (active=%s expected=%s)",
+            active["id"][:20],
+            active_session,
+            expected_session,
+        )
+        return None
+
+    # Unscoped active (legacy id-only breadcrumb).
+    allow = (
+        allow_unscoped_active
+        if allow_unscoped_active is not None
+        else _env_truthy("DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN")
+    )
+    if allow:
+        return active["id"]
+    _logger.debug(
+        "skip unscoped active pin id=%s: set DIGITAL_BRAIN_ALLOW_UNSCOPED_ACTIVE_PIN=1 "
+        "or open a session-scoped pin",
+        active["id"][:20],
+    )
     return None
 
 
@@ -2487,7 +2565,10 @@ def try_record_tool_outcome_run_event(
     """
     if record_fn is None:
         return None
-    generation_id = resolve_session_harness_generation_id(harness_generation_id)
+    generation_id = resolve_session_harness_generation_id(
+        harness_generation_id,
+        session_id=session_ref,
+    )
     if generation_id is None:
         _logger.debug(
             "skip tool-outcome RunEvent (%s/%s): no harness_generation_id pin",
