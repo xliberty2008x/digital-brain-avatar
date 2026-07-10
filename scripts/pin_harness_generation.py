@@ -178,7 +178,9 @@ async def _record(generation: HarnessGeneration) -> dict[str, Any]:
 
 
 def _export_session_env(generation: HarnessGeneration, pin_path: Path) -> Path:
-    """Write process env, state-dir .env, and optional CLAUDE_ENV_FILE exports."""
+    """Write process env, state-dir .env, active pin, and optional CLAUDE_ENV_FILE."""
+    from digital_brain.maintenance.generation import write_active_harness_pin
+
     os.environ[SESSION_ENV_GENERATION_ID] = generation.id
     os.environ[SESSION_ENV_PIN_PATH] = str(pin_path)
 
@@ -187,6 +189,11 @@ def _export_session_env(generation: HarnessGeneration, pin_path: Path) -> Path:
         f"{SESSION_ENV_GENERATION_ID}={generation.id}\n"
         f"{SESSION_ENV_PIN_PATH}={pin_path}\n",
         encoding="utf-8",
+    )
+    # Well-known active pin for dual-process MCP instrumentation (id only).
+    write_active_harness_pin(
+        generation.id,
+        session_id=os.environ.get("DIGITAL_BRAIN_SESSION_ID"),
     )
     export_pin_to_claude_env_file(generation.id, pin_path)
     return export_path

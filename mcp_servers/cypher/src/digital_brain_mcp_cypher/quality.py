@@ -1629,18 +1629,126 @@ def build_tool_outcome_run_event(
     }
 
 
+def _read_generation_id_from_pin_file(path: str) -> str | None:
+    """Extract a harness generation id from a pin JSON, env-file, or id file.
+
+    Never returns SOUL content — only a short id string.
+    """
+    raw_path = (path or "").strip()
+    if not raw_path:
+        return None
+    try:
+        from pathlib import Path
+
+        pin = Path(raw_path).expanduser()
+        if not pin.is_file():
+            return None
+        text = pin.read_text(encoding="utf-8")
+        name = pin.name
+        suffix = pin.suffix
+    except (OSError, UnicodeError):
+        return None
+    if not text or not text.strip():
+        return None
+
+    stripped = text.strip()
+    # Env-file style: KEY=VALUE lines.
+    looks_like_env = (
+        "DIGITAL_BRAIN_HARNESS_GENERATION_ID=" in stripped
+        or suffix == ".env"
+        or name.endswith(".env")
+    )
+    if looks_like_env:
+        for line in stripped.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :].strip()
+            if line.startswith("DIGITAL_BRAIN_HARNESS_GENERATION_ID="):
+                value = line.split("=", 1)[1].strip().strip("'\"")
+                return value or None
+
+    # JSON pin (session pin or active/harness_generation.json).
+    if stripped.startswith("{"):
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            for key in ("id", "generation_id", "harness_generation_id"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
+
+    # Plain id file (active/harness_generation.id) — single token, no SOUL body.
+    first = stripped.splitlines()[0].strip()
+    if first and len(first) <= 200 and " " not in first and "\t" not in first:
+        return first
+    return None
+
+
+def _resolve_state_dir_for_pin() -> str | None:
+    """Best-effort state dir for the well-known active pin (MCP + host)."""
+    env = (os.getenv("DIGITAL_BRAIN_STATE_DIR") or "").strip()
+    if env:
+        return env
+    xdg = (os.getenv("XDG_STATE_HOME") or "").strip()
+    if xdg:
+        from pathlib import Path
+
+        return str(Path(xdg).expanduser() / "digital-brain")
+    home = (os.getenv("HOME") or "").strip()
+    if home:
+        from pathlib import Path
+
+        return str(Path(home).expanduser() / ".local" / "state" / "digital-brain")
+    return None
+
+
 def resolve_session_harness_generation_id(
     explicit: str | None = None,
 ) -> str | None:
-    """Prefer explicit pin; else ``DIGITAL_BRAIN_HARNESS_GENERATION_ID``.
+    """Resolve the session-pinned harness generation id.
 
-    Returns ``None`` when neither is set (instrumentation must skip, not fail
-    the primary tool path).
+    Order:
+    1. Explicit argument
+    2. ``DIGITAL_BRAIN_HARNESS_GENERATION_ID`` env
+    3. ``DIGITAL_BRAIN_HARNESS_PIN_PATH`` (JSON pin, env-file, or id file)
+    4. Well-known active pin under ``DIGITAL_BRAIN_STATE_DIR``:
+       ``active/harness_generation.id`` or ``active/harness_generation.json``
+
+    Returns ``None`` when no pin is available (instrumentation must skip, not
+    fail the primary tool path). Never reads SOUL body content.
     """
     if explicit is not None and str(explicit).strip():
         return str(explicit).strip()
+
     pinned = (os.getenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID") or "").strip()
-    return pinned or None
+    if pinned:
+        return pinned
+
+    pin_path = (os.getenv("DIGITAL_BRAIN_HARNESS_PIN_PATH") or "").strip()
+    if pin_path:
+        from_path = _read_generation_id_from_pin_file(pin_path)
+        if from_path:
+            return from_path
+
+    state_dir = _resolve_state_dir_for_pin()
+    if state_dir:
+        from pathlib import Path
+
+        base = Path(state_dir).expanduser()
+        for candidate in (
+            base / "active" / "harness_generation.id",
+            base / "active" / "harness_generation.json",
+        ):
+            from_active = _read_generation_id_from_pin_file(str(candidate))
+            if from_active:
+                return from_active
+
+    return None
 
 
 def mint_tool_outcome_event_id(tool: str, tool_outcome: str) -> str:

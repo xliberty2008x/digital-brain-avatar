@@ -48,6 +48,16 @@ Endpoints (loopback only):
 
 Health: `GET http://127.0.0.1:8000/readyz` checks Neo4j **and** a real 1024-dim embedding.
 
+### Shared harness pin (host ↔ MCP)
+
+SessionStart / `compose-up.sh` pins a harness generation for the host session
+and writes a well-known **active** pin under `$DIGITAL_BRAIN_STATE_DIR/active/`
+(id only; no SOUL content). `docker-compose.yml` mounts that state directory
+into `mcp-cypher` so deterministic RunEvent instrumentation can resolve the pin
+even when the container does not inherit `DIGITAL_BRAIN_HARNESS_GENERATION_ID`.
+Host timeout paths use an in-process QualityStore recorder (not model-facing
+`record_run_event`). Dual-process emit requires this shared state pin.
+
 ## JournalEntry write contract (v0.2)
 
 Do **not** create journal chain edges with raw Cypher. Authoritative flow:

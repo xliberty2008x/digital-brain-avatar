@@ -6,6 +6,7 @@ from .generation import (
     load_session_pin,
     pin_session_generation,
     resolve_state_dir,
+    write_active_harness_pin,
 )
 from .models import (
     HARNESS_SCHEMA_VERSION,
@@ -26,4 +27,5 @@ __all__ = [
     "load_session_pin",
     "pin_session_generation",
     "resolve_state_dir",
+    "write_active_harness_pin",
 ]

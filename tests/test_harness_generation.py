@@ -155,13 +155,23 @@ def test_soul_content_never_stored_only_digest(tmp_path: pathlib.Path):
     assert gen.soul_sha != EMPTY_DIGEST
     assert len(gen.soul_sha) == 64
 
+    state_dir = tmp_path / "state"
     pin_path = pin_session_generation(
-        gen, state_dir=tmp_path / "state", session_id="s1", export_env=False
+        gen, state_dir=state_dir, session_id="s1", export_env=False
     )
     pin_text = pin_path.read_text(encoding="utf-8")
     assert secret not in pin_text
     assert "PRIVATE SOUL" not in pin_text
     assert gen.soul_sha in pin_text
+    # Active pin is id-only (no SOUL body) for dual-process MCP share.
+    active_id = state_dir / "active" / "harness_generation.id"
+    active_json = state_dir / "active" / "harness_generation.json"
+    assert active_id.is_file()
+    assert active_id.read_text(encoding="utf-8").strip() == gen.id
+    active_payload = json.loads(active_json.read_text(encoding="utf-8"))
+    assert active_payload["id"] == gen.id
+    assert secret not in active_json.read_text(encoding="utf-8")
+    assert "PRIVATE SOUL" not in active_json.read_text(encoding="utf-8")
 
 
 def test_collect_is_deterministic_for_fixed_inputs(tmp_path: pathlib.Path):

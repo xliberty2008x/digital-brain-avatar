@@ -38,6 +38,11 @@ RELOAD_HOOK_SOURCES = frozenset({"resume", "compact"})
 ACTIVE_OVERLAY_MANIFEST_REL = Path("dreams") / "active-overlays" / "manifest.json"
 # Optional structured policy file (enum/numeric knobs only when present).
 ACTIVE_POLICY_REL = Path("dreams") / "active-policy" / "policy.json"
+# Well-known active pin (id only / pin json without SOUL) so dual-process MCP
+# containers can read the session pin without host-only env injection.
+ACTIVE_PIN_DIR_REL = Path("active")
+ACTIVE_PIN_ID_FILENAME = "harness_generation.id"
+ACTIVE_PIN_JSON_FILENAME = "harness_generation.json"
 
 
 def resolve_state_dir(explicit: str | Path | None = None) -> Path:
@@ -367,6 +372,56 @@ def session_pin_path(
     return state / "sessions" / safe_session / PIN_FILENAME
 
 
+def active_pin_dir(state_dir: str | Path | None = None) -> Path:
+    """Directory for the well-known cross-process active harness pin."""
+    return resolve_state_dir(state_dir) / ACTIVE_PIN_DIR_REL
+
+
+def active_pin_id_path(state_dir: str | Path | None = None) -> Path:
+    return active_pin_dir(state_dir) / ACTIVE_PIN_ID_FILENAME
+
+
+def active_pin_json_path(state_dir: str | Path | None = None) -> Path:
+    return active_pin_dir(state_dir) / ACTIVE_PIN_JSON_FILENAME
+
+
+def write_active_harness_pin(
+    generation_id: str,
+    *,
+    state_dir: str | Path | None = None,
+    session_id: str | None = None,
+) -> Path:
+    """Write id-only active pin files under ``$DIGITAL_BRAIN_STATE_DIR/active/``.
+
+    Dual-process emit (host SessionStart + mcp-cypher container) shares this
+    well-known location. Content is the generation id only — never SOUL body.
+    Returns the JSON path.
+    """
+    gid = (generation_id or "").strip()
+    if not gid:
+        raise ValueError("generation_id is required for active pin")
+    state = resolve_state_dir(state_dir)
+    directory = state / ACTIVE_PIN_DIR_REL
+    directory.mkdir(parents=True, exist_ok=True)
+
+    id_path = directory / ACTIVE_PIN_ID_FILENAME
+    id_tmp = id_path.with_suffix(".id.tmp")
+    id_tmp.write_text(gid + "\n", encoding="utf-8")
+    id_tmp.replace(id_path)
+
+    payload: dict[str, Any] = {"id": gid}
+    if session_id is not None and str(session_id).strip():
+        payload["session_id"] = sanitize_session_id(session_id)
+    json_path = directory / ACTIVE_PIN_JSON_FILENAME
+    json_tmp = json_path.with_suffix(".tmp")
+    json_tmp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    json_tmp.replace(json_path)
+    return json_path
+
+
 def pin_session_generation(
     generation: HarnessGeneration,
     *,
@@ -389,6 +444,10 @@ def pin_session_generation(
         encoding="utf-8",
     )
     tmp.replace(path)
+    # Cross-process active pin for MCP instrumentation (no SOUL content).
+    write_active_harness_pin(
+        generation.id, state_dir=state_dir, session_id=session_id
+    )
     if export_env:
         os.environ[SESSION_ENV_GENERATION_ID] = generation.id
         os.environ[SESSION_ENV_PIN_PATH] = str(path)
@@ -443,6 +502,10 @@ def get_or_pin_session_generation(
             os.environ[SESSION_ENV_GENERATION_ID] = existing.id
             os.environ[SESSION_ENV_PIN_PATH] = str(
                 session_pin_path(state_dir, session_id)
+            )
+            # Refresh active pin so MCP sees the reloaded session pin.
+            write_active_harness_pin(
+                existing.id, state_dir=state_dir, session_id=session_id
             )
             return existing
     generation = collect_harness_generation(state_dir=state_dir, **collect_kwargs)

@@ -238,6 +238,51 @@ class McpClientTests(IsolatedAsyncioTestCase):
         finally:
             set_host_deterministic_run_event_recorder(None)
 
+    async def test_write_timeout_default_recorder_when_pin_set(self) -> None:
+        """Production path: no injected spy; default host recorder is used."""
+        recorded: list[dict] = []
+
+        def fake_default(event: dict) -> dict:
+            recorded.append(event)
+            return {"outcome": "created", "run_event_id": event.get("id")}
+
+        session = _FailingSession()
+        # Ensure no injected override; patch the production default only.
+        set_host_deterministic_run_event_recorder(None)
+        try:
+            with patch.dict(
+                "os.environ",
+                {"DIGITAL_BRAIN_HARNESS_GENERATION_ID": "hg-default-pin"},
+                clear=False,
+            ):
+                with patch(
+                    "digital_brain.tools.mcp_client._default_host_deterministic_run_event_recorder",
+                    new=fake_default,
+                ):
+                    with patch(
+                        "digital_brain.tools.mcp_client.aiohttp.ClientSession",
+                        return_value=session,
+                    ):
+                        with self.assertRaises(McpWriteOutcomeUnknown):
+                            await call_mcp_tool(
+                                "append_journal_entry",
+                                {
+                                    "append_key": "00000000-0000-4000-8000-000000000099",
+                                    "content": "memory",
+                                    "timestamp": "2026-07-09T00:00:00Z",
+                                    "expected_version": 0,
+                                },
+                            )
+        finally:
+            set_host_deterministic_run_event_recorder(None)
+
+        self.assertEqual(len(recorded), 1)
+        event = recorded[0]
+        self.assertEqual(event["tool"], "append_journal_entry")
+        self.assertEqual(event["tool_outcome"], "timeout")
+        self.assertEqual(event["outcome_source"], "host")
+        self.assertEqual(event["harness_generation_id"], "hg-default-pin")
+
     async def test_create_feedback_passes_stable_payload(self) -> None:
         response = {
             "content": [

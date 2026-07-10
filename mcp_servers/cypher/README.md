@@ -62,7 +62,10 @@ runtime role). Sensors never create `JournalEntry` nodes or enter the journal
 vector index.
 
 1. Pin a session harness generation (`record_harness_generation` / host pin
-   script) and pass that `harness_generation_id` on every sensor.
+   script) and pass that `harness_generation_id` on every sensor. Host pin also
+   writes `$DIGITAL_BRAIN_STATE_DIR/active/harness_generation.{id,json}` (id
+   only). Compose mounts `DIGITAL_BRAIN_STATE_DIR` into this container so MCP
+   instrumentation can resolve the pin without host-only env injection.
 2. Mint one stable client id per logical Feedback / RunEvent / lifecycle event
    and retain it for retries of that logical write.
 3. Outcomes: `created` / `replayed` (same id + fingerprint) / `conflict`
@@ -74,6 +77,8 @@ vector index.
 5. Model-facing `record_run_event` always stores `outcome_source=model_advisory`.
    Deterministic MCP/host/user tool outcomes use the in-process trusted
    recorder (`QualityStore.record_deterministic_run_event`) — not model prose.
+   Host `mcp_client` timeouts use the same QualityStore path by default when
+   Neo4j quality credentials are configured.
 
 ## Health endpoints
 

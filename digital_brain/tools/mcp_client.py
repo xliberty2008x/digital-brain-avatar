@@ -60,19 +60,121 @@ _WRITE_TIMEOUT_INSTRUMENT_TOOLS = frozenset(
 MCP_PROTOCOL_VERSION = "2024-11-05"
 
 # Optional host-side trusted recorder for deterministic RunEvents.
-# Production may inject QualityStore.record_deterministic_run_event; tests
-# inject a spy. Model-facing record_run_event must never be used here.
+# Production uses a default QualityStore-backed recorder when Neo4j quality
+# credentials are available; tests inject a spy. Model-facing record_run_event
+# must never be used here.
 _host_deterministic_run_event_recorder: (
     Callable[[dict[str, Any]], dict[str, Any]] | None
 ) = None
+# When True, the injected value (including None) overrides the production default.
+_host_deterministic_run_event_recorder_overridden: bool = False
+_default_host_quality_store: Any = None
+_default_host_quality_store_failed: bool = False
 
 
 def set_host_deterministic_run_event_recorder(
     recorder: Callable[[dict[str, Any]], dict[str, Any]] | None,
 ) -> None:
-    """Inject the trusted host recorder (or clear with None)."""
+    """Inject the trusted host recorder (or clear with None to restore default)."""
     global _host_deterministic_run_event_recorder
+    global _host_deterministic_run_event_recorder_overridden
     _host_deterministic_run_event_recorder = recorder
+    # None clears the override so production default is used again; non-None
+    # always counts as an explicit injection (including a no-op spy).
+    _host_deterministic_run_event_recorder_overridden = recorder is not None
+
+
+def _ensure_mcp_cypher_on_path() -> None:
+    """Best-effort: make digital_brain_mcp_cypher importable from a monorepo checkout."""
+    try:
+        import digital_brain_mcp_cypher  # noqa: F401
+
+        return
+    except ImportError:
+        pass
+    import sys
+    from pathlib import Path
+
+    # digital_brain/tools/mcp_client.py → repo root
+    root = Path(__file__).resolve().parents[2]
+    src = root / "mcp_servers" / "cypher" / "src"
+    if src.is_dir() and str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+
+
+def _build_default_host_quality_store() -> Any | None:
+    """Construct an in-process QualityStore when Neo4j quality creds exist."""
+    global _default_host_quality_store, _default_host_quality_store_failed
+    if _default_host_quality_store is not None:
+        return _default_host_quality_store
+    if _default_host_quality_store_failed:
+        return None
+    try:
+        _ensure_mcp_cypher_on_path()
+        from neo4j import GraphDatabase  # type: ignore[import-not-found]
+        from digital_brain_mcp_cypher.quality import (  # type: ignore[import-not-found]
+            QualityStore,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.debug("host default quality store unavailable (import): %s", exc)
+        _default_host_quality_store_failed = True
+        return None
+
+    uri = (
+        (os.getenv("NEO4J_URI") or os.getenv("NEO4J_URL") or "bolt://localhost:7687")
+        .strip()
+    )
+    quality_user = (os.getenv("NEO4J_QUALITY_USERNAME") or "").strip()
+    quality_password = (os.getenv("NEO4J_QUALITY_PASSWORD") or "").strip()
+    if quality_user and quality_password:
+        auth = (quality_user, quality_password)
+    else:
+        # First-boot / single-user stacks fall back to NEO4J_USERNAME/PASSWORD.
+        username = (os.getenv("NEO4J_USERNAME") or "neo4j").strip()
+        password = (os.getenv("NEO4J_PASSWORD") or "password").strip()
+        auth = (username, password)
+    database = (os.getenv("NEO4J_DATABASE") or "neo4j").strip() or "neo4j"
+
+    def _driver_factory():
+        return GraphDatabase.driver(uri, auth=auth)
+
+    try:
+        store = QualityStore(_driver_factory, database)
+        _default_host_quality_store = store
+        return store
+    except Exception as exc:  # noqa: BLE001
+        _logger.debug("host default quality store init failed: %s", exc)
+        _default_host_quality_store_failed = True
+        return None
+
+
+def _default_host_deterministic_run_event_recorder(
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    """Trusted host-only recorder: QualityStore, never model-facing MCP tool."""
+    store = _build_default_host_quality_store()
+    if store is None:
+        raise RuntimeError(
+            "host default quality recorder unavailable "
+            "(install neo4j + digital_brain_mcp_cypher, configure NEO4J_*)"
+        )
+    try:
+        store.ensure_constraints()
+    except Exception as exc:  # noqa: BLE001 — best-effort schema
+        _logger.debug("host quality schema ensure during instrumentation: %s", exc)
+    return store.record_deterministic_run_event(event)
+
+
+def get_host_deterministic_run_event_recorder() -> (
+    Callable[[dict[str, Any]], dict[str, Any]] | None
+):
+    """Return the injected recorder, else the production QualityStore default."""
+    if _host_deterministic_run_event_recorder_overridden:
+        return _host_deterministic_run_event_recorder
+    if _host_deterministic_run_event_recorder is not None:
+        return _host_deterministic_run_event_recorder
+    # Lazy default: present even when Neo4j is down; record path is best-effort.
+    return _default_host_deterministic_run_event_recorder
 
 
 class McpWriteOutcomeUnknown(RuntimeError):
@@ -411,27 +513,38 @@ def _best_effort_host_tool_outcome(
 ) -> dict[str, Any] | None:
     """Host-attributed deterministic RunEvent; never breaks the primary path.
 
-    Uses the injected trusted recorder when set. Falls back to importing
+    Uses the injected trusted recorder when set; otherwise the production
+    QualityStore default. Falls back to importing
     ``try_record_tool_outcome_run_event`` so call sites stay independent of
     model-facing ``record_run_event``.
     """
+    _ensure_mcp_cypher_on_path()
     try:
         from digital_brain_mcp_cypher.quality import (  # type: ignore[import-not-found]
+            resolve_session_harness_generation_id,
             try_record_tool_outcome_run_event,
         )
     except Exception:
-        # When the MCP package is not importable, still try the injected hook.
+        # When the MCP package is not importable, still try the host recorder.
         try_record_tool_outcome_run_event = None  # type: ignore[assignment]
+        resolve_session_harness_generation_id = None  # type: ignore[assignment]
+
+    recorder = get_host_deterministic_run_event_recorder()
 
     generation_id: str | None
-    try:
-        generation_id = _session_harness_generation_id(harness_generation_id)
-    except ValueError:
-        generation_id = None
+    if harness_generation_id is not None and str(harness_generation_id).strip():
+        generation_id = str(harness_generation_id).strip()
+    elif resolve_session_harness_generation_id is not None:
+        generation_id = resolve_session_harness_generation_id(None)
+    else:
+        try:
+            generation_id = _session_harness_generation_id(harness_generation_id)
+        except ValueError:
+            generation_id = None
 
     if try_record_tool_outcome_run_event is not None:
         return try_record_tool_outcome_run_event(
-            _host_deterministic_run_event_recorder,
+            recorder,
             tool=tool,
             tool_outcome=tool_outcome,
             route=route,
@@ -441,7 +554,7 @@ def _best_effort_host_tool_outcome(
         )
 
     # Minimal fallback when quality helpers are unavailable.
-    if _host_deterministic_run_event_recorder is None or generation_id is None:
+    if recorder is None or generation_id is None:
         return None
     try:
         import uuid
@@ -460,7 +573,7 @@ def _best_effort_host_tool_outcome(
             "schema_version": "1",
             "taxonomy_version": "1",
         }
-        return _host_deterministic_run_event_recorder(event)
+        return recorder(event)
     except Exception as exc:  # noqa: BLE001 — best-effort
         _logger.warning(
             "host tool-outcome instrumentation failed (%s/%s): %s",

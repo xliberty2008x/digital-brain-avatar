@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import sys
 from typing import Any
@@ -585,10 +586,14 @@ def test_deterministic_independent_of_model_prose():
 
 def test_try_record_tool_outcome_best_effort_uses_session_pin(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
 ) -> None:
     session = _FakeSession()
     store = _store_with(session)
     monkeypatch.setenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", GENERATION_ID)
+    # Avoid host active pin leaking into the "missing pin" assertion.
+    monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(tmp_path / "empty-state"))
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", raising=False)
 
     out = try_record_tool_outcome_run_event(
         store.record_deterministic_run_event,
@@ -632,15 +637,93 @@ def test_try_record_tool_outcome_best_effort_uses_session_pin(
     )
 
 
-def test_resolve_and_mint_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_and_mint_helpers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     assert mint_tool_outcome_event_id("read_neo4j_cypher", "empty").startswith(
         "re-read_neo4j_cypher-empty-"
     )
     assert resolve_session_harness_generation_id(GENERATION_ID) == GENERATION_ID
+    # Isolate from the developer's real state dir / active pin.
+    monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(tmp_path / "empty-state"))
     monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", raising=False)
     assert resolve_session_harness_generation_id(None) is None
     monkeypatch.setenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", GENERATION_ID)
     assert resolve_session_harness_generation_id(None) == GENERATION_ID
+
+
+def test_resolve_reads_active_pin_file_without_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """MCP dual-process path: active pin under state dir, no env injection."""
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", raising=False)
+    state = tmp_path / "state"
+    active = state / "active"
+    active.mkdir(parents=True)
+    gid = "hg-" + ("b" * 64)
+    (active / "harness_generation.id").write_text(gid + "\n", encoding="utf-8")
+    monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(state))
+
+    assert resolve_session_harness_generation_id(None) == gid
+
+
+def test_resolve_reads_pin_path_json_and_env_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
+    monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(tmp_path / "no-active"))
+    gid = "hg-" + ("c" * 64)
+
+    pin_json = tmp_path / "harness_generation.json"
+    pin_json.write_text(
+        json.dumps({"id": gid, "plugin_version": "0.2.0"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", str(pin_json))
+    assert resolve_session_harness_generation_id(None) == gid
+
+    env_file = tmp_path / "harness_generation.env"
+    env_file.write_text(
+        f"DIGITAL_BRAIN_HARNESS_GENERATION_ID={gid}\n"
+        f"DIGITAL_BRAIN_HARNESS_PIN_PATH={pin_json}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", str(env_file))
+    assert resolve_session_harness_generation_id(None) == gid
+
+
+def test_try_record_uses_active_pin_file_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Instrumentation records when only the well-known active pin is present."""
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_PIN_PATH", raising=False)
+    state = tmp_path / "state"
+    active = state / "active"
+    active.mkdir(parents=True)
+    (active / "harness_generation.json").write_text(
+        json.dumps({"id": GENERATION_ID, "session_id": "s1"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(state))
+
+    session = _FakeSession()
+    store = _store_with(session)
+    out = try_record_tool_outcome_run_event(
+        store.record_deterministic_run_event,
+        tool="read_neo4j_cypher",
+        tool_outcome="empty",
+        route="READ",
+        outcome_source="mcp",
+        error_class="no_hits",
+        event_id="re-active-pin-only",
+    )
+    assert out is not None
+    assert out["outcome"] == "created"
+    assert out["harness_generation_id"] == GENERATION_ID
+    assert session.run_events["re-active-pin-only"]["outcome_source"] == "mcp"
 
 
 def test_get_receipt_finds_feedback_and_run_event():

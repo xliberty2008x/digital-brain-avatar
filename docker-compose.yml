@@ -71,8 +71,15 @@ services:
       # localhost for host-side tools; that must not leak into this container.
       OLLAMA_BASE_URL: "http://ollama:11434"
       HF_HOME: "/models/huggingface"
+      # Shared host↔MCP state for the well-known active harness pin (id only).
+      # SessionStart / pin script writes active/harness_generation.{id,json};
+      # MCP instrumentation reads it when DIGITAL_BRAIN_HARNESS_GENERATION_ID
+      # is not injected into the container env.
+      DIGITAL_BRAIN_STATE_DIR: "/var/lib/digital-brain"
     volumes:
       - hf-cache:/models/huggingface
+      # Bind host state dir so dual-process RunEvent emit can resolve the pin.
+      - "${DIGITAL_BRAIN_STATE_DIR:-${HOME}/.local/state/digital-brain}:/var/lib/digital-brain"
     # /readyz verifies both Neo4j and a real bge-m3 embedding (1024 dims), so
     # a healthy container is safe for JournalEntry writes rather than merely
     # accepting TCP connections.

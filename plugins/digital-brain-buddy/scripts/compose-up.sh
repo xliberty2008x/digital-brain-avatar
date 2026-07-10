@@ -292,8 +292,16 @@ if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${DIGITAL_BRAIN_HARNESS_GENERATION_ID:
   } >> "$CLAUDE_ENV_FILE"
 fi
 
+# Ensure well-known active pin exists for mcp-cypher (mounted DIGITAL_BRAIN_STATE_DIR).
+# Pin script / pin_session_generation already write it; reinforce after env load.
 if [ -n "${DIGITAL_BRAIN_HARNESS_GENERATION_ID:-}" ]; then
-  echo "$PLUGIN_NAME: harness generation pinned id=${DIGITAL_BRAIN_HARNESS_GENERATION_ID} session=${DIGITAL_BRAIN_SESSION_ID}"
+  ACTIVE_DIR="${STATE_DIR}/active"
+  mkdir -p "$ACTIVE_DIR"
+  printf '%s\n' "${DIGITAL_BRAIN_HARNESS_GENERATION_ID}" > "${ACTIVE_DIR}/harness_generation.id"
+  printf '{\n  "id": "%s",\n  "session_id": "%s"\n}\n' \
+    "${DIGITAL_BRAIN_HARNESS_GENERATION_ID}" \
+    "${DIGITAL_BRAIN_SESSION_ID}" > "${ACTIVE_DIR}/harness_generation.json"
+  echo "$PLUGIN_NAME: harness generation pinned id=${DIGITAL_BRAIN_HARNESS_GENERATION_ID} session=${DIGITAL_BRAIN_SESSION_ID} active_pin=${ACTIVE_DIR}/harness_generation.id"
 else
   echo "$PLUGIN_NAME: harness generation pin completed but id env not visible in this shell (checked $ENV_FILE)"
 fi
