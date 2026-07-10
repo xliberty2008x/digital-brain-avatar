@@ -69,7 +69,10 @@ services:
       OLLAMA_EMBEDDING_TIMEOUT_SECONDS: "${OLLAMA_EMBEDDING_TIMEOUT_SECONDS:-20}"
       # Always the compose service name inside the network. Host .env may use
       # localhost for host-side tools; that must not leak into this container.
-      OLLAMA_BASE_URL: "http://ollama:11434"
+      # Default: compose service. If host already runs Ollama on :11434 (port
+      # conflict with compose ollama), start with:
+      #   OLLAMA_BASE_URL=http://host.docker.internal:11434 docker compose up -d --no-deps mcp-cypher
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
       HF_HOME: "/models/huggingface"
       # Shared host↔MCP state for the well-known active harness pin (id only).
       # SessionStart / pin script writes active/harness_generation.{id,json};
