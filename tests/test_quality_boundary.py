@@ -19,6 +19,7 @@ from digital_brain_mcp_cypher import server  # noqa: E402
 from digital_brain_mcp_cypher.quality_control_api import (  # noqa: E402
     COORDINATOR_FORBIDDEN_MCP_TOOL_NAMES,
     COORDINATOR_OPERATIONS,
+    dispatch_coordinator,
 )
 
 
@@ -139,6 +140,58 @@ def test_coordinator_rejects_oversized_and_unknown_operations(
         )
     )
     assert response.status_code == 400
+
+
+def test_coordinator_dispatch_accepts_record_retention_effect():
+    """record_retention_effect is a known HTTP op (not unknown_operation).
+
+    Domain fence failure (stale_epoch) is a valid 200 outcome; the op must not
+    be rejected at the operation-name gate.
+    """
+    assert "record_retention_effect" in COORDINATOR_OPERATIONS
+
+    seen: list[tuple[str, dict]] = []
+
+    def maintenance_dispatch(operation: str, payload: dict) -> dict:
+        seen.append((operation, payload))
+        # Simulate fence rejection — proves dispatch reached the store path.
+        return {
+            "outcome": "stale_epoch",
+            "reason": "lease_expired",
+            "run_id": payload.get("run_id"),
+            "epoch": payload.get("epoch"),
+        }
+
+    response = dispatch_coordinator(
+        {
+            "operation": "record_retention_effect",
+            "payload": {
+                "id": "eff-1",
+                "effect_key": "ret:x",
+                "run_id": "run-a",
+                "epoch": 1,
+                "target_ref": "Feedback:x",
+            },
+        },
+        maintenance_dispatch=maintenance_dispatch,
+    )
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body.get("reason") != "unknown_operation"
+    assert body["outcome"] == "stale_epoch"
+    assert body["operation"] == "record_retention_effect"
+    assert seen == [
+        (
+            "record_retention_effect",
+            {
+                "id": "eff-1",
+                "effect_key": "ret:x",
+                "run_id": "run-a",
+                "epoch": 1,
+                "target_ref": "Feedback:x",
+            },
+        )
+    ]
 
 
 def test_get_quality_receipt_not_found_shape(monkeypatch: pytest.MonkeyPatch):

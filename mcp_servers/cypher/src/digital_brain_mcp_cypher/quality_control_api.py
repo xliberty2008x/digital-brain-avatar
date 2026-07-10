@@ -37,6 +37,7 @@ COORDINATOR_OPERATIONS: frozenset[str] = frozenset(
         "create_proposal",
         "record_evaluation",
         "record_decision",
+        "record_retention_effect",
     }
 )
 

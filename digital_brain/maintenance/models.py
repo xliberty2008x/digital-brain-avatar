@@ -568,7 +568,14 @@ class MaintenanceLease:
 
 @dataclass(frozen=True)
 class DreamRun:
-    """Bounded maintenance run. Stage receipts are separate nodes."""
+    """Bounded maintenance run. Stage receipts are separate nodes.
+
+    ``id`` is bound to the holder lease fence ``run_id`` at create time.
+
+    Post-takeover abandoned DreamRuns (prior epoch / ``lease_lost``) are
+    observation-only until Task 7 coordinator cleanup/reap logic; fenced
+    writes under a stale epoch are rejected by the lease fence.
+    """
 
     id: str
     owner_status: str

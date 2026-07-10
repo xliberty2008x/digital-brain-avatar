@@ -315,6 +315,41 @@ def test_same_holder_active_acquire_renews_without_epoch_bump():
     assert again["epoch"] == first["epoch"] == 1
 
 
+def test_create_dream_run_requires_id_equal_to_lease_fence_run_id():
+    """DreamRun.id is bound to the holder lease fence run_id."""
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    lease = store.acquire_maintenance_lease(
+        {
+            "key": "maintenance",
+            "holder_id": "host-a",
+            "run_id": "run-fence",
+            "ttl_seconds": 60,
+        }
+    )
+    with pytest.raises(ValueError, match="dream id must equal lease fence run_id"):
+        store.create_dream_run(
+            {
+                "id": "dream-other",
+                "run_id": "run-fence",
+                "epoch": lease["epoch"],
+                "harness_generation_id": GENERATION_ID,
+            }
+        )
+    assert "dream-other" not in session.dreams
+
+    ok = store.create_dream_run(
+        {
+            "id": "run-fence",
+            "run_id": "run-fence",
+            "epoch": lease["epoch"],
+            "harness_generation_id": GENERATION_ID,
+        }
+    )
+    assert ok["outcome"] == "created"
+    assert "run-fence" in session.dreams
+
+
 def test_stage_and_retention_hooks_require_run_id_plus_epoch():
     """Stage transitions and retention effects need the fence pair."""
     session = _FakeMaintSession()

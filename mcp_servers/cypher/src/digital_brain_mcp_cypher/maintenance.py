@@ -827,7 +827,15 @@ class MaintenanceStore:
             payload.get("lease_key") or DEFAULT_LEASE_KEY, "lease_key"
         )
         # Fence is required so create is only done by the current lease holder.
+        # DreamRun.id must equal the lease fence run_id — a mismatch would let a
+        # holder mint a dream under a foreign identity while fencing as itself.
         fence_run_id = _require_id(payload.get("run_id") or run_id, "run_id")
+        if run_id != fence_run_id:
+            raise ValueError(
+                "dream id must equal lease fence run_id "
+                f"(id={run_id!r}, run_id={fence_run_id!r}); "
+                "create_dream_run binds DreamRun.id to the holder lease fence"
+            )
         epoch = _require_int(payload.get("epoch") or payload.get("lease_epoch"), "epoch", min_value=1)
         holder_id = _optional_text(payload.get("holder_id"), "holder_id", MAX_ID_LEN)
         base_commit = _optional_text(payload.get("base_commit"), "base_commit", MAX_REF_LEN)
