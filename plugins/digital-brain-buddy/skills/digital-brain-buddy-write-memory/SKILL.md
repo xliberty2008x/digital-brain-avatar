@@ -47,4 +47,7 @@ Return a compact mutation report:
 - Do not mint a new append key after timeout.
 - Do not treat receipt `found` as `created`/`replayed` vocabulary.
 - Do not run unresolved writer tasks in parallel.
+- Do not create, activate, or revoke Alias / EntityProtection via generic Cypher.
+- Do not handle FEEDBACK / `claim_false` as a journal write; FEEDBACK is
+  evidence + propose-only on the parent session route.
 - Do not answer the user in buddy voice.

@@ -19,3 +19,10 @@ query.
 
 Return a compact evidence pack to the caller. Do not answer the user
 directly and do not write to the graph.
+
+## Boundaries
+
+- Read-only: never create Feedback, Alias, ActivationAuthority, or journals.
+- FEEDBACK evidence (`create_feedback`) and review cards belong to the parent
+  session agent, not this worker.
+- Alias apply/revoke is operator-only and never part of read retrieval.

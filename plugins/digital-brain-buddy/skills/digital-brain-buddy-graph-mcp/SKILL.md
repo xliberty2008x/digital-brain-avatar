@@ -71,11 +71,13 @@ Rules:
 - otherwise use connection count (`weight = COUNT { (n)--() }`)
 
 4. Mirror entity resolution before assuming a node is new:
-- check `Alias` first by `from_name`
+- check active, scoped `Alias` first (namespace + entity type + normalized source)
+- map directly to a validated canonical id — never Alias→Alias chains
 - then use type-specific lookup
 - `Person`: fuzzy or contains match on `name`
 - `Topic`, `State`, `Organization`, `Location`, `Object`: case-insensitive exact `name`
 - `Event`: lookup by `type` or time context, not free-text description alone
+- never create/activate Alias via generic Cypher; Alias apply is operator-only
 
 ## Write Workflow
 
@@ -102,6 +104,9 @@ Rules:
 - Do not trust stale prompt docs over the live graph.
 - Do not use `mcp__codex_apps__neo4j_cypher`; it is not the plugin-owned MCP server.
 - Do not create or merge `JournalEntry` or `FOLLOWS` through generic Cypher.
+- Do not create, mutate, or activate `Alias`, `EntityProtection`, or
+  `ActivationAuthority` through generic Cypher or model-facing MCP tools.
+- Do not treat FEEDBACK prose / generic acks as Alias activation authority.
 - Do not assume all mentions use one relationship type.
 - Do not stringify `params` when calling the direct MCP connector.
 - Do not run unresolved writer flows in parallel; a stale head produces an explicit append conflict.

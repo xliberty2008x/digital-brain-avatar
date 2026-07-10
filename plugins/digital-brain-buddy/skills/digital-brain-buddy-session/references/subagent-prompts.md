@@ -8,6 +8,8 @@ The goal is consistency:
 - reader worker gathers evidence
 - entity-check worker verifies whether a candidate entity is a duplicate before a write
 - writer worker persists one bounded memory update
+- FEEDBACK evidence and review cards stay with the parent session agent
+  (subagents never mint ActivationAuthority or apply Alias)
 
 If the host runtime has an explicit permission gate for subagents, this file still defines the default intended pattern. The parent session agent should switch to it as soon as that gate is satisfied.
 
@@ -104,9 +106,25 @@ Output contract:
 Constraints:
 - do not write to the graph
 - never merge entities yourself; only report whether a merge is authorized
+- never create or activate Alias / EntityProtection records
 - when evidence is thin or ambiguous, return not authorized rather than guessing
 - do not produce buddy-tone prose for the user
 ```
+
+## FEEDBACK (parent session only)
+
+Do not spawn reader/writer/entity-check workers to activate identity effects.
+On a `FEEDBACK` turn the parent session agent:
+
+1. classifies kind (`entity_wrong` | `claim_false` | `miss` | `invent` | `praise`)
+2. calls `create_feedback` with the pinned harness generation id
+3. for `entity_wrong`, may show a propose-only Alias review card
+4. for `claim_false`, remains propose-only (no life-memory mutation)
+5. for `praise`, records a counter only (never a JournalEntry)
+6. never treats generic ack (`yes`/`ok`/👍) as activation
+7. max one confirmation prompt per user turn
+8. leaves apply/revoke to the operator script
+   `scripts/digital_brain_apply_proposal.py` (no unattended `--yes`)
 
 ## Writer Worker
 
@@ -140,6 +158,8 @@ Constraints:
 - writer tasks must be serialized; on timeout reconcile the same append key rather than retrying blindly
 - if emitting any quality sensor (RunEvent/Feedback), pass the session-pinned
   `harness_generation_id` (`DIGITAL_BRAIN_HARNESS_GENERATION_ID`) unchanged; never recompute it
+- do not create Alias, ActivationAuthority, or EntityProtection nodes
+- do not treat FEEDBACK / claim_false as a journal write path
 - do not produce buddy-tone prose for the user
 ```
 

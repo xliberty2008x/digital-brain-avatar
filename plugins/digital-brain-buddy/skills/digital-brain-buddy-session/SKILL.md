@@ -87,6 +87,73 @@ Classify each turn before acting:
 - `SKIP`: greetings, filler, tiny acknowledgements, trivial chat.
 - `READ`: the user asks about prior events, people, patterns, or wants context-aware advice.
 - `WRITE`: the user shares a meaningful event, emotion, realization, relationship change, fear, goal, or decision that should be remembered.
+- `FEEDBACK`: the user corrects identity, disputes a claim, reports a miss/invention, or gives praise about what the buddy just said or wrote.
+
+When a turn is pure correction/praise about a prior answer, prefer `FEEDBACK`
+over `WRITE`. Do not fold identity corrections into a life journal append.
+
+## FEEDBACK Route
+
+Use this route for user-visible quality signals. It captures **immutable
+evidence** and may draft a **typed review proposal**. It never activates Alias,
+pinned-identity, policy, overlay, or SOUL changes from prose.
+
+### Intent gate
+
+Enter FEEDBACK only when at least one holds:
+
+- a pending review proposal is in scope for this session, or
+- a grounded correction cue is present (wrong entity name, “that never
+  happened”, “you forgot X”, “you made that up”, explicit praise of accuracy)
+
+Prefer silent park when the signal is weak or ambiguous. Generic
+acknowledgements alone (`yes`, `ok`, `👍`, “sure”) are **not** FEEDBACK and
+**never** activate anything.
+
+### Budget and activation rules
+
+- **One confirmation prompt max per user turn.** Never chain multi-step
+  “are you sure?” flows on the same turn.
+- Generic ack rejection: `yes` / `ok` / 👍 / “sure” / “go ahead” never apply
+  Alias, EntityProtection, policy, overlay, or SOUL changes.
+- User may express intent with an exact stable token such as
+  `APPLY alias:<proposal_id>`. That token is **intent only** — a separately
+  permissioned host/operator script
+  (`scripts/digital_brain_apply_proposal.py`) mints a single-use authority and
+  applies the effect. Models and MCP tools cannot consume authority.
+- Operator credentials, coordinator secrets, and apply scripts must stay out of
+  maintainer/analyzer toolsets. There is no unattended `--yes` apply path.
+
+### Evidence write
+
+1. Call `create_feedback` with the session-pinned
+   `harness_generation_id` unchanged.
+2. Kinds: `entity_wrong` | `claim_false` | `miss` | `invent` | `praise`.
+3. Feedback is an immutable observation (plus optional removable
+   `QualityPayload` for raw text). Lifecycle events are separate rows.
+
+### Kind-specific promote rules
+
+| kind | Online action | Activation |
+| --- | --- | --- |
+| `entity_wrong` | Feedback + optional typed Alias proposal (review card) | Operator-confirmed Alias effect only |
+| `claim_false` | Feedback + propose-only review note | **Propose-only** until a Claim/Assertion provenance model exists — never mutates life memory from FEEDBACK |
+| `miss` | Feedback; missing memory may become an owner-confirmed normal WRITE later | No silent journal invent |
+| `invent` | Feedback; optional session blocklist note | No identity mutation |
+| `praise` | Feedback **counter only** | Never a life journal; never activation |
+
+### Review card (when proposing)
+
+Show exact scope, evidence band, effect hash when known, blast radius, and undo
+path. Park for maintenance when evidence is thin. Do not invent canonical ids.
+
+### What FEEDBACK must not do
+
+- Do not `DETACH DELETE`, merge entities, or create/activate Alias via generic
+  Cypher or model-facing MCP.
+- Do not treat textual “yes” as authority.
+- Do not call operator apply scripts, mint ActivationAuthority, or touch
+  quality/operator credentials from the session agent or subagents.
 
 ## Subagent Mode
 
@@ -100,7 +167,8 @@ skill's `agents/openai.yaml` plus the prompt templates in
 - Main session agent owns:
   - reading `SOUL.MD`
   - running the mandatory `BOOTSTRAP` read before the first user-facing response
-  - deciding whether the turn is `SKIP`, `READ`, or `WRITE`
+  - deciding whether the turn is `SKIP`, `READ`, `WRITE`, or `FEEDBACK`
+  - running the FEEDBACK evidence path (`create_feedback`) and review cards
   - separating fact from inference
   - the final buddy-facing response
 - Reader subagent owns:
@@ -137,7 +205,7 @@ When spawning delegated reader or writer workers, use the canonical prompt templ
 Do not hand-wave the task. Pass:
 
 - exact user turn or distilled write payload
-- whether the task is `BOOTSTRAP`, `READ`, or `WRITE`
+- whether the task is `BOOTSTRAP`, `READ`, `WRITE`, or `FEEDBACK`
 - relevant entity names already known
 - hard output expectations
 - the rule that writer tasks must not overlap
@@ -170,6 +238,16 @@ For `WRITE`:
 4. append one new `JournalEntry`, then link entities with idempotent MERGE
 
 In subagent mode, steps 1-4 belong to the writer worker, not the main session agent.
+
+For `FEEDBACK`:
+
+1. classify kind (`entity_wrong` / `claim_false` / `miss` / `invent` / `praise`)
+2. call `create_feedback` with pinned harness generation id
+3. for `entity_wrong`, draft a one-line Alias review proposal card (propose-only)
+4. for `claim_false`, keep propose-only — do not mutate life memory
+5. for `praise`, counter only — never append a journal
+6. never activate Alias from prose; operator path is
+   `scripts/digital_brain_apply_proposal.py`
 
 ## What To Store
 
@@ -225,3 +303,7 @@ Do not store:
 - Do not let warmth turn into flattery.
 - Do not use old docs over live schema and runtime code.
 - Do not let delegated workers invent buddy-tone prose on behalf of the main session.
+- Do not activate Alias / pinned identity / policy from FEEDBACK prose or generic acks.
+- Do not treat `claim_false` as a life-memory mutation path.
+- Do not put operator apply credentials or ActivationAuthority mint/consume into
+  reader/writer/entity-check toolsets.

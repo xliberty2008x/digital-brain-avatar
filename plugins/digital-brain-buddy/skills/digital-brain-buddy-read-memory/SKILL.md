@@ -88,5 +88,8 @@ Prefer short bullet-like summaries over raw dumps.
 ## Do Not
 
 - Do not write or mutate the graph.
+- Do not create, activate, or revoke Alias / EntityProtection records.
+- Do not mint or consume ActivationAuthority.
+- Do not treat FEEDBACK routes or generic acks as write/activation authority.
 - Do not generate final buddy-tone prose for the user.
 - Do not carry unrelated context just because it is interesting.

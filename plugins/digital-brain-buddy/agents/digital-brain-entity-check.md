@@ -36,3 +36,10 @@ creating a new entity when a merge isn't authorized.
 
 Return: `{ "authorized": bool, "keep_id": ..., "keep_name": ..., "reason": ... }`.
 Never write to the graph and never produce final buddy-voice prose.
+
+## Boundaries
+
+- Report-only: never create Alias, merge nodes, or mint ActivationAuthority.
+- A positive shared-connections signal is evidence for a later operator-reviewed
+  Alias proposal — not online activation.
+- FEEDBACK `entity_wrong` / `claim_false` paths stay outside this worker.

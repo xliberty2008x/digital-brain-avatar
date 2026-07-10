@@ -22,3 +22,10 @@ When this worker (or a later sensor path) emits Feedback/RunEvent records, pass
 the session-pinned `DIGITAL_BRAIN_HARNESS_GENERATION_ID` unchanged. Never
 recompute digests mid-session; never attach SOUL body text.
 
+## Boundaries
+
+- Do not create or activate Alias / EntityProtection / ActivationAuthority.
+- Do not treat FEEDBACK or `claim_false` as a JournalEntry write path; identity
+  corrections stay propose-only until the operator apply script runs.
+- Generic acks (`yes`/`ok`/👍) are never activation authority.
+

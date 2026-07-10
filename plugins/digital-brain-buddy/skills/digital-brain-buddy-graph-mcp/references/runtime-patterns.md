@@ -78,7 +78,8 @@ Heavy-node pattern:
 
 Lookup order:
 
-1. `Alias` lookup by `from_name`
+1. Active, scoped `Alias` lookup (namespace + entity type + normalized source;
+   highest revision; direct-to-canonical only — never Alias→Alias)
 2. Type-specific node lookup
 
 Type-specific patterns:
@@ -88,6 +89,12 @@ Type-specific patterns:
 - `State`: exact case-insensitive `name`
 - `Event`: lookup by `type`
 - fallback labels: exact case-insensitive `name`
+
+Alias mutations are **operator-only** (`scripts/digital_brain_apply_proposal.py`
++ `digital_brain/maintenance/alias_effects.py`). Generic Cypher and model-facing
+MCP cannot create or activate Alias. FEEDBACK may propose; prose never activates.
+Unscoped/conflicting/cyclic legacy Alias nodes must be audited before relying on
+new resolution semantics.
 
 ## Actual Write Path
 
@@ -284,14 +291,45 @@ The operator runs `scripts/bootstrap_journal_chain.py --head-element-id
 tool. Generic Cypher cannot modify `JournalChain`, `HEAD`, `FOLLOWS`, or core
 JournalEntry receipt fields.
 
-### Alias-first entity lookup
+### Alias-first entity lookup (scoped, active-revision-aware)
+
+Prefer the resolver in `digital_brain/services/entity_resolver.py`. Canonical
+query shape (active + scoped; direct-to-canonical):
 
 ```cypher
 MATCH (a:Alias)
-WHERE toLower(a.from_name) = toLower($name)
-RETURN a.canonical_id AS id, a.to_name AS name
+WHERE coalesce(a.status, 'active') = 'active'
+  AND coalesce(a.namespace, 'life') = $namespace
+  AND (
+    a.entity_type IS NULL OR a.entity_type = $entity_type
+  )
+  AND (
+    a.normalized_from = $normalized
+    OR (
+      a.normalized_from IS NULL
+      AND toLower(coalesce(a.from_name, a.display_from, '')) = toLower($name)
+    )
+  )
+  AND a.canonical_id IS NOT NULL
+  AND NOT EXISTS {
+    MATCH (other:Alias)
+    WHERE other.id = a.canonical_id OR other.canonical_id = a.canonical_id
+      AND other.id <> a.id AND coalesce(other.status, 'active') = 'active'
+      AND other.normalized_from = a.normalized_from
+  }
+WITH a
+// Reject Alias→Alias: canonical target must not itself be an Alias node id
+OPTIONAL MATCH (bad:Alias {id: a.canonical_id})
+WHERE bad IS NULL
+RETURN a.canonical_id AS id,
+       coalesce(a.canonical_name, a.to_name) AS name,
+       a.revision AS revision
+ORDER BY coalesce(a.revision, 0) DESC, a.id ASC
 LIMIT 1
 ```
+
+Apply/revoke is never done from this skill — only via the operator script after
+audit of unscoped/conflicting/cyclic Alias nodes.
 
 ### Related nodes via shared connections
 
