@@ -184,12 +184,14 @@ class _FakeSession:
 
         if "SET a.status = 'consumed'" in q:
             a = self.authorities.get(params["id"])
-            if a:
-                a["status"] = "consumed"
-                a["consumed_at"] = params.get("now")
-                a["consumption_receipt_id"] = params.get("receipt_id")
-                a["reconciliation_receipt_id"] = params.get("receipt_id")
-            return _Result({"id": params["id"]})
+            # Compare-and-set: only minted → consumed (matches WHERE a.status = 'minted').
+            if a is None or a.get("status") != "minted":
+                return _Result(None)
+            a["status"] = "consumed"
+            a["consumed_at"] = params.get("now")
+            a["consumption_receipt_id"] = params.get("receipt_id")
+            a["reconciliation_receipt_id"] = params.get("receipt_id")
+            return _Result({"id": params["id"], "status": "consumed"})
 
         # Authority create
         if "CREATE (a:Operational:ActivationAuthority)" in q:
@@ -1073,6 +1075,81 @@ def test_duplicate_active_alias_replayed():
     )
     assert applied["outcome"] == "replayed"
     assert applied["reason"] == "alias_already_active"
+    assert applied.get("authority_status") == "consumed"
+    assert session.authorities["aa-dup3"]["status"] == "consumed"
+    # Single-use: reusing the nonce after already-active must not re-apply.
+    replay = store.apply_alias(
+        {
+            "authority_id": "aa-dup3",
+            "nonce": mint["nonce"],
+            "actor": "owner@test",
+            "entity_type": "Person",
+            "display_from": "CarPlace",
+            "canonical_id": "person-carid",
+            "canonical_name": "CarID",
+            "before_fingerprint": before_fp,
+            "artifact_or_effect_hash": effect_hash,
+        }
+    )
+    assert replay["outcome"] == "replayed"
+    assert replay.get("reason") == "authority_already_consumed"
+    assert replay.get("replacement_minted") is False
+
+
+def test_apply_rejects_approver_mismatch():
+    session = _FakeSession()
+    _seed_person(session)
+    store = _store(session)
+    normalized = normalize_alias_source("CarPlace")
+    before_fp = compute_before_fingerprint(
+        namespace="life",
+        entity_type="Person",
+        normalized_from=normalized,
+        active_alias_id=None,
+        active_revision=None,
+        active_canonical_id=None,
+    )
+    effect = alias_effect_payload(
+        effect_type="apply_alias",
+        namespace="life",
+        entity_type="Person",
+        normalized_from=normalized,
+        display_from="CarPlace",
+        canonical_id="person-carid",
+        canonical_name="CarID",
+        revision=1,
+    )
+    effect_hash = compute_alias_effect_hash(effect)
+    target_ref = alias_lookup_key(
+        namespace="life", entity_type="Person", normalized_from=normalized
+    )
+    mint = store.mint_activation_authority(
+        {
+            "id": "aa-actor-mismatch",
+            "proposal_id": "prop-actor",
+            "proposal_hash": effect_hash,
+            "target_ref": target_ref,
+            "before_fingerprint": before_fp,
+            "artifact_or_effect_hash": effect_hash,
+            "approver": "owner@test",
+        }
+    )
+    bad = store.apply_alias(
+        {
+            "authority_id": "aa-actor-mismatch",
+            "nonce": mint["nonce"],
+            "actor": "intruder@test",
+            "entity_type": "Person",
+            "display_from": "CarPlace",
+            "canonical_id": "person-carid",
+            "canonical_name": "CarID",
+            "before_fingerprint": before_fp,
+            "artifact_or_effect_hash": effect_hash,
+        }
+    )
+    assert bad["outcome"] == "failed"
+    assert bad["reason"] == "authority_approver_mismatch"
+    assert session.authorities["aa-actor-mismatch"]["status"] == "minted"
 
 
 def test_revoke_is_compensating_not_delete():

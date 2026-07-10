@@ -1145,6 +1145,17 @@ class AliasEffectStore:
                 "authority_id": authority_id,
             }
 
+        # Approver binding: actor must match mint-time approver (constant-time).
+        expected_approver = str(auth.get("approver") or "")
+        if not expected_approver or not secrets.compare_digest(
+            expected_approver, str(actor)
+        ):
+            return {
+                "outcome": "failed",
+                "reason": "authority_approver_mismatch",
+                "authority_id": authority_id,
+            }
+
         # Expiry check
         expires_at = auth.get("expires_at")
         if expires_at:
@@ -1494,16 +1505,11 @@ class AliasEffectStore:
             # Duplicate active alias (different id, same key) already handled by
             # active single-row lookup; if active exists with different canonical
             # and we apply, we revoke old then create new revision.
-            if active is not None and str(active.get("canonical_id")) == canonical_id:
-                # Idempotent same mapping: replay applied receipt if present
-                # else create no-op receipt as replayed state.
-                return {
-                    "outcome": "replayed",
-                    "reason": "alias_already_active",
-                    "alias_id": active.get("id"),
-                    "canonical_id": canonical_id,
-                    "revision": active.get("revision"),
-                }
+            already_active = (
+                active is not None and str(active.get("canonical_id")) == canonical_id
+            )
+        else:
+            already_active = False
 
         # Build request hash for receipt
         req_identity = {
@@ -1536,12 +1542,27 @@ class AliasEffectStore:
         )
         if by_key is not None:
             if by_key.get("request_hash") == request_hash:
+                # Still consume authority if still minted (CAS) so single-use holds.
+                cas = self._cas_consume_authority(
+                    tx,
+                    authority_id=authority_id,
+                    receipt_id=str(by_key["id"]),
+                )
+                if cas.get("outcome") == "stale_consume":
+                    return {
+                        "outcome": "replayed",
+                        "reason": "authority_already_consumed",
+                        "authority_id": authority_id,
+                        "effect_id": by_key["id"],
+                        "replacement_minted": False,
+                    }
                 return {
                     "outcome": "replayed",
                     "effect_id": by_key["id"],
                     "effect_key": effect_key,
                     "effect_outcome": by_key.get("outcome"),
                     "request_hash": request_hash,
+                    "authority_status": "consumed",
                 }
             return {
                 "outcome": "conflict",
@@ -1551,6 +1572,66 @@ class AliasEffectStore:
 
         alias_id = f"alias-{uuid.uuid4()}"
         now = _now_iso()
+
+        if effect_type == "apply_alias" and already_active:
+            # No-op mapping already present: still single-use consume authority
+            # with a verified receipt so the nonce cannot be reused.
+            cas = self._cas_consume_authority(
+                tx,
+                authority_id=authority_id,
+                receipt_id=effect_id,
+            )
+            if cas.get("outcome") == "stale_consume":
+                return {
+                    "outcome": "replayed",
+                    "reason": "authority_already_consumed",
+                    "authority_id": authority_id,
+                    "replacement_minted": False,
+                }
+            _run_one(
+                tx,
+                """
+                CREATE (r:Operational:EffectReceipt)
+                SET r.id = $id,
+                    r.effect_key = $effect_key,
+                    r.request_hash = $request_hash,
+                    r.proposal_id = $proposal_id,
+                    r.effect_type = $effect_type,
+                    r.actor = $actor,
+                    r.before_ref = $before_ref,
+                    r.after_ref = $after_ref,
+                    r.outcome = 'noop_already_active',
+                    r.verification_status = 'verified',
+                    r.authority_digest = $authority_digest,
+                    r.applied_at = $now,
+                    r.undo_ref = $undo_ref
+                RETURN r.id AS id
+                """,
+                {
+                    "id": effect_id,
+                    "effect_key": effect_key,
+                    "request_hash": request_hash,
+                    "proposal_id": proposal_id or auth.get("proposal_id"),
+                    "effect_type": effect_type,
+                    "actor": actor,
+                    "before_ref": f"before:{live_before}",
+                    "after_ref": f"alias:{active.get('id')}:already_active",
+                    "authority_digest": auth.get("request_fingerprint"),
+                    "now": now,
+                    "undo_ref": f"revoke_alias:{target_ref}",
+                },
+            )
+            return {
+                "outcome": "replayed",
+                "reason": "alias_already_active",
+                "alias_id": active.get("id"),
+                "canonical_id": canonical_id,
+                "revision": active.get("revision"),
+                "effect_id": effect_id,
+                "authority_id": authority_id,
+                "authority_status": "consumed",
+                "request_hash": request_hash,
+            }
 
         if effect_type == "apply_alias":
             # Revoke prior active (compensating status, not delete)
@@ -1715,20 +1796,19 @@ class AliasEffectStore:
             },
         )
 
-        # Consume authority
-        assert_legal_authority_transition("minted", "consumed")
-        _run_one(
+        # Consume authority with compare-and-set (single-use under concurrency).
+        cas = self._cas_consume_authority(
             tx,
-            """
-            MATCH (a:Operational:ActivationAuthority {id: $id})
-            SET a.status = 'consumed',
-                a.consumed_at = $now,
-                a.consumption_receipt_id = $receipt_id,
-                a.reconciliation_receipt_id = $receipt_id
-            RETURN a.id AS id
-            """,
-            {"id": authority_id, "now": now, "receipt_id": effect_id},
+            authority_id=authority_id,
+            receipt_id=effect_id if receipt is None else str(receipt["id"]),
         )
+        if cas.get("outcome") == "stale_consume":
+            return {
+                "outcome": "replayed",
+                "reason": "authority_already_consumed",
+                "authority_id": authority_id,
+                "replacement_minted": False,
+            }
 
         if prop_row is not None:
             _run_one(
@@ -1761,6 +1841,37 @@ class AliasEffectStore:
                 if effect_type == "apply_alias"
                 else f"reapply_alias:{target_ref}"
             ),
+        }
+
+    def _cas_consume_authority(
+        self,
+        tx: Any,
+        *,
+        authority_id: str,
+        receipt_id: str,
+    ) -> dict[str, Any]:
+        """Atomically transition minted → consumed; fail closed on races."""
+        assert_legal_authority_transition("minted", "consumed")
+        now = _now_iso()
+        row = _run_one(
+            tx,
+            """
+            MATCH (a:Operational:ActivationAuthority {id: $id})
+            WHERE a.status = 'minted'
+            SET a.status = 'consumed',
+                a.consumed_at = $now,
+                a.consumption_receipt_id = $receipt_id,
+                a.reconciliation_receipt_id = $receipt_id
+            RETURN a.id AS id, a.status AS status
+            """,
+            {"id": authority_id, "now": now, "receipt_id": receipt_id},
+        )
+        if row is None:
+            return {"outcome": "stale_consume", "authority_id": authority_id}
+        return {
+            "outcome": "consumed",
+            "authority_id": authority_id,
+            "status": row.get("status"),
         }
 
     # ------------------------------------------------------------------
@@ -1834,7 +1945,8 @@ class AliasEffectStore:
                    a.consumption_receipt_id AS consumption_receipt_id,
                    a.target_ref AS target_ref,
                    a.artifact_or_effect_hash AS artifact_or_effect_hash,
-                   a.before_fingerprint AS before_fingerprint
+                   a.before_fingerprint AS before_fingerprint,
+                   a.approver AS approver
             LIMIT 1
             """,
             {"id": authority_id},
@@ -1858,6 +1970,16 @@ class AliasEffectStore:
             return {
                 "outcome": "failed",
                 "reason": f"authority_{auth.get('status')}",
+            }
+
+        expected_approver = str(auth.get("approver") or "")
+        if not expected_approver or not secrets.compare_digest(
+            expected_approver, str(actor)
+        ):
+            return {
+                "outcome": "failed",
+                "reason": "authority_approver_mismatch",
+                "authority_id": authority_id,
             }
 
         # Expiry check (reject past expires_at; mark expired for reconciliation).
@@ -2065,18 +2187,18 @@ class AliasEffectStore:
                 "now": now,
             },
         )
-        _run_one(
+        cas = self._cas_consume_authority(
             tx,
-            """
-            MATCH (a:Operational:ActivationAuthority {id: $id})
-            SET a.status = 'consumed',
-                a.consumed_at = $now,
-                a.consumption_receipt_id = $receipt_id,
-                a.reconciliation_receipt_id = $receipt_id
-            RETURN a.id AS id
-            """,
-            {"id": authority_id, "now": now, "receipt_id": effect_id},
+            authority_id=authority_id,
+            receipt_id=effect_id,
         )
+        if cas.get("outcome") == "stale_consume":
+            return {
+                "outcome": "replayed",
+                "reason": "authority_already_consumed",
+                "authority_id": authority_id,
+                "replacement_minted": False,
+            }
         return {
             "outcome": "applied",
             "effect_id": effect_id,

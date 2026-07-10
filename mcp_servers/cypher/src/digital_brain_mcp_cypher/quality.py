@@ -1211,9 +1211,10 @@ class QualityStore:
         path that mirrors it) may remove raw payload. Generic Cypher DELETE
         remains blocked. Every apply is receipted via EffectReceipt + lifecycle.
 
-        Required fields: id, effect_key, feedback_id, action, config_digest.
-        Optional fence: run_id + epoch + lease_key (validated when present).
-        ``dry_run: true`` returns a plan-style count without mutation.
+        Required fields: id, effect_key, feedback_id, action, config_digest,
+        and (for mutative apply) run_id + epoch + lease_key fence.
+        ``dry_run: true`` returns a plan-style count without mutation and
+        does not require a fence.
         Automatic apply must set ``automatic: true`` and pass
         ``auto_apply_enabled: true`` from the reviewed config; otherwise denied.
         Owner-initiated apply sets ``owner_initiated: true``.
@@ -1296,27 +1297,23 @@ class QualityStore:
                 payload.get("after_ref") or f"Feedback:{feedback_id}:archived"
             )
 
-        run_id = payload.get("run_id")
+        # Mutative retention is always fenced (Task 5 / Milestone B gate).
+        run_id = _require_sensor_id(payload.get("run_id"), "run_id")
         epoch = payload.get("epoch")
         if epoch is None:
             epoch = payload.get("lease_epoch")
-        lease_key = payload.get("lease_key") or "maintenance"
-        fence_required = run_id is not None or epoch is not None
-        if fence_required:
-            run_id = _require_sensor_id(run_id, "run_id")
-            if epoch is None:
-                raise ValueError("epoch is required when run_id is provided")
-            try:
-                epoch_i = int(epoch)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("epoch must be an integer") from exc
-            if epoch_i < 1:
-                raise ValueError("epoch must be >= 1")
-            lease_key = _require_sensor_id(str(lease_key), "lease_key")
-        else:
-            epoch_i = None
-            run_id = None
-            lease_key = str(lease_key)
+        if epoch is None:
+            raise ValueError("epoch is required for retention apply")
+        try:
+            epoch_i = int(epoch)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("epoch must be an integer") from exc
+        if epoch_i < 1:
+            raise ValueError("epoch must be >= 1")
+        lease_key = _require_sensor_id(
+            payload.get("lease_key") or "maintenance", "lease_key"
+        )
+        fence_required = True
 
         identity = {
             "action": action,
@@ -1426,12 +1423,12 @@ class QualityStore:
         after_ref: str,
         request_fingerprint: str,
         request_hash: str,
-        run_id: str | None,
-        epoch: int | None,
+        run_id: str,
+        epoch: int,
         lease_key: str,
         fence_required: bool,
     ) -> dict[str, Any]:
-        if fence_required and run_id is not None and epoch is not None:
+        if fence_required:
             fence_err = self._assert_retention_fence(
                 tx, lease_key=lease_key, run_id=run_id, epoch=epoch
             )

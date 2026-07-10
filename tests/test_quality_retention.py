@@ -447,9 +447,26 @@ def test_auto_apply_denied_without_opt_in():
 # ---------------------------------------------------------------------------
 
 
+def _retention_fence_payload(**extra: Any) -> dict[str, Any]:
+    """Mutative retention requires run_id + epoch + lease_key (Task 5 fence)."""
+    base = {
+        "run_id": "dream-ret-1",
+        "epoch": 1,
+        "lease_key": "maintenance",
+    }
+    base.update(extra)
+    return base
+
+
 def test_apply_retention_redacts_payload_keeps_fingerprint_and_receipt():
     session = _FakeSession()
     store = _store_with(session)
+    session.leases["maintenance"] = {
+        "run_id": "dream-ret-1",
+        "epoch": 1,
+        "lease_until": "2099-01-01T00:00:00Z",
+        "expired": False,
+    }
     created = store.create_feedback(_feedback())
     assert created["outcome"] == "created"
     ref = created["raw_payload_ref"]
@@ -459,17 +476,17 @@ def test_apply_retention_redacts_payload_keeps_fingerprint_and_receipt():
 
     cfg = default_demo_config(auto_apply=False)
     denied = store.apply_retention_effect(
-        {
-            "id": "eff-ret-1",
-            "effect_key": effect_key_for(
+        _retention_fence_payload(
+            id="eff-ret-1",
+            effect_key=effect_key_for(
                 action="purge", feedback_id="fb-ret-1", config_digest=cfg.digest()
             ),
-            "feedback_id": "fb-ret-1",
-            "action": "purge",
-            "config_digest": cfg.digest(),
-            "automatic": True,
-            "auto_apply_enabled": False,
-        }
+            feedback_id="fb-ret-1",
+            action="purge",
+            config_digest=cfg.digest(),
+            automatic=True,
+            auto_apply_enabled=False,
+        )
     )
     assert denied["outcome"] == "denied"
     assert denied["reason"] == "retention_auto_apply_disabled"
@@ -492,17 +509,33 @@ def test_apply_retention_redacts_payload_keeps_fingerprint_and_receipt():
     assert dry["counts"]["selected"] == 1
     assert ref in session.payloads
 
+    with pytest.raises(ValueError, match="run_id"):
+        store.apply_retention_effect(
+            {
+                "id": "eff-ret-unfenced",
+                "effect_key": effect_key_for(
+                    action="purge",
+                    feedback_id="fb-ret-1",
+                    config_digest=cfg.digest(),
+                ),
+                "feedback_id": "fb-ret-1",
+                "action": "purge",
+                "config_digest": cfg.digest(),
+                "owner_initiated": True,
+            }
+        )
+
     applied = store.apply_retention_effect(
-        {
-            "id": "eff-ret-1",
-            "effect_key": effect_key_for(
+        _retention_fence_payload(
+            id="eff-ret-1",
+            effect_key=effect_key_for(
                 action="purge", feedback_id="fb-ret-1", config_digest=cfg.digest()
             ),
-            "feedback_id": "fb-ret-1",
-            "action": "purge",
-            "config_digest": cfg.digest(),
-            "owner_initiated": True,
-        }
+            feedback_id="fb-ret-1",
+            action="purge",
+            config_digest=cfg.digest(),
+            owner_initiated=True,
+        )
     )
     assert applied["outcome"] == "created"
     assert applied["verification_status"] == "verified_absent"
@@ -526,18 +559,45 @@ def test_apply_retention_redacts_payload_keeps_fingerprint_and_receipt():
 
     # Replay
     replayed = store.apply_retention_effect(
-        {
-            "id": "eff-ret-1",
-            "effect_key": effect_key_for(
+        _retention_fence_payload(
+            id="eff-ret-1",
+            effect_key=effect_key_for(
                 action="purge", feedback_id="fb-ret-1", config_digest=cfg.digest()
             ),
-            "feedback_id": "fb-ret-1",
-            "action": "purge",
-            "config_digest": cfg.digest(),
-            "owner_initiated": True,
-        }
+            feedback_id="fb-ret-1",
+            action="purge",
+            config_digest=cfg.digest(),
+            owner_initiated=True,
+        )
     )
     assert replayed["outcome"] == "replayed"
+
+
+def test_retention_apply_rejects_stale_lease_epoch():
+    session = _FakeSession()
+    store = _store_with(session)
+    session.leases["maintenance"] = {
+        "run_id": "dream-ret-1",
+        "epoch": 2,
+        "lease_until": "2099-01-01T00:00:00Z",
+        "expired": False,
+    }
+    store.create_feedback(_feedback())
+    cfg = default_demo_config(auto_apply=False)
+    out = store.apply_retention_effect(
+        _retention_fence_payload(
+            id="eff-stale",
+            effect_key=effect_key_for(
+                action="redact", feedback_id="fb-ret-1", config_digest=cfg.digest()
+            ),
+            feedback_id="fb-ret-1",
+            action="redact",
+            config_digest=cfg.digest(),
+            owner_initiated=True,
+            epoch=1,  # stale vs lease epoch 2
+        )
+    )
+    assert out["outcome"] == "stale_epoch"
 
 
 def test_revoke_marks_only_directly_derived_pending_proposals_stale():
