@@ -67,15 +67,23 @@ redacted fixtures only.
 
 ## Baseline and standard commands
 
-Current confirmed baseline:
+Canonical full-suite command (Task 0 hermetic baseline):
+
+```bash
+uv run --group dev python -m pytest tests/ -q
+```
+
+Verified: `70 passed @ 872f5f5`; Python 3.12.7;
+`uv run --group dev python -m pytest tests/ -q`.
+
+Historical (pre–Task 0) collection depended on an explicit path injection:
 
 ```bash
 PYTHONPATH="$PWD" uv run pytest tests/ -q
-# 70 passed at plan authoring time
+# 70 passed at plan authoring time; superseded by the hermetic command above
 ```
 
-Use the explicit `PYTHONPATH` until Task 0 makes test collection hermetic. Full
-integration remains:
+Full integration remains:
 
 ```bash
 bash scripts/run-journal-e2e.sh
@@ -105,19 +113,19 @@ bash scripts/run-journal-e2e.sh
 canonical full-suite command. Do not begin schema or safety changes while test
 collection depends on a globally installed namespace package.
 
-- [ ] Add a dev dependency group with compatible pytest and test-time packages.
-- [ ] Make `scripts` an explicit local package so
+- [x] Add a dev dependency group with compatible pytest and test-time packages.
+- [x] Make `scripts` an explicit local package so
   `scripts.full_embedding_backfill` resolves deterministically.
-- [ ] Run the old explicit-PYTHONPATH command and record the baseline.
-- [ ] Run the new canonical command:
+- [x] Run the old explicit-PYTHONPATH command and record the baseline.
+- [x] Run the new canonical command:
 
   ```bash
   uv run --group dev python -m pytest tests/ -q
   ```
 
-- [ ] Confirm the same tests collect under Python 3.12 and no global pytest path
+- [x] Confirm the same tests collect under Python 3.12 and no global pytest path
   appears in the header.
-- [ ] Document the command in `README.md` only when stable.
+- [x] Document the command in `README.md` only when stable.
 
 **Gate:** stop if collection or interpreter selection is environment-dependent.
 
