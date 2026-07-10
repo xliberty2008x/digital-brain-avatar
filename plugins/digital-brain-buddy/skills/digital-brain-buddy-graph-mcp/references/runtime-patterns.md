@@ -293,37 +293,40 @@ JournalEntry receipt fields.
 
 ### Alias-first entity lookup (scoped, active-revision-aware)
 
-Prefer the resolver in `digital_brain/services/entity_resolver.py`. Canonical
-query shape (active + scoped; direct-to-canonical):
+Prefer the resolver in `digital_brain/services/entity_resolver.py`.
+
+**New semantics (primary path, fail-closed):** strict scoped active match —
+`namespace` + `entity_type` + `normalized_from` must all be non-null and equal;
+highest revision wins; direct-to-canonical only (never Alias→Alias). Unscoped
+rows are **not** matched on this path.
+
+**Legacy fallback (migration only):** when
+`DIGITAL_BRAIN_ALIAS_LEGACY_LOOKUP=1` (default **1** during migration), an
+unscoped/name-based match may run if strict returns zero rows. Legacy **never**
+returns a hit when multiple conflicting canonical candidates exist. Set the env
+to `0` after Alias audit reports `new_resolution_semantics_ready` (audit of
+unscoped/conflicting/cyclic graphs still requires human review before treating
+the graph as fully migrated).
+
+Strict query shape:
 
 ```cypher
 MATCH (a:Alias)
 WHERE coalesce(a.status, 'active') = 'active'
-  AND coalesce(a.namespace, 'life') = $namespace
-  AND (
-    a.entity_type IS NULL OR a.entity_type = $entity_type
-  )
-  AND (
-    a.normalized_from = $normalized
-    OR (
-      a.normalized_from IS NULL
-      AND toLower(coalesce(a.from_name, a.display_from, '')) = toLower($name)
-    )
-  )
+  AND a.namespace IS NOT NULL
+  AND a.entity_type IS NOT NULL
+  AND a.normalized_from IS NOT NULL
+  AND a.namespace = $namespace
+  AND a.entity_type = $entity_type
+  AND a.normalized_from = $normalized
   AND a.canonical_id IS NOT NULL
   AND NOT EXISTS {
-    MATCH (other:Alias)
-    WHERE other.id = a.canonical_id OR other.canonical_id = a.canonical_id
-      AND other.id <> a.id AND coalesce(other.status, 'active') = 'active'
-      AND other.normalized_from = a.normalized_from
+    MATCH (bad:Alias {id: a.canonical_id})
   }
-WITH a
-// Reject Alias→Alias: canonical target must not itself be an Alias node id
-OPTIONAL MATCH (bad:Alias {id: a.canonical_id})
-WHERE bad IS NULL
 RETURN a.canonical_id AS id,
        coalesce(a.canonical_name, a.to_name) AS name,
-       a.revision AS revision
+       coalesce(a.revision, 0) AS revision,
+       a.id AS alias_id
 ORDER BY coalesce(a.revision, 0) DESC, a.id ASC
 LIMIT 1
 ```

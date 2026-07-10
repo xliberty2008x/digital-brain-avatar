@@ -157,6 +157,48 @@ def alias_lookup_key(
     return f"{namespace}|{entity_type}|{normalized_from}"
 
 
+def entity_protection_target_ref(entity_id: str) -> str:
+    """ActivationAuthority target_ref for EntityProtection effects."""
+    return f"entity:{_require_str(entity_id, 'entity_id')}"
+
+
+def protection_effect_binding(
+    *,
+    entity_id: str,
+    effect_type: str,
+) -> str:
+    """Canonical artifact_or_effect_hash for protection mint/consume binding."""
+    if effect_type not in PROTECTION_EFFECT_TYPES and effect_type not in {
+        "set",
+        "revoke",
+    }:
+        raise ValueError("invalid protection effect_type for binding")
+    if effect_type == "set_entity_protection":
+        action = "set"
+    elif effect_type == "revoke_entity_protection":
+        action = "revoke"
+    else:
+        action = effect_type
+    return f"protect:{_require_str(entity_id, 'entity_id')}:{action}"
+
+
+def compute_protection_before_fingerprint(
+    *,
+    entity_id: str,
+    active_revision: int | None,
+    protection_level: str | None,
+) -> str:
+    return digest_text(
+        _canonical_json(
+            {
+                "active_revision": active_revision,
+                "entity_id": entity_id,
+                "protection_level": protection_level,
+            }
+        )
+    )
+
+
 @dataclass(frozen=True)
 class AliasAuditFinding:
     kind: str  # unscoped | conflicting | cyclic | missing_target | alias_target
@@ -347,6 +389,184 @@ class AliasEffectStore:
             return audit_alias_rows(rows)
 
         return self._with_session(operation)
+
+    def get_active_alias(
+        self,
+        *,
+        namespace: str,
+        entity_type: str,
+        normalized_from: str,
+    ) -> dict[str, Any] | None:
+        """Return the highest-revision active Alias for a scoped lookup key."""
+        namespace = _require_str(namespace, "namespace")
+        entity_type = _require_str(entity_type, "entity_type")
+        normalized_from = normalize_alias_source(normalized_from)
+
+        def operation(session: Any) -> dict[str, Any] | None:
+            return _run_one(
+                session,
+                """
+                MATCH (a:Alias)
+                WHERE coalesce(a.status, 'active') = 'active'
+                  AND coalesce(a.namespace, $namespace) = $namespace
+                  AND a.entity_type = $entity_type
+                  AND a.normalized_from = $normalized_from
+                RETURN a.id AS id,
+                       a.revision AS revision,
+                       a.canonical_id AS canonical_id,
+                       a.canonical_name AS canonical_name,
+                       a.display_from AS display_from,
+                       a.from_name AS from_name,
+                       a.namespace AS namespace,
+                       a.entity_type AS entity_type,
+                       a.normalized_from AS normalized_from
+                ORDER BY coalesce(a.revision, 0) DESC, a.id ASC
+                LIMIT 1
+                """,
+                {
+                    "namespace": namespace,
+                    "entity_type": entity_type,
+                    "normalized_from": normalized_from,
+                },
+            )
+
+        return self._with_session(operation)
+
+    def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        """Read a Proposal card for operator mint binding (effect_json, hashes)."""
+        proposal_id = _require_str(proposal_id, "proposal_id")
+
+        def operation(session: Any) -> dict[str, Any] | None:
+            return _run_one(
+                session,
+                """
+                MATCH (p:Operational:Proposal {id: $id})
+                RETURN p.id AS id,
+                       p.kind AS kind,
+                       p.target_ref AS target_ref,
+                       p.before_fingerprint AS before_fingerprint,
+                       p.proposed_effect_hash AS proposed_effect_hash,
+                       p.effect_json AS effect_json,
+                       p.status_projection AS status_projection,
+                       p.request_fingerprint AS request_fingerprint
+                LIMIT 1
+                """,
+                {"id": proposal_id},
+            )
+
+        return self._with_session(operation)
+
+    def get_active_protection(self, entity_id: str) -> dict[str, Any] | None:
+        """Return the highest-revision non-revoked EntityProtection for entity_id."""
+        entity_id = _require_str(entity_id, "entity_id")
+
+        def operation(session: Any) -> dict[str, Any] | None:
+            return _run_one(
+                session,
+                """
+                MATCH (p:Operational:EntityProtection {entity_id: $id})
+                WHERE p.revoked_at IS NULL
+                RETURN p.entity_id AS entity_id,
+                       p.revision AS revision,
+                       p.protection_level AS protection_level
+                ORDER BY coalesce(p.revision, 0) DESC
+                LIMIT 1
+                """,
+                {"id": entity_id},
+            )
+
+        return self._with_session(operation)
+
+    def live_alias_mint_binding(
+        self,
+        *,
+        namespace: str,
+        entity_type: str,
+        normalized_from: str,
+        display_from: str,
+        effect_type: str,
+        canonical_id: str | None = None,
+        canonical_name: str | None = None,
+        revision: int | None = None,
+    ) -> dict[str, Any]:
+        """Compute before_fingerprint + effect_hash from live graph state.
+
+        Prefer this over provisional empty/pending defaults so mint bindings
+        match store validation at apply/revoke time.
+        """
+        if effect_type not in ALIAS_EFFECT_TYPES:
+            raise ValueError("effect_type must be apply_alias or revoke_alias")
+        namespace = _require_str(namespace or DEFAULT_NAMESPACE, "namespace")
+        entity_type = _require_str(entity_type, "entity_type")
+        display_from = _require_str(display_from, "display_from")
+        normalized_from = normalize_alias_source(normalized_from or display_from)
+        active = self.get_active_alias(
+            namespace=namespace,
+            entity_type=entity_type,
+            normalized_from=normalized_from,
+        )
+        before_fp = compute_before_fingerprint(
+            namespace=namespace,
+            entity_type=entity_type,
+            normalized_from=normalized_from,
+            active_alias_id=None if active is None else active.get("id"),
+            active_revision=None if active is None else active.get("revision"),
+            active_canonical_id=None if active is None else active.get("canonical_id"),
+        )
+        next_revision = (
+            int(revision)
+            if revision is not None
+            else int((active or {}).get("revision") or 0) + 1
+        )
+        if effect_type == "revoke_alias":
+            if active is None:
+                return {
+                    "outcome": "failed",
+                    "reason": "no_active_alias_to_revoke",
+                    "before_fingerprint": before_fp,
+                    "active": None,
+                }
+            cid = str(canonical_id or active.get("canonical_id") or "")
+            cname = str(
+                canonical_name
+                or active.get("canonical_name")
+                or active.get("to_name")
+                or cid
+            )
+        else:
+            cid = _require_str(canonical_id, "canonical_id")
+            cname = _require_str(canonical_name or cid, "canonical_name")
+        effect = alias_effect_payload(
+            effect_type=effect_type,
+            namespace=namespace,
+            entity_type=entity_type,
+            normalized_from=normalized_from,
+            display_from=display_from,
+            canonical_id=cid,
+            canonical_name=cname,
+            revision=next_revision,
+        )
+        effect_hash = compute_alias_effect_hash(effect)
+        target_ref = alias_lookup_key(
+            namespace=namespace,
+            entity_type=entity_type,
+            normalized_from=normalized_from,
+        )
+        return {
+            "outcome": "ok",
+            "namespace": namespace,
+            "entity_type": entity_type,
+            "normalized_from": normalized_from,
+            "display_from": display_from,
+            "canonical_id": cid,
+            "canonical_name": cname,
+            "revision": next_revision,
+            "before_fingerprint": before_fp,
+            "effect_hash": effect_hash,
+            "effect": effect,
+            "target_ref": target_ref,
+            "active": active,
+        }
 
     # ------------------------------------------------------------------
     # Online / operator proposal (no dream lease; review_pending only)
@@ -1612,7 +1832,9 @@ class AliasEffectStore:
                    a.scopes_json AS scopes_json,
                    a.expires_at AS expires_at,
                    a.consumption_receipt_id AS consumption_receipt_id,
-                   a.target_ref AS target_ref
+                   a.target_ref AS target_ref,
+                   a.artifact_or_effect_hash AS artifact_or_effect_hash,
+                   a.before_fingerprint AS before_fingerprint
             LIMIT 1
             """,
             {"id": authority_id},
@@ -1626,15 +1848,85 @@ class AliasEffectStore:
                 "consumption_receipt_id": auth.get("consumption_receipt_id"),
                 "replacement_minted": False,
             }
+        if auth.get("status") in {"expired", "revoked"}:
+            return {
+                "outcome": "failed",
+                "reason": f"authority_{auth.get('status')}",
+                "authority_id": authority_id,
+            }
         if auth.get("status") != "minted":
             return {
                 "outcome": "failed",
                 "reason": f"authority_{auth.get('status')}",
             }
+
+        # Expiry check (reject past expires_at; mark expired for reconciliation).
+        expires_at = auth.get("expires_at")
+        if expires_at:
+            try:
+                exp = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+                if datetime.now(timezone.utc) > exp:
+                    _run_one(
+                        tx,
+                        """
+                        MATCH (a:Operational:ActivationAuthority {id: $id})
+                        SET a.status = 'expired'
+                        RETURN a.id AS id
+                        """,
+                        {"id": authority_id},
+                    )
+                    return {
+                        "outcome": "failed",
+                        "reason": "authority_expired",
+                        "authority_id": authority_id,
+                    }
+            except ValueError:
+                return {
+                    "outcome": "failed",
+                    "reason": "authority_expires_at_invalid",
+                    "authority_id": authority_id,
+                }
+
         if not secrets.compare_digest(
             str(auth.get("nonce_digest") or ""), digest_text(nonce)
         ):
             return {"outcome": "failed", "reason": "authority_nonce_mismatch"}
+
+        # target_ref binding: authority must be minted for this entity only.
+        expected_target = entity_protection_target_ref(entity_id)
+        auth_target = str(auth.get("target_ref") or "").strip()
+        if not auth_target:
+            return {
+                "outcome": "failed",
+                "reason": "authority_target_ref_missing",
+                "expected_target": expected_target,
+            }
+        if auth_target != expected_target:
+            return {
+                "outcome": "failed",
+                "reason": "target_ref_mismatch",
+                "authority_target": auth_target,
+                "request_target": expected_target,
+            }
+
+        # Effect-hash binding (canonical protect:<entity_id>:<set|revoke>).
+        expected_effect_hash = protection_effect_binding(
+            entity_id=entity_id, effect_type=effect_type
+        )
+        auth_effect_hash = str(auth.get("artifact_or_effect_hash") or "").strip()
+        if not auth_effect_hash:
+            return {
+                "outcome": "failed",
+                "reason": "authority_effect_hash_missing",
+                "expected": expected_effect_hash,
+            }
+        if auth_effect_hash != expected_effect_hash:
+            return {
+                "outcome": "failed",
+                "reason": "effect_hash_mismatch",
+                "expected": expected_effect_hash,
+                "authority": auth_effect_hash,
+            }
 
         scopes_raw = auth.get("scopes_json") or "[]"
         try:
@@ -1808,9 +2100,12 @@ __all__ = [
     "claim_false_may_mutate_life_memory",
     "compute_alias_effect_hash",
     "compute_before_fingerprint",
+    "compute_protection_before_fingerprint",
     "compute_request_hash",
+    "entity_protection_target_ref",
     "is_generic_ack",
     "normalize_alias_source",
     "parse_apply_token",
     "proposal_may_activate_from_prose",
+    "protection_effect_binding",
 ]

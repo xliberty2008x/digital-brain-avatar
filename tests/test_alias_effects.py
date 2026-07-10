@@ -6,6 +6,7 @@ Uses an in-memory fake session that implements the subset of Cypher emitted by
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 import sys
@@ -27,9 +28,12 @@ from digital_brain.maintenance.alias_effects import (  # noqa: E402
     claim_false_may_mutate_life_memory,
     compute_alias_effect_hash,
     compute_before_fingerprint,
+    compute_protection_before_fingerprint,
+    entity_protection_target_ref,
     is_generic_ack,
     normalize_alias_source,
     parse_apply_token,
+    protection_effect_binding,
 )
 
 
@@ -1179,14 +1183,21 @@ def test_entity_protection_set_and_revoke():
     session = _FakeSession()
     _seed_person(session)
     store = _store(session)
+    entity_id = "person-carid"
+    set_hash = protection_effect_binding(
+        entity_id=entity_id, effect_type="set_entity_protection"
+    )
+    before_fp = compute_protection_before_fingerprint(
+        entity_id=entity_id, active_revision=None, protection_level=None
+    )
     mint = store.mint_activation_authority(
         {
             "id": "aa-prot",
             "proposal_id": "prop-prot",
-            "proposal_hash": "h1",
-            "target_ref": "entity:person-carid",
-            "before_fingerprint": "b1",
-            "artifact_or_effect_hash": "h1",
+            "proposal_hash": set_hash,
+            "target_ref": entity_protection_target_ref(entity_id),
+            "before_fingerprint": before_fp,
+            "artifact_or_effect_hash": set_hash,
             "approver": "owner@test",
             "scopes": [PINNED_IDENTITY_SCOPE],
         }
@@ -1195,24 +1206,33 @@ def test_entity_protection_set_and_revoke():
         {
             "authority_id": "aa-prot",
             "nonce": mint["nonce"],
-            "entity_id": "person-carid",
+            "entity_id": entity_id,
             "actor": "owner@test",
         }
     )
     assert set_r["outcome"] == "applied"
     assert any(
-        p["entity_id"] == "person-carid" and p.get("revoked_at") is None
+        p["entity_id"] == entity_id and p.get("revoked_at") is None
         for p in session.protections
     )
 
+    rev_hash = protection_effect_binding(
+        entity_id=entity_id, effect_type="revoke_entity_protection"
+    )
+    active = store.get_active_protection(entity_id)
+    before2 = compute_protection_before_fingerprint(
+        entity_id=entity_id,
+        active_revision=None if active is None else active.get("revision"),
+        protection_level=None if active is None else active.get("protection_level"),
+    )
     mint2 = store.mint_activation_authority(
         {
             "id": "aa-prot2",
             "proposal_id": "prop-prot2",
-            "proposal_hash": "h2",
-            "target_ref": "entity:person-carid",
-            "before_fingerprint": "b2",
-            "artifact_or_effect_hash": "h2",
+            "proposal_hash": rev_hash,
+            "target_ref": entity_protection_target_ref(entity_id),
+            "before_fingerprint": before2,
+            "artifact_or_effect_hash": rev_hash,
             "approver": "owner@test",
             "scopes": [PINNED_IDENTITY_SCOPE],
         }
@@ -1221,11 +1241,308 @@ def test_entity_protection_set_and_revoke():
         {
             "authority_id": "aa-prot2",
             "nonce": mint2["nonce"],
-            "entity_id": "person-carid",
+            "entity_id": entity_id,
             "actor": "owner@test",
         }
     )
     assert rev["outcome"] == "applied"
+
+
+def test_protection_wrong_target_rejected():
+    session = _FakeSession()
+    _seed_person(session)
+    store = _store(session)
+    entity_id = "person-carid"
+    other_id = "person-other"
+    set_hash = protection_effect_binding(
+        entity_id=entity_id, effect_type="set_entity_protection"
+    )
+    mint = store.mint_activation_authority(
+        {
+            "id": "aa-prot-wrong-tgt",
+            "proposal_id": "prop-prot-wrong",
+            "proposal_hash": set_hash,
+            "target_ref": entity_protection_target_ref(entity_id),
+            "before_fingerprint": "b-prot",
+            "artifact_or_effect_hash": set_hash,
+            "approver": "owner@test",
+            "scopes": [PINNED_IDENTITY_SCOPE],
+        }
+    )
+    # Apply to a different entity than authority target_ref
+    other_hash = protection_effect_binding(
+        entity_id=other_id, effect_type="set_entity_protection"
+    )
+    # Authority is bound to person-carid; requesting person-other must fail.
+    bad = store.set_entity_protection(
+        {
+            "authority_id": "aa-prot-wrong-tgt",
+            "nonce": mint["nonce"],
+            "entity_id": other_id,
+            "actor": "owner@test",
+        }
+    )
+    assert bad["outcome"] == "failed"
+    assert bad["reason"] == "target_ref_mismatch"
+    assert bad["authority_target"] == f"entity:{entity_id}"
+    assert bad["request_target"] == f"entity:{other_id}"
+    # Authority remains minted (not consumed on bind failure)
+    assert session.authorities["aa-prot-wrong-tgt"]["status"] == "minted"
+    # Sanity: correct entity still works with a fresh mint using matching hash
+    mint_ok = store.mint_activation_authority(
+        {
+            "id": "aa-prot-right-tgt",
+            "proposal_id": "prop-prot-right",
+            "proposal_hash": set_hash,
+            "target_ref": entity_protection_target_ref(entity_id),
+            "before_fingerprint": "b-prot2",
+            "artifact_or_effect_hash": set_hash,
+            "approver": "owner@test",
+            "scopes": [PINNED_IDENTITY_SCOPE],
+        }
+    )
+    ok = store.set_entity_protection(
+        {
+            "authority_id": "aa-prot-right-tgt",
+            "nonce": mint_ok["nonce"],
+            "entity_id": entity_id,
+            "actor": "owner@test",
+        }
+    )
+    assert ok["outcome"] == "applied"
+    _ = other_hash  # binding helper exercised for the wrong entity as well
+
+
+def test_protection_expired_mint_rejected():
+    session = _FakeSession()
+    _seed_person(session)
+    store = _store(session)
+    entity_id = "person-carid"
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    set_hash = protection_effect_binding(
+        entity_id=entity_id, effect_type="set_entity_protection"
+    )
+    mint = store.mint_activation_authority(
+        {
+            "id": "aa-prot-exp",
+            "proposal_id": "prop-prot-exp",
+            "proposal_hash": set_hash,
+            "target_ref": entity_protection_target_ref(entity_id),
+            "before_fingerprint": "b-exp",
+            "artifact_or_effect_hash": set_hash,
+            "approver": "owner@test",
+            "scopes": [PINNED_IDENTITY_SCOPE],
+            "expires_at": past,
+            "minted_at": past,
+        }
+    )
+    assert mint["outcome"] == "created"
+    failed = store.set_entity_protection(
+        {
+            "authority_id": "aa-prot-exp",
+            "nonce": mint["nonce"],
+            "entity_id": entity_id,
+            "actor": "owner@test",
+        }
+    )
+    assert failed["outcome"] == "failed"
+    assert failed["reason"] == "authority_expired"
+    assert session.authorities["aa-prot-exp"]["status"] == "expired"
+
+
+def test_protection_effect_hash_mismatch_rejected():
+    session = _FakeSession()
+    _seed_person(session)
+    store = _store(session)
+    entity_id = "person-carid"
+    mint = store.mint_activation_authority(
+        {
+            "id": "aa-prot-hash",
+            "proposal_id": "prop-prot-hash",
+            "proposal_hash": "opaque-wrong",
+            "target_ref": entity_protection_target_ref(entity_id),
+            "before_fingerprint": "b",
+            "artifact_or_effect_hash": "opaque-wrong",
+            "approver": "owner@test",
+            "scopes": [PINNED_IDENTITY_SCOPE],
+        }
+    )
+    bad = store.set_entity_protection(
+        {
+            "authority_id": "aa-prot-hash",
+            "nonce": mint["nonce"],
+            "entity_id": entity_id,
+            "actor": "owner@test",
+        }
+    )
+    assert bad["outcome"] == "failed"
+    assert bad["reason"] == "effect_hash_mismatch"
+
+
+def test_live_alias_mint_binding_from_graph():
+    session = _FakeSession()
+    _seed_person(session)
+    store = _store(session)
+    # Empty graph → revision 1, empty-active before
+    live0 = store.live_alias_mint_binding(
+        namespace="life",
+        entity_type="Person",
+        normalized_from="carplace",
+        display_from="CarPlace",
+        effect_type="apply_alias",
+        canonical_id="person-carid",
+        canonical_name="CarID",
+    )
+    assert live0["outcome"] == "ok"
+    assert live0["revision"] == 1
+    assert live0["active"] is None
+    empty_before = compute_before_fingerprint(
+        namespace="life",
+        entity_type="Person",
+        normalized_from="carplace",
+        active_alias_id=None,
+        active_revision=None,
+        active_canonical_id=None,
+    )
+    assert live0["before_fingerprint"] == empty_before
+
+    out = _mint_and_apply(store, session, authority_id="aa-live-bind")
+    assert out["apply"]["outcome"] == "applied"
+    active = next(a for a in session.aliases.values() if a["status"] == "active")
+    live1 = store.live_alias_mint_binding(
+        namespace="life",
+        entity_type="Person",
+        normalized_from="carplace",
+        display_from="CarPlace",
+        effect_type="revoke_alias",
+    )
+    assert live1["outcome"] == "ok"
+    assert live1["revision"] == int(active["revision"]) + 1
+    assert live1["canonical_id"] == active["canonical_id"]
+    assert live1["before_fingerprint"] == compute_before_fingerprint(
+        namespace="life",
+        entity_type="Person",
+        normalized_from="carplace",
+        active_alias_id=active["id"],
+        active_revision=active["revision"],
+        active_canonical_id=active["canonical_id"],
+    )
+    # No pending placeholders
+    assert "pending" not in json.dumps(live1)
+
+
+def test_operator_cli_apply_and_revoke_use_live_bindings(monkeypatch):
+    """Integration-style: cmd_apply / cmd_revoke mint from live graph, not pending."""
+    session = _FakeSession()
+    _seed_person(session)
+    store = _store(session)
+
+    import scripts.digital_brain_apply_proposal as cli
+
+    monkeypatch.setattr(cli, "_store", lambda: store)
+    # Interactive confirms: MINT <target> then APPLY/REVOKE <authority_id>
+    answers: list[str] = []
+
+    def fake_input(_prompt: str = "") -> str:
+        if not answers:
+            raise EOFError("no more answers")
+        return answers.pop(0)
+
+    monkeypatch.setattr("builtins.input", fake_input)
+
+    # --- apply with full effect fields (no provisional empty when graph empty) ---
+    live = store.live_alias_mint_binding(
+        namespace="life",
+        entity_type="Person",
+        normalized_from="carplace",
+        display_from="CarPlace",
+        effect_type="apply_alias",
+        canonical_id="person-carid",
+        canonical_name="CarID",
+    )
+    answers.extend([f"MINT {live['target_ref']}", "APPLY __pending__"])
+
+    # Capture mint authority id by wrapping mint
+    real_mint = store.mint_activation_authority
+
+    def mint_wrapper(payload):  # noqa: ANN001
+        result = real_mint(payload)
+        # Fix the second confirm token once we know authority_id
+        if result.get("authority_id") and answers and answers[0].startswith("APPLY "):
+            answers[0] = f"APPLY {result['authority_id']}"
+        # Ensure mint binding is live (not empty placeholder when active exists later)
+        assert payload["before_fingerprint"] == live["before_fingerprint"]
+        assert payload["artifact_or_effect_hash"] == live["effect_hash"]
+        assert "pending" not in str(payload.get("artifact_or_effect_hash"))
+        return result
+
+    monkeypatch.setattr(store, "mint_activation_authority", mint_wrapper)
+
+    code = cli.cmd_apply(
+        argparse.Namespace(
+            proposal_id=None,
+            apply_token=None,
+            namespace="life",
+            entity_type="Person",
+            from_name="CarPlace",
+            canonical_id="person-carid",
+            canonical_name="CarID",
+            revision=None,
+            effect_hash=None,
+            before_fingerprint=None,
+            target_ref=None,
+            approver="owner@test",
+            pinned_identity=False,
+            ttl_seconds=900,
+        )
+    )
+    assert code == 0
+    assert any(a.get("status") == "active" for a in session.aliases.values())
+
+    # --- revoke uses live active canonical + before, never pending ---
+    active = next(a for a in session.aliases.values() if a["status"] == "active")
+    live_rev = store.live_alias_mint_binding(
+        namespace="life",
+        entity_type="Person",
+        normalized_from="carplace",
+        display_from="CarPlace",
+        effect_type="revoke_alias",
+    )
+    assert live_rev["canonical_id"] == active["canonical_id"]
+    assert live_rev["canonical_id"] != "pending"
+
+    answers.extend([f"MINT {live_rev['target_ref']}", "REVOKE __pending__"])
+
+    def mint_wrapper_rev(payload):  # noqa: ANN001
+        result = real_mint(payload)
+        if result.get("authority_id") and answers and answers[0].startswith("REVOKE "):
+            answers[0] = f"REVOKE {result['authority_id']}"
+        assert payload["before_fingerprint"] == live_rev["before_fingerprint"]
+        assert payload["artifact_or_effect_hash"] == live_rev["effect_hash"]
+        assert "pending" not in json.dumps(payload)
+        return result
+
+    monkeypatch.setattr(store, "mint_activation_authority", mint_wrapper_rev)
+    code2 = cli.cmd_revoke(
+        argparse.Namespace(
+            proposal_id=None,
+            namespace="life",
+            entity_type="Person",
+            from_name="CarPlace",
+            canonical_id=None,
+            canonical_name=None,
+            revision=None,
+            effect_hash=None,
+            before_fingerprint=None,
+            approver="owner@test",
+            pinned_identity=False,
+            ttl_seconds=900,
+        )
+    )
+    assert code2 == 0
+    assert session.aliases[active["id"]]["status"] == "revoked"
 
 
 def test_store_audit_aliases():

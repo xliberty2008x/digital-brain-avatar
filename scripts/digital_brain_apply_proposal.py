@@ -5,6 +5,11 @@ Uses quality/admin Neo4j credentials. Never mount this script or its secrets
 into maintainer/analyzer toolsets. There is **no unattended ``--yes`` path** —
 every mutating action requires an interactive confirmation token.
 
+Mint bindings (``before_fingerprint``, ``effect_hash``, ``revision``) are
+computed from the **live graph** (or proposal ``effect_json``) before mint —
+never from provisional ``pending`` / empty-active defaults that always mismatch
+the store at apply/revoke time.
+
 Examples:
 
   # Audit legacy Alias nodes (review before new resolution semantics)
@@ -44,12 +49,11 @@ from digital_brain.maintenance.alias_effects import (  # noqa: E402
     DEFAULT_NAMESPACE,
     PINNED_IDENTITY_SCOPE,
     AliasEffectStore,
-    alias_effect_payload,
-    alias_lookup_key,
-    compute_alias_effect_hash,
-    compute_before_fingerprint,
+    compute_protection_before_fingerprint,
+    entity_protection_target_ref,
     normalize_alias_source,
     parse_apply_token,
+    protection_effect_binding,
 )
 
 
@@ -113,6 +117,104 @@ def _print(data: Any) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
 
 
+def _resolve_apply_binding(
+    store: AliasEffectStore, args: argparse.Namespace
+) -> dict[str, Any]:
+    """Build mint/apply fields from proposal effect_json and/or live graph.
+
+    Never mints with empty-active / ``pending`` placeholders when the graph
+    (or proposal card) can supply real fingerprints.
+    """
+    proposal_id = args.proposal_id
+    if args.apply_token:
+        token_id = parse_apply_token(args.apply_token)
+        if not token_id:
+            raise SystemExit("invalid APPLY token; expected 'APPLY alias:<proposal_id>'")
+        proposal_id = proposal_id or token_id
+
+    namespace = args.namespace or DEFAULT_NAMESPACE
+    entity_type = args.entity_type
+    display_from = args.from_name
+    canonical_id = args.canonical_id
+    canonical_name = args.canonical_name
+    revision = args.revision
+    effect_hash = args.effect_hash
+    before_fp = args.before_fingerprint
+    target_ref = args.target_ref
+    effect_body: dict[str, Any] = {}
+
+    if proposal_id:
+        prop = store.get_proposal(proposal_id)
+        if prop is None:
+            raise SystemExit(f"proposal not found: {proposal_id}")
+        if prop.get("effect_json"):
+            try:
+                effect_body = json.loads(str(prop["effect_json"]))
+            except json.JSONDecodeError as exc:
+                raise SystemExit("proposal effect_json is invalid JSON") from exc
+        entity_type = entity_type or effect_body.get("entity_type")
+        display_from = display_from or effect_body.get("display_from")
+        canonical_id = canonical_id or effect_body.get("canonical_id")
+        canonical_name = canonical_name or effect_body.get("canonical_name")
+        if revision is None and effect_body.get("revision") is not None:
+            # Proposal revision is a hint only; live next revision is preferred
+            # below unless the operator passes --revision explicitly.
+            if args.revision is not None:
+                revision = int(args.revision)
+        if not target_ref:
+            target_ref = prop.get("target_ref")
+        namespace = (
+            args.namespace
+            or effect_body.get("namespace")
+            or namespace
+            or DEFAULT_NAMESPACE
+        )
+
+    if not (entity_type and display_from and canonical_id):
+        raise SystemExit(
+            "provide --proposal-id with effect_json, or full effect fields "
+            "(--entity-type, --from, --canonical-id)"
+        )
+
+    normalized = normalize_alias_source(
+        effect_body.get("normalized_from") or display_from
+    )
+    # Live graph is authoritative for before_fingerprint / next revision /
+    # effect_hash so mint bindings match store validation (no empty/pending).
+    live = store.live_alias_mint_binding(
+        namespace=namespace,
+        entity_type=str(entity_type),
+        normalized_from=normalized,
+        display_from=str(display_from),
+        effect_type="apply_alias",
+        canonical_id=str(canonical_id),
+        canonical_name=str(canonical_name or canonical_id),
+        revision=int(revision) if revision is not None else None,
+    )
+    if live.get("outcome") != "ok":
+        raise SystemExit(f"live mint binding failed: {live}")
+
+    # Explicit CLI flags only override live bindings.
+    before_fp = args.before_fingerprint or live["before_fingerprint"]
+    effect_hash = args.effect_hash or live["effect_hash"]
+    target_ref = args.target_ref or target_ref or live["target_ref"]
+
+    return {
+        "proposal_id": proposal_id,
+        "namespace": live["namespace"],
+        "entity_type": live["entity_type"],
+        "display_from": live["display_from"],
+        "canonical_id": live["canonical_id"],
+        "canonical_name": live["canonical_name"],
+        "revision": live["revision"],
+        "normalized_from": live["normalized_from"],
+        "before_fingerprint": before_fp,
+        "effect_hash": effect_hash,
+        "target_ref": target_ref,
+        "live": live,
+    }
+
+
 def cmd_audit(_args: argparse.Namespace) -> int:
     result = _store().audit_aliases()
     _print(result)
@@ -138,6 +240,17 @@ def cmd_propose(args: argparse.Namespace) -> int:
         )
         return 1
     store = _store()
+    # Seed proposal before_fingerprint from live active alias when present.
+    normalized = normalize_alias_source(args.from_name)
+    live = store.live_alias_mint_binding(
+        namespace=args.namespace or DEFAULT_NAMESPACE,
+        entity_type=args.entity_type,
+        normalized_from=normalized,
+        display_from=args.from_name,
+        effect_type="apply_alias",
+        canonical_id=args.canonical_id,
+        canonical_name=args.canonical_name,
+    )
     payload = {
         "id": args.proposal_id,
         "namespace": args.namespace,
@@ -148,6 +261,8 @@ def cmd_propose(args: argparse.Namespace) -> int:
         "feedback_id": args.feedback_id,
         "kind": "alias",
         "feedback_kind": args.feedback_kind,
+        "before_fingerprint": live.get("before_fingerprint"),
+        "revision": live.get("revision"),
     }
     result = store.create_alias_proposal(payload)
     _print(result)
@@ -162,67 +277,11 @@ def cmd_receipt(args: argparse.Namespace) -> int:
 
 def cmd_apply(args: argparse.Namespace) -> int:
     store = _store()
-    proposal_id = args.proposal_id
-    if args.apply_token:
-        token_id = parse_apply_token(args.apply_token)
-        if not token_id:
-            raise SystemExit("invalid APPLY token; expected 'APPLY alias:<proposal_id>'")
-        proposal_id = proposal_id or token_id
-
-    if not proposal_id and not (args.entity_type and args.from_name and args.canonical_id):
-        raise SystemExit("provide --proposal-id or full effect fields")
-
-    # Resolve effect fields from args (proposal body is authoritative in-store).
-    namespace = args.namespace or DEFAULT_NAMESPACE
-    display_from = args.from_name
-    entity_type = args.entity_type
-    canonical_id = args.canonical_id
-    canonical_name = args.canonical_name
-    normalized = (
-        normalize_alias_source(display_from)
-        if display_from
-        else None
-    )
-
-    if proposal_id and not all([entity_type, display_from, canonical_id]):
-        # Mint/apply will load effect_json from the proposal inside the store.
-        effect_hash = args.effect_hash
-        before_fp = args.before_fingerprint
-        target_ref = args.target_ref
-        if not (effect_hash and before_fp and target_ref):
-            raise SystemExit(
-                "When applying by proposal-id without inline effect fields, "
-                "pass --effect-hash, --before-fingerprint, and --target-ref "
-                "from the proposal review card (or pass full effect fields)."
-            )
-    else:
-        assert entity_type and display_from and canonical_id and normalized
-        # Live before fingerprint requires graph read via audit of single key —
-        # provisional empty-active fingerprint when --assume-empty-before.
-        before_fp = args.before_fingerprint or compute_before_fingerprint(
-            namespace=namespace,
-            entity_type=entity_type,
-            normalized_from=normalized,
-            active_alias_id=None,
-            active_revision=None,
-            active_canonical_id=None,
-        )
-        effect = alias_effect_payload(
-            effect_type="apply_alias",
-            namespace=namespace,
-            entity_type=entity_type,
-            normalized_from=normalized,
-            display_from=display_from,
-            canonical_id=canonical_id,
-            canonical_name=canonical_name or canonical_id,
-            revision=int(args.revision or 1),
-        )
-        effect_hash = args.effect_hash or compute_alias_effect_hash(effect)
-        target_ref = args.target_ref or alias_lookup_key(
-            namespace=namespace,
-            entity_type=entity_type,
-            normalized_from=normalized,
-        )
+    binding = _resolve_apply_binding(store, args)
+    proposal_id = binding["proposal_id"]
+    target_ref = binding["target_ref"]
+    effect_hash = binding["effect_hash"]
+    before_fp = binding["before_fingerprint"]
 
     scopes = []
     if args.pinned_identity:
@@ -233,6 +292,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
     print(f"  target_ref={target_ref}")
     print(f"  effect_hash={effect_hash}")
     print(f"  before_fingerprint={before_fp}")
+    print(f"  revision={binding['revision']}")
     print(f"  approver={args.approver}")
     print(f"  scopes={scopes}")
     _confirm(
@@ -275,11 +335,11 @@ def cmd_apply(args: argparse.Namespace) -> int:
         "nonce": nonce,
         "actor": args.approver,
         "proposal_id": proposal_id,
-        "namespace": namespace,
-        "entity_type": entity_type,
-        "display_from": display_from,
-        "canonical_id": canonical_id,
-        "canonical_name": canonical_name,
+        "namespace": binding["namespace"],
+        "entity_type": binding["entity_type"],
+        "display_from": binding["display_from"],
+        "canonical_id": binding["canonical_id"],
+        "canonical_name": binding["canonical_name"],
         "before_fingerprint": before_fp,
         "artifact_or_effect_hash": effect_hash,
     }
@@ -296,34 +356,31 @@ def cmd_revoke(args: argparse.Namespace) -> int:
     if not display_from or not entity_type:
         raise SystemExit("--from and --entity-type required for revoke")
     normalized = normalize_alias_source(display_from)
-    target_ref = alias_lookup_key(
-        namespace=namespace,
-        entity_type=entity_type,
-        normalized_from=normalized,
-    )
-    # Provisional effect hash for revoke (store recomputes from live active).
-    effect = alias_effect_payload(
-        effect_type="revoke_alias",
+    live = store.live_alias_mint_binding(
         namespace=namespace,
         entity_type=entity_type,
         normalized_from=normalized,
         display_from=display_from,
-        canonical_id=args.canonical_id or "pending",
-        canonical_name=args.canonical_name or "pending",
-        revision=int(args.revision or 1),
+        effect_type="revoke_alias",
+        canonical_id=args.canonical_id,
+        canonical_name=args.canonical_name,
+        revision=int(args.revision) if args.revision is not None else None,
     )
-    effect_hash = args.effect_hash or compute_alias_effect_hash(effect)
-    before_fp = args.before_fingerprint or compute_before_fingerprint(
-        namespace=namespace,
-        entity_type=entity_type,
-        normalized_from=normalized,
-        active_alias_id=None,
-        active_revision=None,
-        active_canonical_id=None,
-    )
+    if live.get("outcome") != "ok":
+        _print(live)
+        return 1
+
+    target_ref = live["target_ref"]
+    # Optional overrides only; never invent pending/empty defaults.
+    effect_hash = args.effect_hash or live["effect_hash"]
+    before_fp = args.before_fingerprint or live["before_fingerprint"]
 
     print("About to mint authority and revoke Alias (compensating revision).")
     print(f"  target_ref={target_ref}")
+    print(f"  effect_hash={effect_hash}")
+    print(f"  before_fingerprint={before_fp}")
+    print(f"  revision={live['revision']}")
+    print(f"  active={live.get('active')}")
     _confirm("Confirm mint for revoke.", expected=f"MINT {target_ref}")
 
     mint = store.mint_activation_authority(
@@ -365,15 +422,29 @@ def cmd_revoke(args: argparse.Namespace) -> int:
 
 def cmd_protect(args: argparse.Namespace) -> int:
     store = _store()
-    target_ref = f"entity:{args.entity_id}"
-    effect_hash = args.effect_hash or f"protect:{args.entity_id}:{args.action}"
-    before_fp = args.before_fingerprint or f"protect-before:{args.entity_id}"
+    entity_id = args.entity_id
+    target_ref = entity_protection_target_ref(entity_id)
+    effect_type = (
+        "set_entity_protection" if args.action == "set" else "revoke_entity_protection"
+    )
+    effect_hash = args.effect_hash or protection_effect_binding(
+        entity_id=entity_id, effect_type=effect_type
+    )
+    active = store.get_active_protection(entity_id)
+    before_fp = args.before_fingerprint or compute_protection_before_fingerprint(
+        entity_id=entity_id,
+        active_revision=None if active is None else active.get("revision"),
+        protection_level=None if active is None else active.get("protection_level"),
+    )
 
-    print(f"About to {args.action} EntityProtection on {args.entity_id}")
+    print(f"About to {args.action} EntityProtection on {entity_id}")
+    print(f"  target_ref={target_ref}")
+    print(f"  effect_hash={effect_hash}")
+    print(f"  before_fingerprint={before_fp}")
     _confirm("Confirm mint for protection.", expected=f"MINT {target_ref}")
     mint = store.mint_activation_authority(
         {
-            "proposal_id": args.proposal_id or f"protect-{args.entity_id}",
+            "proposal_id": args.proposal_id or f"protect-{entity_id}",
             "proposal_hash": effect_hash,
             "target_ref": target_ref,
             "before_fingerprint": before_fp,
@@ -393,7 +464,7 @@ def cmd_protect(args: argparse.Namespace) -> int:
     payload = {
         "authority_id": mint["authority_id"],
         "nonce": mint["nonce"],
-        "entity_id": args.entity_id,
+        "entity_id": entity_id,
         "actor": args.approver,
         "reason_code": args.reason_code,
     }

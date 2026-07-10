@@ -171,7 +171,14 @@ def test_entity_resolver_is_scoped_and_active_aware():
     assert "status" in src
     assert "canonical_id" in src
     assert "ORDER BY" in src
-    # Must not use the old unscoped-only pattern as the sole lookup.
+    # Strict scoped path requires non-null scope fields (fail-closed).
+    assert "a.namespace IS NOT NULL" in src
+    assert "a.entity_type IS NOT NULL" in src
+    assert "a.normalized_from IS NOT NULL" in src
+    # Legacy fallback is env-gated, not primary path.
+    assert "DIGITAL_BRAIN_ALIAS_LEGACY_LOOKUP" in src
+    # Must not use soft entity_type IS NULL OR match as primary path.
+    assert "a.entity_type IS NULL OR a.entity_type" not in src
     tree = ast.parse(src)
     assert tree is not None
 
