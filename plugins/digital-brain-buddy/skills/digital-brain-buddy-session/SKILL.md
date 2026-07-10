@@ -206,10 +206,16 @@ Do not store:
 
 ## Harness Generation Pin
 
-- SessionStart (`compose-up.sh` → `scripts/pin_harness_generation.py`) records one
-  `HarnessGeneration` and exports `DIGITAL_BRAIN_HARNESS_GENERATION_ID`.
-- Pass that id unchanged into every Feedback/RunEvent for the session.
-- Do not recompute digests after the pin is set; only a new session gets a new id.
+- SessionStart (`compose-up.sh` → `scripts/pin_harness_generation.py`) binds the
+  pin to the host `session_id` (Claude hook stdin JSON, or
+  `DIGITAL_BRAIN_SESSION_ID`). `startup`/`clear` recollect; `resume`/`compact`
+  reload the existing pin for that session. Without a host session id the host
+  mints a timestamped local id — never a sticky global `current` pin.
+- Exports `DIGITAL_BRAIN_HARNESS_GENERATION_ID` and
+  `DIGITAL_BRAIN_HARNESS_PIN_PATH` (state-dir pin file + `CLAUDE_ENV_FILE` when set).
+- Pass that generation id unchanged into every Feedback/RunEvent for the session.
+- Do not recompute digests after the pin is set; only a new session (or clear)
+  gets a new id.
 - Never put SOUL body text into generation records, MCP args, or sensor payloads.
 
 ## Do Not

@@ -9,7 +9,12 @@ read surface used by model-facing tools.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import hashlib
+import json
+from typing import Any, Callable, Mapping
+
+# Must match digital_brain.maintenance.models.GENERATION_ID_PREFIX / algorithm.
+_GENERATION_ID_PREFIX = "hg-"
 
 # Every quality/control node carries Operational in addition to its specific
 # label. Generic retrieval excludes Operational centrally.
@@ -131,6 +136,81 @@ def _run_one(runner: Any, query: str, params: dict[str, Any] | None = None) -> d
     if hasattr(record, "data"):
         return record.data()
     return dict(record)
+
+
+def _canonical_json(payload: Mapping[str, Any]) -> str:
+    """Canonical JSON — must match digital_brain.maintenance.models._canonical_json."""
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def harness_identity_payload(
+    *,
+    core_commit: str,
+    core_tree_digest: str,
+    dirty_state_digest: str,
+    plugin_version: str,
+    soul_sha: str,
+    overlay_manifest_digest: str,
+    policy_digest: str,
+    mcp_version: str,
+    model_id: str | None,
+    schema_version: str,
+    taxonomy_version: str,
+) -> dict[str, Any]:
+    """Identity fields that define generation id / request fingerprint."""
+    return {
+        "core_commit": core_commit,
+        "core_tree_digest": core_tree_digest,
+        "dirty_state_digest": dirty_state_digest,
+        "mcp_version": mcp_version,
+        "model_id": model_id,
+        "overlay_manifest_digest": overlay_manifest_digest,
+        "plugin_version": plugin_version,
+        "policy_digest": policy_digest,
+        "schema_version": schema_version,
+        "soul_sha": soul_sha,
+        "taxonomy_version": taxonomy_version,
+    }
+
+
+def compute_harness_request_fingerprint(identity: Mapping[str, Any]) -> str:
+    """Server-side fingerprint — same algorithm as client models."""
+    return hashlib.sha256(
+        _canonical_json(identity).encode("utf-8")
+    ).hexdigest()
+
+
+def _is_uniqueness_constraint_error(exc: BaseException) -> bool:
+    """Map Neo4j uniqueness races (and fakes) without hard-importing neo4j."""
+    name = type(exc).__name__
+    code = str(getattr(exc, "code", "") or "")
+    msg = str(exc).lower()
+    if name in {"ConstraintError", "ClientError"}:
+        if "constraint" in msg or "already exists" in msg or "uniqueness" in msg:
+            return True
+        if "ConstraintValidationFailed" in code or "constraint" in code.lower():
+            return True
+    if "constraintvalidationfailed" in msg or "already exists" in msg:
+        return True
+    if "uniqueness" in msg and "constraint" in msg:
+        return True
+    return False
+
+
+def _execute_write(session: Any, fn: Callable[[Any], Any]) -> Any:
+    execute_write = getattr(session, "execute_write", None) or getattr(
+        session, "write_transaction", None
+    )
+    if execute_write is None:
+        # Test fakes / minimal runners: run inline.
+        return fn(session)
+    return execute_write(fn)
 
 
 class QualityStore:
@@ -257,6 +337,13 @@ class QualityStore:
         Same id + different fingerprint → ``conflict``.
         New id → ``created``.
 
+        Server recomputes the fingerprint from identity fields (same canonical
+        algorithm as client models) and rejects clients that supply a mismatched
+        fingerprint or ``id != "hg-" + fingerprint``.
+
+        Writes run in a single ``execute_write`` transaction; uniqueness races
+        are mapped to replay/conflict via re-read.
+
         SOUL body fields are rejected; only ``soul_sha`` is stored.
         """
         if not isinstance(generation, dict):
@@ -287,10 +374,10 @@ class QualityStore:
         if missing:
             raise ValueError(f"generation missing required fields: {missing}")
 
-        request_fingerprint = str(
+        client_fingerprint = str(
             generation.get("request_fingerprint") or ""
         ).strip()
-        if not request_fingerprint:
+        if not client_fingerprint:
             raise ValueError("generation.request_fingerprint must be a non-empty string")
 
         model_id = generation.get("model_id")
@@ -303,97 +390,169 @@ class QualityStore:
         if created_at is not None:
             created_at = str(created_at)
 
+        identity = harness_identity_payload(
+            core_commit=str(generation["core_commit"]),
+            core_tree_digest=str(generation["core_tree_digest"]),
+            dirty_state_digest=str(generation["dirty_state_digest"]),
+            plugin_version=str(generation["plugin_version"]),
+            soul_sha=str(generation["soul_sha"]),
+            overlay_manifest_digest=str(generation["overlay_manifest_digest"]),
+            policy_digest=str(generation["policy_digest"]),
+            mcp_version=str(generation["mcp_version"]),
+            model_id=model_id,
+            schema_version=str(generation["schema_version"]),
+            taxonomy_version=str(generation["taxonomy_version"]),
+        )
+        request_fingerprint = compute_harness_request_fingerprint(identity)
+        expected_id = f"{_GENERATION_ID_PREFIX}{request_fingerprint}"
+
+        if client_fingerprint != request_fingerprint:
+            raise ValueError(
+                "generation.request_fingerprint does not match identity fields "
+                f"(server={request_fingerprint[:16]}… client={client_fingerprint[:16]}…)"
+            )
+        if generation_id != expected_id:
+            raise ValueError(
+                f"generation.id must equal '{_GENERATION_ID_PREFIX}' + fingerprint "
+                f"(expected {expected_id[:19]}…, got {generation_id[:19]}…)"
+            )
+
         props = {
             "id": generation_id,
-            "core_commit": str(generation["core_commit"]),
-            "core_tree_digest": str(generation["core_tree_digest"]),
-            "dirty_state_digest": str(generation["dirty_state_digest"]),
-            "plugin_version": str(generation["plugin_version"]),
-            "soul_sha": str(generation["soul_sha"]),
-            "overlay_manifest_digest": str(generation["overlay_manifest_digest"]),
-            "policy_digest": str(generation["policy_digest"]),
-            "mcp_version": str(generation["mcp_version"]),
+            "core_commit": identity["core_commit"],
+            "core_tree_digest": identity["core_tree_digest"],
+            "dirty_state_digest": identity["dirty_state_digest"],
+            "plugin_version": identity["plugin_version"],
+            "soul_sha": identity["soul_sha"],
+            "overlay_manifest_digest": identity["overlay_manifest_digest"],
+            "policy_digest": identity["policy_digest"],
+            "mcp_version": identity["mcp_version"],
             "model_id": model_id,
-            "schema_version": str(generation["schema_version"]),
-            "taxonomy_version": str(generation["taxonomy_version"]),
+            "schema_version": identity["schema_version"],
+            "taxonomy_version": identity["taxonomy_version"],
             "request_fingerprint": request_fingerprint,
             "created_at": created_at,
         }
 
         def operation(session: Any) -> dict[str, Any]:
-            existing = _run_one(
-                session,
-                """
-                MATCH (g:Operational:HarnessGeneration {id: $generation_id})
-                RETURN g.id AS id,
-                       g.request_fingerprint AS request_fingerprint,
-                       g.created_at AS created_at,
-                       g.soul_sha AS soul_sha,
-                       g.plugin_version AS plugin_version,
-                       g.core_commit AS core_commit,
-                       g.schema_version AS schema_version,
-                       g.taxonomy_version AS taxonomy_version
-                LIMIT 1
-                """,
-                {"generation_id": generation_id},
-            )
-            if existing is not None:
-                if existing.get("request_fingerprint") == request_fingerprint:
-                    return {
-                        "outcome": "replayed",
-                        "generation_id": existing.get("id"),
-                        "request_fingerprint": existing.get("request_fingerprint"),
-                        "created_at": existing.get("created_at"),
-                        "soul_sha": existing.get("soul_sha"),
-                        "plugin_version": existing.get("plugin_version"),
-                        "core_commit": existing.get("core_commit"),
-                        "schema_version": existing.get("schema_version"),
-                        "taxonomy_version": existing.get("taxonomy_version"),
-                    }
-                return {
-                    "outcome": "conflict",
-                    "reason": "generation_id_reused",
-                    "generation_id": existing.get("id"),
-                    "request_fingerprint": existing.get("request_fingerprint"),
-                    "created_at": existing.get("created_at"),
-                }
-
-            # Ensure created_at is set on first write.
-            write_props = dict(props)
-            if not write_props.get("created_at"):
-                row_ts = _run_one(session, "RETURN toString(datetime()) AS ts")
-                write_props["created_at"] = (
-                    (row_ts or {}).get("ts") or "unknown"
+            try:
+                return _execute_write(
+                    session,
+                    lambda tx: self._record_harness_generation_tx(
+                        tx,
+                        props=props,
+                        generation_id=generation_id,
+                        request_fingerprint=request_fingerprint,
+                    ),
+                )
+            except Exception as exc:
+                # Constraint failures abort the write tx — re-read in a new one.
+                if not _is_uniqueness_constraint_error(exc):
+                    raise
+                raced = _execute_write(
+                    session,
+                    lambda tx: self._read_harness_generation_row(tx, generation_id),
+                )
+                if raced is None:
+                    raise RuntimeError(
+                        "HarnessGeneration uniqueness race but node not found on re-read"
+                    ) from exc
+                return self._replay_or_conflict(
+                    raced, request_fingerprint=request_fingerprint
                 )
 
-            created = _run_one(
-                session,
-                """
-                CREATE (g:Operational:HarnessGeneration)
-                SET g += $props
-                RETURN g.id AS id,
-                       g.request_fingerprint AS request_fingerprint,
-                       g.created_at AS created_at,
-                       g.soul_sha AS soul_sha,
-                       g.plugin_version AS plugin_version,
-                       g.core_commit AS core_commit,
-                       g.schema_version AS schema_version,
-                       g.taxonomy_version AS taxonomy_version
-                """,
-                {"props": write_props},
-            )
-            if created is None:
-                raise RuntimeError("HarnessGeneration create returned no row")
-            return {
-                "outcome": "created",
-                "generation_id": created.get("id"),
-                "request_fingerprint": created.get("request_fingerprint"),
-                "created_at": created.get("created_at"),
-                "soul_sha": created.get("soul_sha"),
-                "plugin_version": created.get("plugin_version"),
-                "core_commit": created.get("core_commit"),
-                "schema_version": created.get("schema_version"),
-                "taxonomy_version": created.get("taxonomy_version"),
-            }
-
         return self._with_session(operation)
+
+    def _record_harness_generation_tx(
+        self,
+        tx: Any,
+        *,
+        props: dict[str, Any],
+        generation_id: str,
+        request_fingerprint: str,
+    ) -> dict[str, Any]:
+        existing = self._read_harness_generation_row(tx, generation_id)
+        if existing is not None:
+            return self._replay_or_conflict(
+                existing, request_fingerprint=request_fingerprint
+            )
+
+        write_props = dict(props)
+        if not write_props.get("created_at"):
+            row_ts = _run_one(tx, "RETURN toString(datetime()) AS ts")
+            write_props["created_at"] = (row_ts or {}).get("ts") or "unknown"
+
+        created = _run_one(
+            tx,
+            """
+            CREATE (g:Operational:HarnessGeneration)
+            SET g += $props
+            RETURN g.id AS id,
+                   g.request_fingerprint AS request_fingerprint,
+                   g.created_at AS created_at,
+                   g.soul_sha AS soul_sha,
+                   g.plugin_version AS plugin_version,
+                   g.core_commit AS core_commit,
+                   g.schema_version AS schema_version,
+                   g.taxonomy_version AS taxonomy_version
+            """,
+            {"props": write_props},
+        )
+        if created is None:
+            raise RuntimeError("HarnessGeneration create returned no row")
+        return {
+            "outcome": "created",
+            "generation_id": created.get("id"),
+            "request_fingerprint": created.get("request_fingerprint"),
+            "created_at": created.get("created_at"),
+            "soul_sha": created.get("soul_sha"),
+            "plugin_version": created.get("plugin_version"),
+            "core_commit": created.get("core_commit"),
+            "schema_version": created.get("schema_version"),
+            "taxonomy_version": created.get("taxonomy_version"),
+        }
+
+    @staticmethod
+    def _read_harness_generation_row(
+        runner: Any, generation_id: str
+    ) -> dict[str, Any] | None:
+        return _run_one(
+            runner,
+            """
+            MATCH (g:Operational:HarnessGeneration {id: $generation_id})
+            RETURN g.id AS id,
+                   g.request_fingerprint AS request_fingerprint,
+                   g.created_at AS created_at,
+                   g.soul_sha AS soul_sha,
+                   g.plugin_version AS plugin_version,
+                   g.core_commit AS core_commit,
+                   g.schema_version AS schema_version,
+                   g.taxonomy_version AS taxonomy_version
+            LIMIT 1
+            """,
+            {"generation_id": generation_id},
+        )
+
+    @staticmethod
+    def _replay_or_conflict(
+        existing: dict[str, Any], *, request_fingerprint: str
+    ) -> dict[str, Any]:
+        if existing.get("request_fingerprint") == request_fingerprint:
+            return {
+                "outcome": "replayed",
+                "generation_id": existing.get("id"),
+                "request_fingerprint": existing.get("request_fingerprint"),
+                "created_at": existing.get("created_at"),
+                "soul_sha": existing.get("soul_sha"),
+                "plugin_version": existing.get("plugin_version"),
+                "core_commit": existing.get("core_commit"),
+                "schema_version": existing.get("schema_version"),
+                "taxonomy_version": existing.get("taxonomy_version"),
+            }
+        return {
+            "outcome": "conflict",
+            "reason": "generation_id_reused",
+            "generation_id": existing.get("id"),
+            "request_fingerprint": existing.get("request_fingerprint"),
+            "created_at": existing.get("created_at"),
+        }

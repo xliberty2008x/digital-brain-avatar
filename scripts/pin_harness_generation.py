@@ -6,6 +6,16 @@ HarnessGeneration (SOUL hash only), records it on the quality plane when MCP
 is reachable, and persists the pin for the session so mid-session file/policy
 changes cannot alter the id.
 
+Session identity:
+  Prefer DIGITAL_BRAIN_SESSION_ID or Claude hook session_id (via --session-id /
+  --hook-source from compose-up). Never stick forever to a global "current" pin
+  across SessionStarts — compose-up falls back to a timestamped local id when
+  the host provides none.
+
+  --force-new (or SessionStart source startup/clear): recollect and overwrite.
+  resume/compact: reload the existing pin for that session.
+
+When CLAUDE_ENV_FILE is set, appends export lines for the host session env.
 Never prints SOUL content.
 """
 
@@ -24,11 +34,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from digital_brain.maintenance.generation import (  # noqa: E402
-    DEFAULT_SESSION_ID,
+    SESSION_ENV_GENERATION_ID,
+    SESSION_ENV_PIN_PATH,
     collect_harness_generation,
+    export_pin_to_claude_env_file,
     get_or_pin_session_generation,
     load_session_pin,
     pin_session_generation,
+    resolve_session_binding,
     resolve_state_dir,
     session_pin_path,
 )
@@ -44,8 +57,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--session-id",
-        default=os.getenv("DIGITAL_BRAIN_SESSION_ID") or DEFAULT_SESSION_ID,
-        help="Session key under DIGITAL_BRAIN_STATE_DIR/sessions/<id>/",
+        default=None,
+        help=(
+            "Session key under DIGITAL_BRAIN_STATE_DIR/sessions/<id>/. "
+            "Prefer Claude hook session_id or DIGITAL_BRAIN_SESSION_ID; "
+            "when omitted, resolve_session_binding may mint an ephemeral id."
+        ),
+    )
+    parser.add_argument(
+        "--hook-source",
+        default=None,
+        help="Claude SessionStart source (startup|resume|clear|compact)",
     )
     parser.add_argument(
         "--state-dir",
@@ -70,7 +92,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--force-new",
         action="store_true",
-        help="Ignore an existing session pin and recollect (new session only)",
+        help="Ignore an existing session pin and recollect (startup/clear)",
     )
     parser.add_argument(
         "--skip-record",
@@ -95,9 +117,11 @@ def _public_summary(
     *,
     pin_path: Path,
     record_outcome: str | None,
+    session_id: str,
 ) -> dict[str, Any]:
     return {
         "generation_id": generation.id,
+        "session_id": session_id,
         "core_commit": generation.core_commit,
         "plugin_version": generation.plugin_version,
         "soul_sha": generation.soul_sha,
@@ -153,10 +177,36 @@ async def _record(generation: HarnessGeneration) -> dict[str, Any]:
         raise RuntimeError(f"record failed: {first_exc}") from first_exc
 
 
+def _export_session_env(generation: HarnessGeneration, pin_path: Path) -> Path:
+    """Write process env, state-dir .env, and optional CLAUDE_ENV_FILE exports."""
+    os.environ[SESSION_ENV_GENERATION_ID] = generation.id
+    os.environ[SESSION_ENV_PIN_PATH] = str(pin_path)
+
+    export_path = pin_path.parent / "harness_generation.env"
+    export_path.write_text(
+        f"{SESSION_ENV_GENERATION_ID}={generation.id}\n"
+        f"{SESSION_ENV_PIN_PATH}={pin_path}\n",
+        encoding="utf-8",
+    )
+    export_pin_to_claude_env_file(generation.id, pin_path)
+    return export_path
+
+
 def main() -> int:
     args = parse_args()
     state_dir = resolve_state_dir(args.state_dir)
-    session_id = args.session_id or DEFAULT_SESSION_ID
+
+    # Resolve session binding: CLI session-id wins as env override, then hook
+    # source decides force-new unless --force-new was passed.
+    force_flag = True if args.force_new else None
+    session_id, force_new = resolve_session_binding(
+        env_session_id=args.session_id,
+        hook_session_id=None,
+        hook_source=args.hook_source,
+        force_new=force_flag,
+    )
+    # Persist resolved id for child tools / compose-up log correlation.
+    os.environ["DIGITAL_BRAIN_SESSION_ID"] = session_id
 
     collect_kwargs: dict[str, Any] = {
         "repo_root": args.repo_root,
@@ -167,7 +217,7 @@ def main() -> int:
     if args.soul_path:
         collect_kwargs["soul_path"] = args.soul_path
 
-    if args.force_new:
+    if force_new:
         generation = collect_harness_generation(**collect_kwargs)
         pin_path = pin_session_generation(
             generation, state_dir=state_dir, session_id=session_id, export_env=True
@@ -177,11 +227,11 @@ def main() -> int:
         if existing is not None:
             generation = existing
             pin_path = session_pin_path(state_dir, session_id)
-            os.environ["DIGITAL_BRAIN_HARNESS_GENERATION_ID"] = generation.id
-            os.environ["DIGITAL_BRAIN_HARNESS_GENERATION_PIN"] = str(pin_path)
+            os.environ[SESSION_ENV_GENERATION_ID] = generation.id
+            os.environ[SESSION_ENV_PIN_PATH] = str(pin_path)
         else:
+            # collect_kwargs already includes state_dir; do not pass it twice.
             generation = get_or_pin_session_generation(
-                state_dir=state_dir,
                 session_id=session_id,
                 force_new=False,
                 **collect_kwargs,
@@ -219,20 +269,14 @@ def main() -> int:
     else:
         record_outcome = "skipped"
 
-    # Final export for SessionStart consumers / compose logs.
-    os.environ["DIGITAL_BRAIN_HARNESS_GENERATION_ID"] = generation.id
-    os.environ["DIGITAL_BRAIN_HARNESS_GENERATION_PIN"] = str(pin_path)
-
-    # Also write a session-export file that compose-up can source if desired.
-    export_path = pin_path.parent / "harness_generation.env"
-    export_path.write_text(
-        f"DIGITAL_BRAIN_HARNESS_GENERATION_ID={generation.id}\n"
-        f"DIGITAL_BRAIN_HARNESS_GENERATION_PIN={pin_path}\n",
-        encoding="utf-8",
-    )
+    # Final export for SessionStart consumers / compose logs / CLAUDE_ENV_FILE.
+    _export_session_env(generation, pin_path)
 
     summary = _public_summary(
-        generation, pin_path=pin_path, record_outcome=record_outcome
+        generation,
+        pin_path=pin_path,
+        record_outcome=record_outcome,
+        session_id=session_id,
     )
     # Hard guarantee: never emit SOUL body keys.
     for forbidden in ("soul_content", "soul_text", "soul", "SOUL"):
@@ -243,7 +287,8 @@ def main() -> int:
     else:
         print(
             f"pin_harness_generation: pinned id={generation.id} "
-            f"plugin={generation.plugin_version} soul_sha={generation.soul_sha[:12]}… "
+            f"session={session_id} plugin={generation.plugin_version} "
+            f"soul_sha={generation.soul_sha[:12]}… "
             f"pin={pin_path} record={record_outcome}"
         )
     return 0

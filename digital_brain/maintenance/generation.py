@@ -23,10 +23,16 @@ from .models import (
     digest_text,
 )
 
+# Legacy API default only — production SessionStart must bind a real host session
+# id (Claude hook session_id / DIGITAL_BRAIN_SESSION_ID). Never reuse a global
+# "current" pin across SessionStarts; prefer :func:`new_ephemeral_session_id`.
 DEFAULT_SESSION_ID = "current"
 PIN_FILENAME = "harness_generation.json"
 SESSION_ENV_GENERATION_ID = "DIGITAL_BRAIN_HARNESS_GENERATION_ID"
-SESSION_ENV_PIN_PATH = "DIGITAL_BRAIN_HARNESS_GENERATION_PIN"
+SESSION_ENV_PIN_PATH = "DIGITAL_BRAIN_HARNESS_PIN_PATH"
+# Claude SessionStart sources that must recollect a pin vs reload an existing one.
+FORCE_NEW_HOOK_SOURCES = frozenset({"startup", "clear"})
+RELOAD_HOOK_SOURCES = frozenset({"resume", "compact"})
 
 # Active overlay manifest relative to the state directory.
 ACTIVE_OVERLAY_MANIFEST_REL = Path("dreams") / "active-overlays" / "manifest.json"
@@ -45,6 +51,96 @@ def resolve_state_dir(explicit: str | Path | None = None) -> Path:
     if xdg:
         return Path(xdg).expanduser().resolve() / "digital-brain"
     return Path.home().resolve() / ".local" / "state" / "digital-brain"
+
+
+def sanitize_session_id(session_id: str | None) -> str:
+    """Filesystem-safe session key (alphanumeric, dash, underscore, dot)."""
+    raw = (session_id or "").strip()
+    safe = "".join(
+        ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in raw
+    )
+    return safe or DEFAULT_SESSION_ID
+
+
+def new_ephemeral_session_id() -> str:
+    """Mint a per-invocation session id when the host provides none.
+
+    Prefer Claude hook ``session_id`` or ``DIGITAL_BRAIN_SESSION_ID``. Falling
+    back to a timestamped id is better than reusing a global ``current`` pin
+    forever across SessionStarts.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"local-{ts}-{os.getpid()}"
+
+
+def resolve_session_binding(
+    *,
+    env_session_id: str | None = None,
+    hook_session_id: str | None = None,
+    hook_source: str | None = None,
+    force_new: bool | None = None,
+) -> tuple[str, bool]:
+    """Resolve ``(session_id, force_new)`` for SessionStart / compose-up.
+
+    Session id priority:
+    1. ``env_session_id`` / ``DIGITAL_BRAIN_SESSION_ID``
+    2. Claude hook ``session_id`` from stdin JSON
+    3. Ephemeral timestamped id (never sticky global ``current``)
+
+    Force-new:
+    - ``startup`` / ``clear`` → recollect
+    - ``resume`` / ``compact`` → reload existing pin for that session
+    - explicit ``force_new`` overrides source when provided
+    - ephemeral fallback always uses a fresh id (pin path is empty)
+    """
+    env_sid = (env_session_id if env_session_id is not None else os.getenv("DIGITAL_BRAIN_SESSION_ID") or "").strip()
+    hook_sid = (hook_session_id or "").strip()
+    source = (hook_source or "").strip().lower()
+
+    if env_sid:
+        session_id = sanitize_session_id(env_sid)
+        ephemeral = False
+    elif hook_sid:
+        session_id = sanitize_session_id(hook_sid)
+        ephemeral = False
+    else:
+        session_id = new_ephemeral_session_id()
+        ephemeral = True
+
+    if force_new is not None:
+        return session_id, bool(force_new)
+    if source in FORCE_NEW_HOOK_SOURCES:
+        return session_id, True
+    if source in RELOAD_HOOK_SOURCES:
+        return session_id, False
+    # Manual compose-up / unknown source: reuse pin for known session ids;
+    # ephemeral ids are new paths so recollect is implicit.
+    return session_id, ephemeral
+
+
+def export_pin_to_claude_env_file(
+    generation_id: str,
+    pin_path: str | Path,
+    *,
+    env_file: str | Path | None = None,
+) -> Path | None:
+    """Append pin exports to Claude Code ``CLAUDE_ENV_FILE`` when set.
+
+    Claude SessionStart loads this file so subsequent host bash tools see
+    ``DIGITAL_BRAIN_HARNESS_GENERATION_ID`` and ``DIGITAL_BRAIN_HARNESS_PIN_PATH``.
+    """
+    target = env_file if env_file is not None else (os.getenv("CLAUDE_ENV_FILE") or "").strip()
+    if not target:
+        return None
+    path = Path(target).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Values are controlled (hg-<hex> + local path); still quote for shell safety.
+    gid = str(generation_id).replace("'", "'\"'\"'")
+    ppath = str(pin_path).replace("'", "'\"'\"'")
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(f"export {SESSION_ENV_GENERATION_ID}='{gid}'\n")
+        fh.write(f"export {SESSION_ENV_PIN_PATH}='{ppath}'\n")
+    return path
 
 
 def _utc_now_iso() -> str:
@@ -267,10 +363,7 @@ def session_pin_path(
     session_id: str = DEFAULT_SESSION_ID,
 ) -> Path:
     state = resolve_state_dir(state_dir)
-    safe_session = "".join(
-        ch if ch.isalnum() or ch in ("-", "_", ".") else "_"
-        for ch in (session_id or DEFAULT_SESSION_ID)
-    ) or DEFAULT_SESSION_ID
+    safe_session = sanitize_session_id(session_id)
     return state / "sessions" / safe_session / PIN_FILENAME
 
 

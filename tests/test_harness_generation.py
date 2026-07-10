@@ -15,10 +15,14 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "mcp_servers" / "cypher" / "src"))
 
 from digital_brain.maintenance.generation import (  # noqa: E402
+    SESSION_ENV_GENERATION_ID,
+    SESSION_ENV_PIN_PATH,
     collect_harness_generation,
+    export_pin_to_claude_env_file,
     get_or_pin_session_generation,
     load_session_pin,
     pin_session_generation,
+    resolve_session_binding,
     session_pin_path,
 )
 from digital_brain.maintenance.models import (  # noqa: E402
@@ -30,7 +34,11 @@ from digital_brain.maintenance.models import (  # noqa: E402
     compute_generation_id,
     generation_request_fingerprint,
 )
-from digital_brain_mcp_cypher.quality import QualityStore  # noqa: E402
+from digital_brain_mcp_cypher.quality import (  # noqa: E402
+    QualityStore,
+    compute_harness_request_fingerprint,
+    harness_identity_payload,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +305,25 @@ class _Result:
         return None
 
 
+class _ConstraintError(Exception):
+    """Mimic neo4j.exceptions.ConstraintError for uniqueness races."""
+
+    def __init__(self, message: str = "ConstraintValidationFailed: already exists"):
+        super().__init__(message)
+        self.code = "Neo.ClientError.Schema.ConstraintValidationFailed"
+
+
 class _FakeSession:
     def __init__(self) -> None:
         self.nodes: dict[str, dict[str, Any]] = {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.fail_next_create: bool = False
+
+    def execute_write(self, fn):  # noqa: ANN001
+        return fn(self)
+
+    def write_transaction(self, fn):  # noqa: ANN001
+        return fn(self)
 
     def run(self, query: str, params: dict[str, Any] | None = None) -> _Result:
         params = params or {}
@@ -314,6 +337,12 @@ class _FakeSession:
             return _Result(None if node is None else dict(node))
         if q.strip().startswith("CREATE (g:Operational:HarnessGeneration)"):
             props = dict(params["props"])
+            if self.fail_next_create or props["id"] in self.nodes:
+                self.fail_next_create = False
+                # Simulate concurrent create winning the uniqueness race.
+                if props["id"] not in self.nodes:
+                    self.nodes[props["id"]] = props
+                raise _ConstraintError()
             self.nodes[props["id"]] = props
             return _Result(
                 {
@@ -378,6 +407,28 @@ def _store_with(session: _FakeSession) -> QualityStore:
     return QualityStore(factory, "neo4j")
 
 
+def test_server_fingerprint_matches_client_models():
+    gen = _sample()
+    client_fp = generation_request_fingerprint(gen)
+    server_fp = compute_harness_request_fingerprint(
+        harness_identity_payload(
+            core_commit=gen.core_commit,
+            core_tree_digest=gen.core_tree_digest,
+            dirty_state_digest=gen.dirty_state_digest,
+            plugin_version=gen.plugin_version,
+            soul_sha=gen.soul_sha,
+            overlay_manifest_digest=gen.overlay_manifest_digest,
+            policy_digest=gen.policy_digest,
+            mcp_version=gen.mcp_version,
+            model_id=gen.model_id,
+            schema_version=gen.schema_version,
+            taxonomy_version=gen.taxonomy_version,
+        )
+    )
+    assert client_fp == server_fp
+    assert gen.id == f"hg-{server_fp}"
+
+
 def test_record_harness_generation_created_replay_conflict():
     session = _FakeSession()
     store = _store_with(session)
@@ -395,11 +446,41 @@ def test_record_harness_generation_created_replay_conflict():
     assert replayed["outcome"] == "replayed"
     assert replayed["generation_id"] == gen.id
 
-    conflict_params = dict(params)
-    conflict_params["request_fingerprint"] = "different-fingerprint"
-    conflict = store.record_harness_generation(conflict_params)
+    # Corrupt stored fingerprint to exercise conflict (integrity rejects client
+    # mismatches before write; conflict is for pre-existing divergent nodes).
+    session.nodes[gen.id]["request_fingerprint"] = "different-fingerprint"
+    conflict = store.record_harness_generation(params)
     assert conflict["outcome"] == "conflict"
     assert conflict["reason"] == "generation_id_reused"
+
+
+def test_record_rejects_mismatched_fingerprint_or_id():
+    session = _FakeSession()
+    store = _store_with(session)
+    gen = _sample()
+    params = gen.to_record_params()
+
+    bad_fp = dict(params)
+    bad_fp["request_fingerprint"] = "0" * 64
+    with pytest.raises(ValueError, match="request_fingerprint does not match"):
+        store.record_harness_generation(bad_fp)
+
+    bad_id = dict(params)
+    bad_id["id"] = "hg-" + ("0" * 64)
+    with pytest.raises(ValueError, match="generation.id must equal"):
+        store.record_harness_generation(bad_id)
+
+
+def test_record_uniqueness_race_maps_to_replay():
+    session = _FakeSession()
+    store = _store_with(session)
+    gen = _sample()
+    params = gen.to_record_params()
+    params["created_at"] = None
+    session.fail_next_create = True
+    outcome = store.record_harness_generation(params)
+    assert outcome["outcome"] == "replayed"
+    assert outcome["generation_id"] == gen.id
 
 
 def test_record_rejects_soul_content_fields():
@@ -456,6 +537,48 @@ def test_mcp_client_rejects_soul_content():
     asyncio.run(_run())
 
 
+def test_resolve_session_binding_sources():
+    sid, force = resolve_session_binding(
+        env_session_id="env-sess",
+        hook_session_id="hook-sess",
+        hook_source="startup",
+    )
+    assert sid == "env-sess"
+    assert force is True
+
+    sid, force = resolve_session_binding(
+        env_session_id=None,
+        hook_session_id="hook-uuid-1234",
+        hook_source="resume",
+    )
+    assert sid == "hook-uuid-1234"
+    assert force is False
+
+    sid, force = resolve_session_binding(
+        env_session_id=None,
+        hook_session_id="hook-uuid-1234",
+        hook_source="clear",
+    )
+    assert force is True
+
+    sid, force = resolve_session_binding(
+        env_session_id=None,
+        hook_session_id=None,
+        hook_source=None,
+    )
+    assert sid.startswith("local-")
+    assert force is True  # ephemeral
+
+
+def test_export_pin_to_claude_env_file(tmp_path: pathlib.Path):
+    env_file = tmp_path / "claude.env"
+    pin = tmp_path / "sessions" / "s1" / "harness_generation.json"
+    export_pin_to_claude_env_file("hg-abc", pin, env_file=env_file)
+    text = env_file.read_text(encoding="utf-8")
+    assert f"export {SESSION_ENV_GENERATION_ID}='hg-abc'" in text
+    assert f"export {SESSION_ENV_PIN_PATH}='{pin}'" in text
+
+
 def test_pin_script_public_summary_has_no_soul_body(tmp_path: pathlib.Path, monkeypatch):
     """scripts/pin_harness_generation.py summary path (offline, skip-record)."""
     plugin = tmp_path / "plugin"
@@ -465,8 +588,11 @@ def test_pin_script_public_summary_has_no_soul_body(tmp_path: pathlib.Path, monk
     secret = "SECRET_SOUL_BODY_TEXT_XYZ"
     soul.write_text(secret, encoding="utf-8")
     state = tmp_path / "state"
+    claude_env = tmp_path / "claude_env_file.sh"
 
     monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(state))
+    monkeypatch.setenv("CLAUDE_ENV_FILE", str(claude_env))
+    monkeypatch.delenv("DIGITAL_BRAIN_SESSION_ID", raising=False)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -487,10 +613,8 @@ def test_pin_script_public_summary_has_no_soul_body(tmp_path: pathlib.Path, monk
             "--force-new",
         ],
     )
-    # Override git-less fixed collect via env not needed — pin script uses collect.
     from scripts import pin_harness_generation as pin_mod
 
-    # Force deterministic commit inputs by monkeypatching collect
     fixed = _sample(soul_sha="ab" * 32)
     monkeypatch.setattr(
         pin_mod,
@@ -505,9 +629,103 @@ def test_pin_script_public_summary_has_no_soul_body(tmp_path: pathlib.Path, monk
 
     code = pin_mod.main()
     assert code == 0
+
     pin = load_session_pin(state_dir=state, session_id="unit")
-    # force-new path uses pin_session_generation with collect result
-    assert pin is not None or session_pin_path(state, "unit").is_file()
+    assert pin is not None
+    assert pin.id == fixed.id
+
     pin_file = session_pin_path(state, "unit")
-    if pin_file.is_file():
-        assert secret not in pin_file.read_text(encoding="utf-8")
+    assert pin_file.is_file()
+    pin_text = pin_file.read_text(encoding="utf-8")
+    assert secret not in pin_text
+    assert fixed.soul_sha in pin_text
+
+    env_file = pin_file.parent / "harness_generation.env"
+    assert env_file.is_file()
+    env_text = env_file.read_text(encoding="utf-8")
+    assert f"{SESSION_ENV_GENERATION_ID}={fixed.id}" in env_text
+    assert f"{SESSION_ENV_PIN_PATH}={pin_file}" in env_text
+
+    claude_text = claude_env.read_text(encoding="utf-8")
+    assert f"export {SESSION_ENV_GENERATION_ID}='{fixed.id}'" in claude_text
+    assert f"export {SESSION_ENV_PIN_PATH}='{pin_file}'" in claude_text
+
+
+def test_pin_script_force_new_and_new_session_get_distinct_ids(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    """Production-like session ids: force-new recollects; new session is distinct."""
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    (plugin / "version.json").write_text('"0.2.0"\n', encoding="utf-8")
+    soul = tmp_path / "SOUL.MD"
+    soul.write_text("voice-a", encoding="utf-8")
+    state = tmp_path / "state"
+
+    from scripts import pin_harness_generation as pin_mod
+
+    call_n = {"n": 0}
+
+    def _collect(**kwargs: Any) -> HarnessGeneration:
+        call_n["n"] += 1
+        # Distinct soul digest per collect so force-new / new session change id.
+        return _sample(soul_sha=f"{call_n['n']:02d}" * 32)
+
+    monkeypatch.setattr(pin_mod, "collect_harness_generation", _collect)
+    monkeypatch.setenv("DIGITAL_BRAIN_STATE_DIR", str(state))
+    monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
+
+    def _run(session_id: str, *extra: str) -> dict[str, Any]:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "pin_harness_generation.py",
+                "--repo-root",
+                str(tmp_path),
+                "--plugin-root",
+                str(plugin),
+                "--soul-path",
+                str(soul),
+                "--state-dir",
+                str(state),
+                "--session-id",
+                session_id,
+                "--skip-record",
+                "--json",
+                *extra,
+            ],
+        )
+        # Capture stdout JSON
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            assert pin_mod.main() == 0
+        return json.loads(buf.getvalue())
+
+    first = _run("prod-session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    second_same = _run("prod-session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    assert first["generation_id"] == second_same["generation_id"]
+    assert first["session_id"] == "prod-session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    forced = _run(
+        "prod-session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "--force-new",
+        "--hook-source",
+        "startup",
+    )
+    assert forced["generation_id"] != first["generation_id"]
+
+    other = _run("prod-session-ffffffffffff-1111-2222-3333-444444444444")
+    assert other["generation_id"] != forced["generation_id"]
+    assert other["session_id"] == "prod-session-ffffffffffff-1111-2222-3333-444444444444"
+
+    # Original session pin file still holds the force-new id (overwrite).
+    loaded = load_session_pin(
+        state_dir=state,
+        session_id="prod-session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+    assert loaded is not None
+    assert loaded.id == forced["generation_id"]
