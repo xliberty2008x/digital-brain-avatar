@@ -12,9 +12,169 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 _logger = logging.getLogger(__name__)
+
+_QUARANTINE_FILENAMES = frozenset(
+    {
+        "artifact.md",
+        "checksums.json",
+        "evaluation.json",
+        "intent.json",
+        "manifest.json",
+    }
+)
+_MAX_QUARANTINE_BYTES = 1_048_576
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _manifest_core_without_patch(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in sorted(dict(manifest).items()) if k != "patch_sha256"}
+
+
+def _compute_quarantine_patch_sha256(
+    *,
+    intent: Mapping[str, Any],
+    artifact: bytes,
+    evaluation: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> str:
+    """Mirror the compiler's closed-bundle digest without importing the app."""
+    core = _canonical_json(_manifest_core_without_patch(manifest)).encode("utf-8")
+    return _digest_text(
+        _canonical_json(
+            {
+                "artifact.md": _sha256_bytes(artifact),
+                "evaluation.json": _sha256_bytes(
+                    _canonical_json(dict(evaluation)).encode("utf-8")
+                ),
+                "intent.json": _sha256_bytes(
+                    _canonical_json(dict(intent)).encode("utf-8")
+                ),
+                "manifest_core": _sha256_bytes(core),
+            }
+        )
+    )
+
+
+def _verify_quarantine_bundle(
+    *,
+    artifact_path: str,
+    proposal_id: str,
+    evidence_snapshot_id: str,
+    base_commit: str,
+    compiler_version: str,
+    schema_version: str,
+    patch_sha256: str,
+) -> dict[str, Any]:
+    """Read and verify the immutable quarantine bundle before graph publish.
+
+    This implementation intentionally uses only the standard library because
+    the standalone MCP image does not include the application package.
+    """
+    raw_path = Path(artifact_path)
+    if not raw_path.is_absolute():
+        raise ValueError("artifact_path_must_be_absolute")
+    if raw_path.name != "artifact.md":
+        raise ValueError("artifact_path_must_name_artifact_md")
+
+    # Refuse symlinks anywhere in the supplied existing path before resolving.
+    for candidate in (raw_path, *raw_path.parents):
+        if candidate.exists() and candidate.is_symlink():
+            raise ValueError(f"artifact_path_symlink_forbidden:{candidate}")
+
+    try:
+        path = raw_path.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"artifact_path_unreadable:{exc}") from exc
+    directory = path.parent
+    if (
+        directory.name != proposal_id
+        or directory.parent.name == ""
+        or directory.parent.parent.name != "quarantine"
+        or directory.parent.parent.parent.name != "dreams"
+    ):
+        raise ValueError("artifact_path_must_match_quarantine_layout")
+    if any(
+        part in {"plugins", "active-overlays", "node_modules"}
+        for part in path.parts
+    ):
+        raise ValueError("artifact_path_forbidden_segment")
+
+    present = {p.name for p in directory.iterdir()}
+    if present != _QUARANTINE_FILENAMES:
+        missing = sorted(_QUARANTINE_FILENAMES - present)
+        extra = sorted(present - _QUARANTINE_FILENAMES)
+        raise ValueError(f"quarantine_bundle_not_closed:missing={missing}:extra={extra}")
+
+    raw: dict[str, bytes] = {}
+    total = 0
+    for name in sorted(_QUARANTINE_FILENAMES):
+        item = directory / name
+        if item.is_symlink() or not item.is_file():
+            raise ValueError(f"quarantine_bundle_file_invalid:{name}")
+        data = item.read_bytes()
+        total += len(data)
+        if total > _MAX_QUARANTINE_BYTES:
+            raise ValueError("quarantine_bundle_size_overflow")
+        raw[name] = data
+
+    try:
+        intent = json.loads(raw["intent.json"])
+        evaluation = json.loads(raw["evaluation.json"])
+        manifest = json.loads(raw["manifest.json"])
+        checksums = json.loads(raw["checksums.json"])
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"quarantine_bundle_json_invalid:{exc}") from exc
+    if not all(
+        isinstance(obj, dict) for obj in (intent, evaluation, manifest, checksums)
+    ):
+        raise ValueError("quarantine_bundle_json_must_be_objects")
+
+    expected_checksum_names = _QUARANTINE_FILENAMES - {"checksums.json"}
+    if set(checksums) != expected_checksum_names:
+        raise ValueError("quarantine_checksums_not_closed")
+    for name in sorted(expected_checksum_names):
+        computed = _sha256_bytes(raw[name])
+        if str(checksums.get(name) or "") != computed:
+            raise ValueError(f"quarantine_checksum_mismatch:{name}")
+
+    computed_patch = _compute_quarantine_patch_sha256(
+        intent=intent,
+        artifact=raw["artifact.md"],
+        evaluation=evaluation,
+        manifest=manifest,
+    )
+    bindings = {
+        "proposal_id": proposal_id,
+        "evidence_snapshot_id": evidence_snapshot_id,
+        "base_commit": base_commit,
+        "compiler_version": compiler_version,
+        "schema_version": schema_version,
+        "patch_sha256": patch_sha256,
+    }
+    for field, expected in bindings.items():
+        actual = str(manifest.get(field) or "")
+        if actual != expected:
+            raise ValueError(
+                f"quarantine_manifest_binding_mismatch:{field}:"
+                f"expected={expected}:actual={actual}"
+            )
+    if computed_patch != patch_sha256:
+        raise ValueError(
+            f"quarantine_patch_digest_mismatch:"
+            f"expected={patch_sha256}:computed={computed_patch}"
+        )
+    return {
+        "artifact_path": str(path),
+        "manifest": manifest,
+        "patch_sha256": computed_patch,
+    }
 
 # Import pure transition validators from shared models when available; keep
 # local mirrors so the MCP package does not hard-depend on the app package
@@ -1862,16 +2022,9 @@ class MaintenanceStore:
         # Advanced statuses require a non-failed EvaluationReceipt at create time.
         if status_projection in STATUSES_REQUIRING_EVALUATION:
             if evaluation_receipt_embed is not None:
-                _assert_evaluation_gate(
-                    target_status=status_projection,
-                    evaluation_receipt=dict(evaluation_receipt_embed),
+                raise EvaluationGateError(
+                    "embedded_evaluation_not_allowed_for_advanced_status"
                 )
-                if evaluation_receipt_id is None:
-                    embedded_id = evaluation_receipt_embed.get("id")
-                    if embedded_id is not None:
-                        evaluation_receipt_id = _require_id(
-                            str(embedded_id), "evaluation_receipt.id"
-                        )
             elif evaluation_receipt_id is None:
                 raise EvaluationGateError(
                     f"evaluation_required_for_status:{status_projection}"
@@ -2420,16 +2573,18 @@ class MaintenanceStore:
             "fixture_snapshot",
             default="{}",
         )
-        holdout_ok = False
+        holdout_ids: list[str] = []
         try:
             parsed_fs = json.loads(fixture_snapshot) if fixture_snapshot else {}
             if isinstance(parsed_fs, dict):
                 ids = parsed_fs.get("holdout_ids") or parsed_fs.get("ids")
-                if isinstance(ids, list) and len(ids) > 0:
-                    holdout_ok = True
+                if isinstance(ids, list):
+                    holdout_ids = [
+                        str(item).strip() for item in ids if str(item).strip()
+                    ]
         except (TypeError, json.JSONDecodeError):
             pass
-        if not holdout_ok and not str(payload.get("fixture_digest") or "").strip():
+        if not holdout_ids:
             raise EvaluationGateError("evaluation_receipt_missing_holdout_proof")
         target_results = _json_field(
             payload.get("target_results") or "{}", "target_results", default="{}"
@@ -2469,9 +2624,14 @@ class MaintenanceStore:
             "baseline_ref": baseline_ref,
             "candidate_ref": candidate_ref,
             "evaluator_version": evaluator_version,
+            "fixture_snapshot": fixture_snapshot,
+            "guardrail_results": guardrail_results,
             "id": evaluation_id,
+            "invariant_result": invariant_result,
             "outcome": outcome,
+            "privacy_result": privacy_result,
             "proposal_id": proposal_id,
+            "target_results": target_results,
         }
         request_fingerprint = _digest_text(_canonical_json(identity))
 
@@ -2491,6 +2651,7 @@ class MaintenanceStore:
                     privacy_result=privacy_result,
                     invariant_result=invariant_result,
                     outcome=outcome,
+                    holdout_ids=holdout_ids,
                     request_fingerprint=request_fingerprint,
                     epoch=epoch,
                     run_id=run_id,
@@ -2515,6 +2676,7 @@ class MaintenanceStore:
         privacy_result: str,
         invariant_result: str,
         outcome: str,
+        holdout_ids: list[str],
         request_fingerprint: str,
         epoch: int,
         run_id: str,
@@ -2525,6 +2687,41 @@ class MaintenanceStore:
         )
         if fence_err is not None:
             return fence_err
+
+        provenance = _run_one(
+            tx,
+            """
+            MATCH (p:Operational:Proposal {id: $proposal_id})
+            OPTIONAL MATCH (s:Operational:EvidenceSnapshot {id: p.evidence_snapshot_id})
+            OPTIONAL MATCH (s)-[r:INCLUDES_EVIDENCE]->(e:Operational:EvidenceRef)
+            RETURN p.id AS proposal_id,
+                   p.evidence_snapshot_id AS snapshot_id,
+                   collect(CASE WHEN r.role = 'holdout' THEN e.id ELSE null END)
+                       AS durable_holdout_ids,
+                   collect(CASE WHEN r.role = 'generation' THEN e.id ELSE null END)
+                       AS durable_generation_ids
+            """,
+            {"proposal_id": proposal_id},
+        )
+        if provenance is None:
+            raise EvaluationGateError("evaluation_proposal_not_found")
+        durable_holdout = {
+            str(item)
+            for item in (provenance.get("durable_holdout_ids") or [])
+            if item is not None and str(item)
+        }
+        durable_generation = {
+            str(item)
+            for item in (provenance.get("durable_generation_ids") or [])
+            if item is not None and str(item)
+        }
+        supplied_holdout = set(holdout_ids)
+        if not durable_holdout:
+            raise EvaluationGateError("evaluation_snapshot_has_no_holdout")
+        if supplied_holdout != durable_holdout:
+            raise EvaluationGateError("evaluation_holdout_snapshot_mismatch")
+        if supplied_holdout & durable_generation:
+            raise EvaluationGateError("evaluation_holdout_generation_overlap")
 
         existing = _run_one(
             tx,
@@ -3824,6 +4021,20 @@ class MaintenanceStore:
                 "snapshot_base_commit": snap_base,
                 "declared_base_commit": base_commit,
             }
+
+        # The graph records evidence about the immutable bundle, not caller
+        # assertions. Re-read the complete bundle and bind every identity field
+        # immediately before the create so tampering cannot be published.
+        verified = _verify_quarantine_bundle(
+            artifact_path=artifact_path,
+            proposal_id=proposal_id,
+            evidence_snapshot_id=evidence_snapshot_id,
+            base_commit=base_commit,
+            compiler_version=compiler_version,
+            schema_version=schema_version,
+            patch_sha256=patch_sha256,
+        )
+        artifact_path = str(verified["artifact_path"])
 
         created = _run_one(
             tx,

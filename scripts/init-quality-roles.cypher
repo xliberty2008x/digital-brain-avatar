@@ -4,17 +4,12 @@
 //   uv run --group dev python scripts/init_quality_roles.py --write-cypher
 // Source of truth: digital_brain_mcp_cypher.quality.PROTECTED_QUALITY_LABELS
 //
-// Run against the system database as an admin user (default neo4j), for example:
-//
-//   cypher-shell -u neo4j -p "$NEO4J_ADMIN_PASSWORD" -d system \
-//     -f scripts/init-quality-roles.cypher
-//
-// Or via the reviewed host helper:
+// Apply via the reviewed host helper. It primes every protected label token in
+// the target database before installing the label-scoped DENYs:
 //
 //   python scripts/init_quality_roles.py --apply
 //
-// Parameter substitution is performed by init_quality_roles.py. When running
-// cypher-shell manually, replace the $... placeholders first.
+// Parameter substitution is performed by init_quality_roles.py.
 //
 // Roles:
 //   digital_brain_runtime  — life-graph MATCH/WRITE; DENY quality/control labels

@@ -60,6 +60,11 @@ from digital_brain.maintenance.active_overlays import (  # noqa: E402
     resolve_loadable_overlays,
 )
 from digital_brain.maintenance.alias_effects import AliasEffectStore  # noqa: E402
+from digital_brain.maintenance.artifacts import (  # noqa: E402
+    ArtifactError,
+    IsolatedValidationError,
+    validate_quarantine_isolated,
+)
 from digital_brain.maintenance.models import EMPTY_DIGEST, digest_text  # noqa: E402
 from digital_brain.maintenance.reconcile import (  # noqa: E402
     reconcile_overlay_activation,
@@ -172,16 +177,55 @@ def cmd_activate(args: argparse.Namespace) -> int:
     artifact_path = Path(args.artifact).expanduser().resolve()
     if not artifact_path.is_file():
         raise SystemExit(f"artifact not found: {artifact_path}")
-    # Refuse loading from plugin path as the trial source of truth.
-    artifact_s = str(artifact_path)
-    for forbidden in ("/plugins/", "node_modules", "/.cache/"):
-        if forbidden in artifact_s:
+    quarantine_root = (state / "dreams" / "quarantine").resolve()
+    try:
+        artifact_path.relative_to(quarantine_root)
+    except ValueError as exc:
+        raise SystemExit(
+            f"activation requires reviewed quarantine artifact under {quarantine_root}"
+        ) from exc
+    if artifact_path.name != "artifact.md":
+        raise SystemExit("activation artifact must be the bundle artifact.md")
+    try:
+        validate_quarantine_isolated(
+            artifact_path.parent,
+            state_dir=state,
+            repo_root=ROOT,
+        )
+        manifest = json.loads(
+            (artifact_path.parent / "manifest.json").read_text(encoding="utf-8")
+        )
+    except (ArtifactError, IsolatedValidationError, OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"quarantine validation failed: {exc}") from exc
+
+    expected_bindings = {
+        "proposal_id": args.proposal_id,
+        "base_commit": args.base_commit,
+        "extension_slot": args.extension_slot,
+        "rule_id": args.rule_id,
+    }
+    if args.target_skill:
+        expected_bindings["target_skill"] = args.target_skill
+    if args.target_file:
+        expected_bindings["target_file"] = args.target_file
+    for field, expected in expected_bindings.items():
+        actual = str(manifest.get(field) or "")
+        if actual != str(expected):
             raise SystemExit(
-                f"refusing artifact under forbidden runtime path marker: {forbidden}"
+                f"quarantine manifest {field} mismatch: expected {expected}, got {actual}"
             )
     content = artifact_path.read_text(encoding="utf-8")
     digest = digest_text(content)
-    before_hashes = _parse_before_hashes(args.before_hashes)
+    manifest_before_hashes = {
+        str(k): str(v) for k, v in dict(manifest.get("before_hashes") or {}).items()
+    }
+    before_hashes = (
+        _parse_before_hashes(args.before_hashes)
+        if args.before_hashes
+        else manifest_before_hashes
+    )
+    if before_hashes != manifest_before_hashes:
+        raise SystemExit("--before-hashes does not match quarantine manifest")
     binding = OverlayActivationBinding(
         proposal_id=args.proposal_id,
         proposal_hash=args.proposal_hash or digest,
@@ -191,9 +235,13 @@ def cmd_activate(args: argparse.Namespace) -> int:
         before_hashes=before_hashes,
         rule_id=args.rule_id,
         extension_slot=args.extension_slot,
-        target_skill=args.target_skill or "digital-brain-buddy-session",
+        target_skill=args.target_skill
+        or str(manifest.get("target_skill") or "digital-brain-buddy-session"),
         target_file=args.target_file
-        or "skills/digital-brain-buddy-session/SKILL.md",
+        or str(
+            manifest.get("target_file")
+            or "skills/digital-brain-buddy-session/SKILL.md"
+        ),
     )
     if binding.artifact_hash != digest:
         raise SystemExit(

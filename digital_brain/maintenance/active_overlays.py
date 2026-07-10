@@ -693,6 +693,7 @@ def restore_prior_manifest(
     state_dir: str | Path | None,
     prior_manifest: ActiveManifest | Mapping[str, Any],
     expected_prior_digest: str,
+    expected_live_digest: str | None = None,
 ) -> str:
     """Restore a prior known-good manifest (artifact-specific).
 
@@ -720,8 +721,11 @@ def restore_prior_manifest(
                 f"prior_manifest_digest_mismatch:expected={expected_prior_digest}"
                 f":computed={EMPTY_DIGEST}"
             )
-        atomic_replace_manifest(state_dir=state_dir, manifest=empty)
-        return EMPTY_DIGEST
+        return atomic_replace_manifest(
+            state_dir=state_dir,
+            manifest=empty,
+            expected_prior_digest=expected_live_digest,
+        )
 
     live_digest = compute_manifest_digest(public)
     if live_digest != expected_prior_digest:
@@ -730,4 +734,8 @@ def restore_prior_manifest(
             f":computed={live_digest}"
         )
     validate_manifest_against_files(state_dir, man)
-    return atomic_replace_manifest(state_dir=state_dir, manifest=man)
+    return atomic_replace_manifest(
+        state_dir=state_dir,
+        manifest=man,
+        expected_prior_digest=expected_live_digest,
+    )

@@ -382,7 +382,7 @@ class _FakeMaintSession:
             }
             return _Result({"id": sid, "created_at": self._ts()})
 
-        if "INCLUDES_EVIDENCE" in q:
+        if "INCLUDES_EVIDENCE" in q and "evidence_id" in params:
             eid = params["evidence_id"]
             self.evidence_refs.setdefault(
                 eid, {"id": eid, "evidence_label": params.get("evidence_label")}
@@ -577,7 +577,10 @@ class _FakeMaintSession:
             node = self.stages.get(sk)  # type: ignore[arg-type]
             return _Result(None if node is None else dict(node))
 
-        if "MATCH (s:Operational:EvidenceSnapshot {id:" in q:
+        if (
+            "MATCH (s:Operational:EvidenceSnapshot {id:" in q
+            and "durable_holdout_ids" not in q
+        ):
             sid = params.get("id") or params.get("snapshot_id")
             node = self.snapshots.get(sid)  # type: ignore[arg-type]
             return _Result(None if node is None else dict(node))
@@ -604,6 +607,29 @@ class _FakeMaintSession:
                 if prop_id == pid and eid in self.evaluations:
                     return _Result(_eval_view(self.evaluations[eid]))
             return _Result(None)
+
+        if "durable_holdout_ids" in q and "durable_generation_ids" in q:
+            prop = self.proposals.get(params["proposal_id"])
+            if prop is None:
+                return _Result(None)
+            snapshot_id = prop.get("evidence_snapshot_id")
+            holdout = []
+            generation = []
+            for (sid, evidence_id), rel in self.includes.items():
+                if sid != snapshot_id:
+                    continue
+                if rel.get("role") == "holdout":
+                    holdout.append(evidence_id)
+                elif rel.get("role") == "generation":
+                    generation.append(evidence_id)
+            return _Result(
+                {
+                    "proposal_id": prop["id"],
+                    "snapshot_id": snapshot_id,
+                    "durable_holdout_ids": holdout,
+                    "durable_generation_ids": generation,
+                }
+            )
 
         if "MATCH (p:Operational:Proposal {id:" in q and "HAS_EVALUATION" not in q:
             node = self.proposals.get(params["id"])
@@ -876,14 +902,9 @@ def test_evidence_supports_multiple_findings_and_proposals_no_absorption():
 def test_evaluation_and_decision_are_separate_from_application():
     session = _FakeMaintSession()
     store = _store_with(session)
-    lease = _acquire(store, run_id="run-eval")
-    epoch = lease["epoch"]
-    # Seed a draft proposal; evaluation/decision still require the lease fence.
-    session.proposals["prop-x"] = {
-        "id": "prop-x",
-        "status_projection": "draft",
-        "request_fingerprint": "seed",
-    }
+    epoch = _seed_draft_proposal(
+        session, store, run_id="run-eval", prop_id="prop-x"
+    )
 
     with pytest.raises(ValueError):
         store.record_evaluation(
@@ -1063,10 +1084,26 @@ def _seed_draft_proposal(
 ) -> int:
     lease = _acquire(store, run_id=run_id)
     epoch = lease["epoch"]
+    snapshot_id = f"snap-{prop_id}"
+    session.snapshots[snapshot_id] = {
+        "id": snapshot_id,
+        "dream_id": run_id,
+        "request_fingerprint": "seed-snapshot",
+    }
+    for evidence_id, role in (
+        ("hold-1", "holdout"),
+        ("hold-2", "holdout"),
+        ("generation-1", "generation"),
+    ):
+        session.includes[(snapshot_id, evidence_id)] = {
+            "role": role,
+            "evidence_hash": f"hash-{evidence_id}",
+        }
     session.proposals[prop_id] = {
         "id": prop_id,
         "status_projection": "draft",
         "request_fingerprint": "seed",
+        "evidence_snapshot_id": snapshot_id,
     }
     return epoch
 
@@ -1108,39 +1145,35 @@ def test_create_proposal_rejects_advanced_status_without_evaluation():
         assert f"prop-{status}" not in session.proposals
 
 
-def test_create_proposal_advanced_status_accepts_embedded_passed_receipt():
+def test_create_proposal_advanced_status_rejects_embedded_passed_receipt():
     session = _FakeMaintSession()
     store = _store_with(session)
     lease = _acquire(store, run_id="run-gate-embed")
     epoch = lease["epoch"]
 
-    result = store.create_proposal(
-        {
-            "id": "prop-reviewed",
-            "kind": "overlay",
-            "title": "reviewed",
-            "target_ref": "skill:x",
-            "status_projection": "review_pending",
-            "evidence_snapshot_id": "snap-1",
-            "run_id": "run-gate-embed",
-            "epoch": epoch,
-            "evaluation_receipt": {
-                "id": "eval-embed-1",
-                "outcome": "passed",
-                "baseline_ref": "baseline:x",
-                "candidate_ref": "candidate:prop-reviewed",
-                **_valid_eval_fields(),
-            },
-        }
-    )
-    assert result["outcome"] == "created"
-    assert result["status_projection"] == "review_pending"
-    assert result["evaluation_receipt_id"] == "eval-embed-1"
-    assert "eval-embed-1" in session.evaluations
-    assert ("prop-reviewed", "eval-embed-1") in session.has_evaluation
+    with pytest.raises(EvaluationGateError, match="embedded_evaluation_not_allowed"):
+        store.create_proposal(
+            {
+                "id": "prop-reviewed",
+                "kind": "overlay",
+                "title": "reviewed",
+                "target_ref": "skill:x",
+                "status_projection": "review_pending",
+                "evidence_snapshot_id": "snap-1",
+                "run_id": "run-gate-embed",
+                "epoch": epoch,
+                "evaluation_receipt": {
+                    "id": "eval-embed-1",
+                    "outcome": "passed",
+                    "baseline_ref": "baseline:x",
+                    "candidate_ref": "candidate:prop-reviewed",
+                    **_valid_eval_fields(),
+                },
+            }
+        )
 
     # Self-attested empty embed (outcome=passed only) is rejected.
-    with pytest.raises(EvaluationGateError, match="holdout_proof|hard_results|evaluator"):
+    with pytest.raises(EvaluationGateError, match="embedded_evaluation_not_allowed"):
         store.create_proposal(
             {
                 "id": "prop-self-attest",
@@ -1156,6 +1189,50 @@ def test_create_proposal_advanced_status_accepts_embedded_passed_receipt():
         )
 
 
+def test_record_evaluation_rejects_forged_or_overlapping_holdout_ids():
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    epoch = _seed_draft_proposal(
+        session, store, run_id="run-holdout-proof", prop_id="prop-holdout-proof"
+    )
+
+    base = {
+        "proposal_id": "prop-holdout-proof",
+        "baseline_ref": "b",
+        "candidate_ref": "c",
+        "outcome": "passed",
+        "run_id": "run-holdout-proof",
+        "epoch": epoch,
+        "evaluator_version": "1",
+        "privacy_result": "passed",
+        "invariant_result": "passed",
+    }
+    with pytest.raises(EvaluationGateError, match="holdout_snapshot_mismatch"):
+        store.record_evaluation(
+            {
+                **base,
+                "id": "eval-invented",
+                "fixture_snapshot": json.dumps({"holdout_ids": ["invented"]}),
+            }
+        )
+
+    # Even if corrupt durable data marks the same id as both roles, fail closed.
+    snapshot_id = session.proposals["prop-holdout-proof"]["evidence_snapshot_id"]
+    session.includes[(snapshot_id, "hold-1")]["role"] = "generation"
+    with pytest.raises(
+        EvaluationGateError, match="snapshot_mismatch|generation_overlap"
+    ):
+        store.record_evaluation(
+            {
+                **base,
+                "id": "eval-overlap",
+                "fixture_snapshot": json.dumps(
+                    {"holdout_ids": ["hold-1", "hold-2"]}
+                ),
+            }
+        )
+
+
 def test_create_proposal_rejects_hard_failed_evaluation_for_transition():
     session = _FakeMaintSession()
     store = _store_with(session)
@@ -1164,7 +1241,7 @@ def test_create_proposal_rejects_hard_failed_evaluation_for_transition():
 
     with pytest.raises(
         EvaluationGateError,
-        match="blocks_transition|failed_evaluation|evaluator|holdout",
+        match="blocks_transition|failed_evaluation|evaluator|holdout|embedded_evaluation",
     ):
         store.create_proposal(
             {

@@ -349,6 +349,34 @@ def test_general_write_rejects_protected_quality_control_mutations():
             raise AssertionError(f"expected protected quality rejection for {query}")
 
 
+def test_general_write_rejects_unlabeled_property_set_quality_bypasses():
+    for query in (
+        "MATCH (n {id: $id}) SET n.kind = 'praise'",
+        "MATCH (a) WHERE a.from_name = $name SET a.to_name = $canonical",
+        "MATCH (n) WHERE 'Alias' IN labels(n) SET n.canonical_id = $id",
+        "MATCH (n:Person) WITH n AS target SET target.name = $name",
+        "MATCH (n) SET n.summary = 'x' WITH n MATCH (n:Person) RETURN n",
+    ):
+        try:
+            assert_general_write_allowed(query)
+        except ValueError as exc:
+            assert "statically bound" in str(exc)
+        else:
+            raise AssertionError(f"expected unlabeled SET rejection for {query}")
+
+
+def test_general_write_allows_statically_labeled_life_graph_property_sets():
+    assert_general_write_allowed(
+        "MATCH (p:Person {id: $id}) SET p.display_name = $name"
+    )
+    assert_general_write_allowed(
+        "MATCH (p:Project {id: $id}) SET p.status = $status, p.updated_by = $actor"
+    )
+    assert_general_write_allowed(
+        "MATCH (p:Person {id: $id}) WITH p SET p.display_name = $name"
+    )
+
+
 def test_general_write_still_allows_life_graph_post_append_links():
     assert_general_write_allowed(
         "MATCH (j:JournalEntry {id: $journal_id}) "

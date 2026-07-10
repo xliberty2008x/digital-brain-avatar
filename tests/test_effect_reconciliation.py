@@ -17,6 +17,7 @@ from digital_brain.maintenance.activation import (  # noqa: E402
     OverlayEffectStore,
     TrialPolicy,
     activate_overlay_trial,
+    rollback_overlay_trial,
     write_activation_pending,
 )
 from digital_brain.maintenance.active_overlays import (  # noqa: E402
@@ -226,3 +227,51 @@ def test_fs_mismatch_restores_prior(tmp_path: pathlib.Path):
     assert rec["outcome"] == "restored"
     assert load_validated_active_overlays(state_dir=state).entries == ()
     assert resolve_loadable_overlays(state_dir=state) == []
+
+
+def test_rollback_crash_after_manifest_write_completes_receipt(tmp_path: pathlib.Path):
+    """An empty restored manifest has a real disk digest and is reconcilable."""
+    state = tmp_path / "state"
+    session = _FakeSession()
+    alias_store, effect_store = _store(session)
+    binding = _binding()
+    mint = _mint(alias_store, binding)
+    act = activate_overlay_trial(
+        state_dir=state,
+        binding=binding,
+        artifact_md=_artifact(),
+        trial_policy=_trial_policy(),
+        authority_id=mint["authority_id"],
+        nonce=mint["nonce"],
+        actor="owner@test",
+        rollback_generation="hg-prior",
+        alias_store=alias_store,
+        effect_store=effect_store,
+    )
+    assert act["outcome"] == "applied"
+
+    original_record = effect_store.record_activation_bundle
+
+    def crash_on_rollback(payload):
+        if payload.get("effect_type") == "rollback_overlay_trial":
+            raise RuntimeError("simulated graph outage")
+        return original_record(payload)
+
+    effect_store.record_activation_bundle = crash_on_rollback  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="simulated graph outage"):
+        rollback_overlay_trial(
+            state_dir=state,
+            proposal_id=binding.proposal_id,
+            prior_manifest_digest=act["prior_manifest_digest"],
+            prior_manifest=act["prior_manifest"],
+            actor="owner@test",
+            effect_store=effect_store,
+            deployment_id=act["deployment"]["id"],
+        )
+    assert load_validated_active_overlays(state_dir=state).entries == ()
+
+    effect_store.record_activation_bundle = original_record  # type: ignore[method-assign]
+    rec = reconcile_overlay_activation(state_dir=state, effect_store=effect_store)
+    assert rec["outcome"] == "applied"
+    assert rec["reason"] == "completed_rollback_overlay_trial_receipts"
+    assert load_validated_active_overlays(state_dir=state).entries == ()

@@ -9,7 +9,7 @@ ARG E2E_PROFILE=journal
 # Dreams profile also needs pytest + neo4j for optional role smoke and
 # in-container replay of the fake-store gates.
 RUN if [ "$E2E_PROFILE" = "dreams" ]; then \
-      pip install --no-cache-dir "aiohttp>=3.9.0" "pytest>=8.0" "neo4j>=5.26.0" "pydantic>=2.0"; \
+      pip install --no-cache-dir "aiohttp>=3.9.0" "pytest>=8.0" "neo4j>=5.26.0" "pydantic>=2.0" "starlette>=0.40"; \
     else \
       pip install --no-cache-dir "aiohttp>=3.9.0"; \
     fi

@@ -157,6 +157,16 @@ PROTECTED_JOURNAL_PROPERTY_RE = re.compile(
 )
 EMBEDDING_PARAM_RE = re.compile(r"\$embedding\b")
 SET_CLAUSE_RE = re.compile(r"\bSET\b", re.IGNORECASE)
+PROPERTY_SET_TARGET_RE = re.compile(
+    rf"(?:\bSET\b|,)\s*({_CYPHER_IDENTIFIER})\s*(?:\.|\[|\+=|=(?!=))",
+    re.IGNORECASE,
+)
+NODE_VARIABLE_PATTERN_RE = re.compile(
+    rf"\(\s*({_CYPHER_IDENTIFIER})\s*"
+    rf"((?:\s*:\s*{_CYPHER_IDENTIFIER})*)"
+    rf"(?=\s*(?:\{{|\)|WHERE\b))",
+    re.IGNORECASE,
+)
 _MAP_LITERAL_KEY_RE = re.compile(
     r"(?:^|[,{]\s*)(?:`([^`]+)`|['\"]([^'\"]+)['\"]|([A-Za-z_][A-Za-z0-9_]*))\s*:",
 )
@@ -188,6 +198,57 @@ def _set_adds_protected_quality_label(query: str) -> bool:
 def _touches_protected_quality_node(query: str) -> bool:
     """True when the query names a protected quality/control label."""
     return QUALITY_NODE_RE.search(query) is not None
+
+
+def _normalize_identifier_token(token: str) -> str:
+    token = token.strip()
+    if token.startswith("`") and token.endswith("`"):
+        token = token[1:-1].replace("``", "`")
+    return token.lower()
+
+
+def _property_set_targets_are_statically_labeled(query: str) -> bool:
+    """Return true only when every property-SET target is explicitly labeled.
+
+    A generic writer cannot know the runtime labels of ``MATCH (n)``.  Allowing
+    ``SET n.foo`` on such a variable lets a caller select an Operational node by
+    id/property/``labels(n)`` and bypass the protected-label lexical guard when
+    database roles have not yet been bootstrapped.  Fail closed: every mutated
+    node variable must have a preceding node pattern carrying at least one
+    static, non-quality-control label.  Aliased ``WITH n AS m``/UNWIND targets
+    have no statically labeled binding for the new variable and are rejected.
+    """
+
+    set_targets = list(PROPERTY_SET_TARGET_RE.finditer(query))
+    if not set_targets:
+        return True
+
+    node_patterns = list(NODE_VARIABLE_PATTERN_RE.finditer(query))
+    for set_match in set_targets:
+        target = _normalize_identifier_token(set_match.group(1))
+        prior_labels: list[set[str]] = []
+        for node_match in node_patterns:
+            if node_match.start() >= set_match.start():
+                continue
+            if _normalize_identifier_token(node_match.group(1)) != target:
+                continue
+            labels = {
+                _normalize_label_token(label)
+                for label in re.findall(
+                    rf":\s*({_CYPHER_IDENTIFIER})",
+                    node_match.group(2),
+                    re.IGNORECASE,
+                )
+            }
+            if labels:
+                prior_labels.append(labels)
+        if not prior_labels:
+            return False
+        if any(
+            labels & _PROTECTED_QUALITY_LABEL_NAMES for labels in prior_labels
+        ):
+            return False
+    return True
 
 
 def _map_literal_has_protected_key(body: str) -> bool:
@@ -305,6 +366,14 @@ def assert_general_write_allowed(query: str) -> None:
         raise ValueError(
             "write_neo4j_cypher cannot mutate protected Operational/quality control "
             "records; use typed quality tools or the authenticated coordinator API"
+        )
+    if SET_CLAUSE_RE.search(query) and not _property_set_targets_are_statically_labeled(
+        query
+    ):
+        raise ValueError(
+            "write_neo4j_cypher property SET targets must be statically bound "
+            "to explicit non-control labels; unlabeled/dynamic targets require "
+            "a dedicated typed tool"
         )
     if DELETE_DETACH_REMOVE_RE.search(query):
         raise ValueError(

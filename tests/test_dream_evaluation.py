@@ -220,6 +220,39 @@ def test_evaluation_cannot_be_skipped_for_proposal_transition():
     )
 
 
+def test_transition_rejects_digest_only_or_typed_receipt_without_holdout_ids():
+    with pytest.raises(EvaluationGateError, match="holdout_proof"):
+        assert_evaluation_present_for_transition(
+            target_status="validated",
+            evaluation_receipt={
+                "outcome": "passed",
+                "privacy_result": "passed",
+                "invariant_result": "passed",
+                "evaluator_version": "1",
+                "fixture_digest": "a" * 64,
+            },
+        )
+
+    forged = EvaluationReceipt(
+        id="eval-forged",
+        proposal_id="prop-forged",
+        evaluator_version="1",
+        baseline_ref="base",
+        candidate_ref="candidate",
+        fixture_snapshot=json.dumps({"scenario": "no holdout ids"}),
+        target_results="{}",
+        guardrail_results="{}",
+        privacy_result="passed",
+        invariant_result="passed",
+        outcome="passed",
+        created_at=CUTOFF,
+    )
+    with pytest.raises(EvaluationGateError, match="holdout_proof"):
+        assert_evaluation_present_for_transition(
+            target_status="review_pending", evaluation_receipt=forged
+        )
+
+
 def test_privacy_failure_is_hard_block():
     proposal = _safe_proposal(evidence_ids=["g1"])
     artifact = {

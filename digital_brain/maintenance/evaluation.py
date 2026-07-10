@@ -153,7 +153,6 @@ def assert_evaluation_present_for_transition(
         priv = evaluation_receipt.privacy_result
         evaluator_version = str(evaluation_receipt.evaluator_version or "")
         fixture_snapshot = str(evaluation_receipt.fixture_snapshot or "")
-        fixture_digest = digest_text(fixture_snapshot) if fixture_snapshot else ""
         holdout_ids: list[str] = []
         if fixture_snapshot:
             try:
@@ -168,7 +167,8 @@ def assert_evaluation_present_for_transition(
         outcome = str(evaluation_receipt.get("outcome") or "")
         inv = str(evaluation_receipt.get("invariant_result") or "")
         priv = str(evaluation_receipt.get("privacy_result") or "")
-        # holdout proof: holdout_ids list or fixture_snapshot.ids / fixture_digest
+        # Holdout proof must contain concrete ids; a caller-supplied digest is
+        # not proof that a hidden holdout was actually used.
         holdout_ids = []
         raw_holdout = evaluation_receipt.get("holdout_ids")
         if isinstance(raw_holdout, (list, tuple)):
@@ -184,11 +184,6 @@ def assert_evaluation_present_for_transition(
                 ids = fixture.get("ids") or fixture.get("holdout_ids")
                 if isinstance(ids, (list, tuple)):
                     holdout_ids = [str(x) for x in ids]
-        fixture_digest = str(
-            evaluation_receipt.get("fixture_digest")
-            or evaluation_receipt.get("fixture_snapshot_digest")
-            or ""
-        )
         evaluator_version = str(evaluation_receipt.get("evaluator_version") or "")
     if outcome not in EVALUATION_OUTCOMES:
         raise EvaluationGateError("evaluation_receipt_missing_outcome")
@@ -197,8 +192,10 @@ def assert_evaluation_present_for_transition(
     # Explicit privacy/invariant results required (no silent default-to-passed).
     if not priv or not inv:
         raise EvaluationGateError("evaluation_receipt_missing_hard_results")
-    # Holdout-backed evaluation: non-empty holdout or non-empty fixture digest.
-    if not holdout_ids and not fixture_digest:
+    holdout_ids = [item.strip() for item in holdout_ids if item.strip()]
+    # Holdout-backed evaluation requires concrete ids.  Digests remain useful
+    # audit metadata but cannot authorize a status transition by themselves.
+    if not holdout_ids:
         raise EvaluationGateError("evaluation_receipt_missing_holdout_proof")
     # Hard privacy/invariant failures block review/approval transitions.
     if target_status in {"review_pending", "approved", "validated"}:

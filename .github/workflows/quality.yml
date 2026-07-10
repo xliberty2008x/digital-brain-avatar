@@ -1,0 +1,30 @@
+name: quality
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install hermetic development environment
+        run: uv sync --group dev --frozen
+      - name: Run canonical suite
+        run: uv run --group dev python -m pytest tests/ -q
+      - name: Run deterministic Dreams E2E gate
+        run: bash scripts/run-dreams-e2e.sh
+      - name: Validate plugin JSON manifests
+        run: |
+          python -m json.tool plugins/digital-brain-buddy/.mcp.json >/dev/null
+          python -m json.tool plugins/digital-brain-buddy/.claude-plugin/plugin.json >/dev/null

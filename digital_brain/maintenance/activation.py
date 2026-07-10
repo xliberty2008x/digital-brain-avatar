@@ -1200,6 +1200,7 @@ def _activate_overlay_trial_locked(
             state_dir=state_dir,
             prior_manifest=prior,
             expected_prior_digest=prior_digest,
+            expected_live_digest=new_digest,
         )
         clear_activation_pending(state_dir)
         return bundle
@@ -1228,6 +1229,39 @@ def _activate_overlay_trial_locked(
 
 
 def rollback_overlay_trial(
+    *,
+    state_dir: str | Path | None,
+    proposal_id: str,
+    prior_manifest_digest: str,
+    actor: str,
+    effect_store: OverlayEffectStore,
+    deployment_id: str | None = None,
+    reason: str = "operator_rollback",
+    prior_manifest: ActiveManifest | Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Serialize and execute an artifact-specific compensating rollback."""
+    lock_handle = acquire_activation_lock(state_dir)
+    try:
+        return _rollback_overlay_trial_locked(
+            state_dir=state_dir,
+            proposal_id=proposal_id,
+            prior_manifest_digest=prior_manifest_digest,
+            actor=actor,
+            effect_store=effect_store,
+            deployment_id=deployment_id,
+            reason=reason,
+            prior_manifest=prior_manifest,
+            now=now,
+        )
+    finally:
+        try:
+            lock_handle.close()
+        except OSError:
+            pass
+
+
+def _rollback_overlay_trial_locked(
     *,
     state_dir: str | Path | None,
     proposal_id: str,
@@ -1317,43 +1351,83 @@ def rollback_overlay_trial(
             "replacement_minted": False,
         }
 
-    # Filesystem restore first (artifact-specific prior digest).
-    restored_digest = restore_prior_manifest(
-        state_dir=state_dir,
-        prior_manifest=prior_obj,
-        expected_prior_digest=prior_manifest_digest
-        if prior_manifest_digest == EMPTY_DIGEST or not prior_obj.entries
-        else computed_prior,
-    )
-
     receipt_id = f"er-{uuid.uuid4()}"
     dep_id = deployment_id or f"dep-rb-{uuid.uuid4()}"
     effect_key = f"overlay-rollback:{proposal_id}:{live_digest}:{prior_manifest_digest}"
+    bundle_payload = {
+        "request_hash": req_hash,
+        "effect_key": effect_key,
+        "effect_type": "rollback_overlay_trial",
+        "proposal_id": proposal_id,
+        "actor": actor,
+        "before_ref": live_digest,
+        "after_ref": prior_manifest_digest,
+        "undo_ref": prior_manifest_digest,
+        "generation_id": prior_obj.rollback_generation or EMPTY_DIGEST,
+        "deployment_status": "rolled_back",
+        "decision_point": "rollback",
+        "eligible_target": 0,
+        "started_at": applied_at,
+        "ends_at": applied_at,
+        "guardrail_json": {"reason": reason},
+        "receipt_id": receipt_id,
+        "deployment_id": dep_id,
+        "window_id": f"ew-rb-{uuid.uuid4()}",
+        "applied_at": applied_at,
+        "create_window": False,
+    }
+    pending = {
+        "operation": "rollback_overlay_trial",
+        "request_hash": req_hash,
+        "effect_key": effect_key,
+        "proposal_id": proposal_id,
+        "manifest_digest": prior_manifest_digest,
+        "prior_manifest_digest": live_digest,
+        "prior_manifest": live_public,
+        "bundle_payload": bundle_payload,
+        "deployment_status_updates": [
+            {
+                "deployment_id": deployment_id,
+                "status": "rolled_back",
+                "retired_at": applied_at,
+                "rollback_ref": prior_manifest_digest,
+            }
+        ]
+        if deployment_id
+        else [],
+        "phase": "pre_manifest",
+    }
+    write_activation_pending(state_dir, pending)
 
-    bundle = effect_store.record_activation_bundle(
-        {
-            "request_hash": req_hash,
-            "effect_key": effect_key,
-            "effect_type": "rollback_overlay_trial",
-            "proposal_id": proposal_id,
-            "actor": actor,
-            "before_ref": live_digest,
-            "after_ref": restored_digest,
-            "undo_ref": prior_manifest_digest,
-            "generation_id": prior_obj.rollback_generation or EMPTY_DIGEST,
-            "deployment_status": "rolled_back",
-            "decision_point": "rollback",
-            "eligible_target": 0,
-            "started_at": applied_at,
-            "ends_at": applied_at,
-            "guardrail_json": {"reason": reason},
-            "receipt_id": receipt_id,
-            "deployment_id": dep_id,
-            "window_id": f"ew-rb-{uuid.uuid4()}",
-            "applied_at": applied_at,
-            "create_window": False,
-        }
-    )
+    # Filesystem restore first (artifact-specific prior digest).
+    try:
+        restored_digest = restore_prior_manifest(
+            state_dir=state_dir,
+            prior_manifest=prior_obj,
+            expected_prior_digest=prior_manifest_digest
+            if prior_manifest_digest == EMPTY_DIGEST or not prior_obj.entries
+            else computed_prior,
+            expected_live_digest=live_digest,
+        )
+    except Exception:
+        clear_activation_pending(state_dir)
+        raise
+    bundle_payload["after_ref"] = restored_digest
+    pending["manifest_digest"] = restored_digest
+    pending["bundle_payload"] = bundle_payload
+    pending["phase"] = "post_manifest"
+    write_activation_pending(state_dir, pending)
+
+    bundle = effect_store.record_activation_bundle(bundle_payload)
+    if bundle["outcome"] == "conflict":
+        restore_prior_manifest(
+            state_dir=state_dir,
+            prior_manifest=live,
+            expected_prior_digest=live_digest,
+            expected_live_digest=restored_digest,
+        )
+        clear_activation_pending(state_dir)
+        return bundle
 
     if deployment_id:
         effect_store.mark_deployment_status(
@@ -1362,6 +1436,7 @@ def rollback_overlay_trial(
             retired_at=applied_at,
             rollback_ref=prior_manifest_digest,
         )
+    clear_activation_pending(state_dir)
 
     return {
         "outcome": bundle["outcome"],
@@ -1375,6 +1450,29 @@ def rollback_overlay_trial(
 
 
 def expire_active_trials(
+    *,
+    state_dir: str | Path | None,
+    effect_store: OverlayEffectStore,
+    actor: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Serialize trial expiry with the same manifest lock as activation."""
+    lock_handle = acquire_activation_lock(state_dir)
+    try:
+        return _expire_active_trials_locked(
+            state_dir=state_dir,
+            effect_store=effect_store,
+            actor=actor,
+            now=now,
+        )
+    finally:
+        try:
+            lock_handle.close()
+        except OSError:
+            pass
+
+
+def _expire_active_trials_locked(
     *,
     state_dir: str | Path | None,
     effect_store: OverlayEffectStore,
@@ -1424,11 +1522,9 @@ def expire_active_trials(
         created_at=applied_at,
         generation_counter=live.generation_counter + 1,
     )
-    # Expired entries remain listed but not loadable; optional strip of loadable-only.
-    # For load safety, rewrite without loadable expired: keep as expired status.
-    new_digest = atomic_replace_manifest(state_dir=state_dir, manifest=new_manifest)
-
-    receipts = []
+    expected_new_digest = compute_manifest_digest(new_manifest)
+    receipt_specs: list[tuple[ActiveOverlayEntry, dict[str, Any]]] = []
+    deployment_updates: list[dict[str, Any]] = []
     for entry in expired_entries:
         req_hash = digest_text(
             _canonical_json(
@@ -1440,30 +1536,89 @@ def expire_active_trials(
                 }
             )
         )
+        receipt_specs.append(
+            (
+                entry,
+                {
+                    "request_hash": req_hash,
+                    "effect_key": f"overlay-expire:{entry.proposal_id}:{entry.digest}",
+                    "effect_type": "expire_overlay_trial",
+                    "proposal_id": entry.proposal_id,
+                    "actor": actor,
+                    "before_ref": prior_digest,
+                    "after_ref": expected_new_digest,
+                    "undo_ref": prior_digest,
+                    "generation_id": entry.rollback_generation,
+                    "deployment_status": "expired",
+                    "decision_point": "expiry",
+                    "eligible_target": 0,
+                    "started_at": applied_at,
+                    "ends_at": applied_at,
+                    "guardrail_json": {"reason": "trial_expired"},
+                    "receipt_id": f"er-ex-{uuid.uuid4()}",
+                    "deployment_id": f"dep-ex-{uuid.uuid4()}",
+                    "window_id": f"ew-ex-{uuid.uuid4()}",
+                    "applied_at": applied_at,
+                    "create_window": False,
+                },
+            )
+        )
+        if entry.deployment_id:
+            deployment_updates.append(
+                {
+                    "deployment_id": entry.deployment_id,
+                    "status": "expired",
+                    "retired_at": applied_at,
+                }
+            )
+
+    pending = {
+        "operation": "expire_overlay_trial",
+        "request_hash": receipt_specs[0][1]["request_hash"],
+        "proposal_id": receipt_specs[0][0].proposal_id,
+        "manifest_digest": expected_new_digest,
+        "prior_manifest_digest": prior_digest,
+        "prior_manifest": prior_public,
+        "bundle_payloads": [payload for _entry, payload in receipt_specs],
+        "deployment_status_updates": deployment_updates,
+        "phase": "pre_manifest",
+    }
+    write_activation_pending(state_dir, pending)
+    # Expired entries remain listed but not loadable; optional strip of loadable-only.
+    # For load safety, rewrite without loadable expired: keep as expired status.
+    try:
+        new_digest = atomic_replace_manifest(
+            state_dir=state_dir,
+            manifest=new_manifest,
+            expected_prior_digest=prior_digest,
+        )
+    except Exception:
+        clear_activation_pending(state_dir)
+        raise
+    pending["manifest_digest"] = new_digest
+    pending["phase"] = "post_manifest"
+    write_activation_pending(state_dir, pending)
+
+    receipts = []
+    for entry, bundle_payload in receipt_specs:
         # New Deployment row for the expire compensating event; also mark the
         # original trial Deployment expired (never silent promote).
-        expire_dep_id = f"dep-ex-{uuid.uuid4()}"
-        bundle = effect_store.record_activation_bundle(
-            {
-                "request_hash": req_hash,
-                "effect_key": f"overlay-expire:{entry.proposal_id}:{entry.digest}",
-                "effect_type": "expire_overlay_trial",
-                "proposal_id": entry.proposal_id,
-                "actor": actor,
-                "before_ref": prior_digest,
-                "after_ref": new_digest,
-                "undo_ref": prior_digest,
-                "generation_id": entry.rollback_generation,
-                "deployment_status": "expired",
-                "decision_point": "expiry",
-                "eligible_target": 0,
-                "started_at": applied_at,
-                "ends_at": applied_at,
-                "guardrail_json": {"reason": "trial_expired"},
-                "deployment_id": expire_dep_id,
-                "create_window": False,
+        bundle_payload["after_ref"] = new_digest
+        bundle = effect_store.record_activation_bundle(bundle_payload)
+        if bundle["outcome"] == "conflict":
+            restore_prior_manifest(
+                state_dir=state_dir,
+                prior_manifest=live,
+                expected_prior_digest=prior_digest,
+                expected_live_digest=new_digest,
+            )
+            clear_activation_pending(state_dir)
+            return {
+                "outcome": "conflict",
+                "reason": "expiration_receipt_conflict_restored_prior",
+                "bundle": bundle,
+                "expired_count": 0,
             }
-        )
         if entry.deployment_id:
             effect_store.mark_deployment_status(
                 deployment_id=entry.deployment_id,
@@ -1471,6 +1626,7 @@ def expire_active_trials(
                 retired_at=applied_at,
             )
         receipts.append(bundle)
+    clear_activation_pending(state_dir)
 
     return {
         "outcome": "applied",

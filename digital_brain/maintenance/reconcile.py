@@ -15,6 +15,7 @@ from digital_brain.maintenance.activation import (
     read_activation_pending,
 )
 from digital_brain.maintenance.active_overlays import (
+    acquire_activation_lock,
     compute_manifest_digest,
     empty_active_manifest,
     load_raw_manifest,
@@ -27,6 +28,29 @@ from digital_brain.maintenance.models import EMPTY_DIGEST
 
 
 def reconcile_overlay_activation(
+    *,
+    state_dir: str | Path | None,
+    effect_store: OverlayEffectStore,
+    request_hash: str | None = None,
+    actor: str = "reconcile",
+) -> dict[str, Any]:
+    """Serialize reconciliation with activation, rollback, and expiry."""
+    lock_handle = acquire_activation_lock(state_dir)
+    try:
+        return _reconcile_overlay_activation_locked(
+            state_dir=state_dir,
+            effect_store=effect_store,
+            request_hash=request_hash,
+            actor=actor,
+        )
+    finally:
+        try:
+            lock_handle.close()
+        except OSError:
+            pass
+
+
+def _reconcile_overlay_activation_locked(
     *,
     state_dir: str | Path | None,
     effect_store: OverlayEffectStore,
@@ -50,8 +74,9 @@ def reconcile_overlay_activation(
     if not req:
         return {"outcome": "failed", "reason": "missing_request_hash"}
 
+    operation = str((pending or {}).get("operation") or "activate_overlay_trial")
     existing = effect_store.get_effect_by_request_hash(str(req))
-    if existing is not None:
+    if existing is not None and operation == "activate_overlay_trial":
         # Graph already durable — clear stale pending marker if any.
         if pending and str(pending.get("request_hash")) == str(req):
             clear_activation_pending(state_dir)
@@ -82,6 +107,75 @@ def reconcile_overlay_activation(
             live_digest = compute_manifest_digest(raw)
         except Exception:
             live_digest = None
+
+    if operation in {"rollback_overlay_trial", "expire_overlay_trial"}:
+        payloads_raw = pending.get("bundle_payloads")
+        if payloads_raw is None and isinstance(pending.get("bundle_payload"), Mapping):
+            payloads_raw = [pending["bundle_payload"]]
+        payloads = list(payloads_raw or [])
+        if not payloads or not all(isinstance(p, Mapping) for p in payloads):
+            return {"outcome": "failed", "reason": "pending_effect_payload_missing"}
+
+        if expected_manifest_digest and live_digest == expected_manifest_digest:
+            bundles: list[dict[str, Any]] = []
+            for raw_payload in payloads:
+                payload = dict(raw_payload)
+                payload["actor"] = payload.get("actor") or actor
+                existing_effect = effect_store.get_effect_by_request_hash(
+                    str(payload["request_hash"])
+                )
+                bundle = (
+                    {"outcome": "replayed", "effect_receipt": existing_effect}
+                    if existing_effect is not None
+                    else effect_store.record_activation_bundle(payload)
+                )
+                if bundle["outcome"] not in {"applied", "replayed"}:
+                    return {
+                        "outcome": "failed",
+                        "reason": "pending_effect_receipt_conflict",
+                        "bundle": bundle,
+                    }
+                bundles.append(bundle)
+            for update in pending.get("deployment_status_updates") or []:
+                if isinstance(update, Mapping) and update.get("deployment_id"):
+                    effect_store.mark_deployment_status(**dict(update))
+            clear_activation_pending(state_dir)
+            return {
+                "outcome": "applied",
+                "reason": f"completed_{operation}_receipts",
+                "bundles": bundles,
+                "duplicate_activation": False,
+            }
+
+        if phase == "pre_manifest" and (
+            live_digest is None or live_digest == prior_digest
+        ):
+            clear_activation_pending(state_dir)
+            return {
+                "outcome": "idle",
+                "reason": f"pre_manifest_{operation}_abandoned",
+            }
+
+        if prior_manifest is not None and live_digest is not None:
+            try:
+                restore_prior_manifest(
+                    state_dir=state_dir,
+                    prior_manifest=prior_manifest,
+                    expected_prior_digest=prior_digest,
+                    expected_live_digest=live_digest,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "outcome": "failed",
+                    "reason": f"{operation}_restore_failed",
+                    "error": str(exc),
+                }
+            clear_activation_pending(state_dir)
+            return {
+                "outcome": "restored",
+                "reason": f"{operation}_fs_mismatch_restored_prior",
+            }
+        return {"outcome": "failed", "reason": f"{operation}_unrecoverable"}
 
     # post_manifest: FS advanced; graph missing → complete graph side.
     if phase == "post_manifest" and expected_manifest_digest:

@@ -109,6 +109,12 @@ uv run --group dev python -m pytest tests/ -q
 
 # Optional isolated journal e2e (stop the normal stack first; needs ≥6 GiB Docker)
 bash scripts/run-journal-e2e.sh
+
+# Required deterministic Dreams workflow + crash/recovery gate
+bash scripts/run-dreams-e2e.sh
+
+# Optional live Neo4j role-separation proof (isolated disposable stack)
+DREAMS_E2E_DOCKER=1 DREAMS_E2E_REQUIRE_DOCKER=1 bash scripts/run-dreams-e2e.sh
 ```
 
 ## Documentation map
@@ -117,6 +123,7 @@ bash scripts/run-journal-e2e.sh
 | --- | --- |
 | [mcp_servers/cypher/README.md](mcp_servers/cypher/README.md) | MCP tools, append protocol, e2e |
 | [docs/GRAPH_SCHEMA_CONTRACT.md](docs/GRAPH_SCHEMA_CONTRACT.md) | Graph constitution |
+| [docs/operations/self-evolving-quality-dreams-release.md](docs/operations/self-evolving-quality-dreams-release.md) | Dreams operations, privacy, receipts, release evidence |
 | [docs/local_mcp_embeddings.md](docs/local_mcp_embeddings.md) | Embeddings / backfill |
 | [plugins/digital-brain-buddy/docs/VERSIONING.md](plugins/digital-brain-buddy/docs/VERSIONING.md) | Plugin SemVer + release checklist |
 | [docs/AGENT_PROMPTS.md](docs/AGENT_PROMPTS.md) | Historical MVP prompts (see header notice) |

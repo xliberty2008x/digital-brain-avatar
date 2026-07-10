@@ -306,14 +306,16 @@ def _seed_for_publish(
     }
 
 
-def test_publish_patch_artifact_fenced_and_records_metadata():
+def test_publish_patch_artifact_fenced_and_records_metadata(tmp_path):
     session = _FakeMaintSession()
     store = _store_with(session)
     lease = _acquire(store, run_id="dream-ov-pub")
     epoch = lease["epoch"]
     _seed_for_publish(session, store, run_id="dream-ov-pub", epoch=epoch)
 
-    result = compile_change_intent(_request(run_id="dream-ov-pub", lease_epoch=epoch))
+    request = _request(run_id="dream-ov-pub", lease_epoch=epoch)
+    result = compile_change_intent(request)
+    bundle = compile_to_quarantine(request, state_dir=tmp_path / "state", repo_root=ROOT)
     published = store.publish_patch_artifact(
         {
             "id": "patch-1",
@@ -325,9 +327,7 @@ def test_publish_patch_artifact_fenced_and_records_metadata():
             "schema_version": result.schema_version,
             "target_path_allowlist": result.manifest["target_path_allowlist"],
             "patch_sha256": result.patch_sha256,
-            "artifact_path": str(
-                pathlib.Path("dreams/quarantine/dream-ov-1/prop-ov-1/artifact.md")
-            ),
+            "artifact_path": str(bundle.directory / "artifact.md"),
             "rule_id": result.rule_id,
             "extension_slot": result.extension_slot,
             "target_skill": result.manifest["target_skill"],
@@ -353,12 +353,41 @@ def test_publish_patch_artifact_fenced_and_records_metadata():
             "compiler_version": result.compiler_version,
             "schema_version": result.schema_version,
             "patch_sha256": result.patch_sha256,
-            "artifact_path": "dreams/quarantine/dream-ov-1/prop-ov-1/artifact.md",
+            "artifact_path": str(bundle.directory / "artifact.md"),
             "run_id": "dream-ov-pub",
             "epoch": epoch,
         }
     )
     assert again["outcome"] == "replayed"
+
+
+def test_publish_revalidates_bundle_from_disk_before_graph_write(tmp_path):
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    lease = _acquire(store, run_id="dream-tamper")
+    epoch = lease["epoch"]
+    _seed_for_publish(session, store, run_id="dream-tamper", epoch=epoch)
+    request = _request(run_id="dream-tamper", lease_epoch=epoch)
+    result = compile_change_intent(request)
+    bundle = compile_to_quarantine(request, state_dir=tmp_path / "state", repo_root=ROOT)
+    (bundle.directory / "artifact.md").write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="quarantine_checksum_mismatch:artifact.md"):
+        store.publish_patch_artifact(
+            {
+                "id": "patch-tampered",
+                "proposal_id": "prop-ov-1",
+                "evidence_snapshot_id": "snap-ov-1",
+                "base_commit": "cafebabe",
+                "compiler_version": result.compiler_version,
+                "schema_version": result.schema_version,
+                "patch_sha256": result.patch_sha256,
+                "artifact_path": str(bundle.directory / "artifact.md"),
+                "run_id": "dream-tamper",
+                "epoch": epoch,
+            }
+        )
+    assert "patch-tampered" not in session.patch_artifacts
 
 
 def test_stale_worker_orphan_quarantine_cannot_publish(tmp_path):

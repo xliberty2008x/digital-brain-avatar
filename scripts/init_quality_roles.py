@@ -3,8 +3,11 @@
 
 Reviewed, explicit bootstrap — never runs silently at session startup.
 Uses admin credentials (NEO4J_ADMIN_* or NEO4J_USERNAME/PASSWORD) against the
-system database. Model-facing MCP must mount runtime + quality credentials
-only; do not put admin/operator passwords into analyzer environments.
+target and system databases. The helper primes every protected label token
+before installing label-scoped DENYs; Neo4j cannot enforce a privilege against
+a label token that does not yet exist. Model-facing MCP must mount runtime +
+quality credentials only; do not put admin/operator passwords into analyzer
+environments.
 
 DENY privileges are generated from
 ``digital_brain_mcp_cypher.quality.PROTECTED_QUALITY_LABELS`` so every
@@ -58,17 +61,12 @@ _CYPHER_HEADER = """\
 //   uv run --group dev python scripts/init_quality_roles.py --write-cypher
 // Source of truth: digital_brain_mcp_cypher.quality.PROTECTED_QUALITY_LABELS
 //
-// Run against the system database as an admin user (default neo4j), for example:
-//
-//   cypher-shell -u neo4j -p "$NEO4J_ADMIN_PASSWORD" -d system \\
-//     -f scripts/init-quality-roles.cypher
-//
-// Or via the reviewed host helper:
+// Apply via the reviewed host helper. It primes every protected label token in
+// the target database before installing the label-scoped DENYs:
 //
 //   python scripts/init_quality_roles.py --apply
 //
-// Parameter substitution is performed by init_quality_roles.py. When running
-// cypher-shell manually, replace the $... placeholders first.
+// Parameter substitution is performed by init_quality_roles.py.
 //
 // Roles:
 //   digital_brain_runtime  — life-graph MATCH/WRITE; DENY quality/control labels
@@ -286,6 +284,12 @@ def apply_statements(cfg: dict[str, str], statements: list[str]) -> None:
     }
     driver = GraphDatabase.driver(cfg["uri"], auth=(admin_user, admin_password))
     try:
+        # Neo4j resolves label-scoped privileges against known label tokens.
+        # Prime protected tokens before applying DENYs so an empty database
+        # cannot create the first protected node through the runtime role.
+        with driver.session(database=cfg["database"]) as session:
+            for label in PROTECTED_LABELS:
+                session.run("CALL db.createLabel($label)", {"label": label}).consume()
         with driver.session(database="system") as session:
             for statement in statements:
                 try:

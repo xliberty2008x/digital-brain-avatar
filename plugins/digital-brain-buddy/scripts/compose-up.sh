@@ -326,7 +326,8 @@ m = pin_session_active_overlays(
 )
 print(f'overlay_pin entries={len(m.loadable_entries())} fail_closed={m.fail_closed}')
 "; then
-  echo "$PLUGIN_NAME: session overlay pin failed; continuing (fail-closed default on next load)" >&2
+  echo "$PLUGIN_NAME: session overlay pin failed; refusing an unpinned session" >&2
+  exit 1
 fi
 
 exit 0
