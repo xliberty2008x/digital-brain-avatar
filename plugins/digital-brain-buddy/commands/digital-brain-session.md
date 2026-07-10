@@ -33,19 +33,17 @@ Examples: `/digital-brain-session`, `/digital-brain-session open grok`,
    - `DIGITAL_BRAIN_HARNESS_GENERATION_ID`  
    Report them; do not re-pin unless `force` / `open` requested.
 
-3. Otherwise run (skip MCP record unless the stack is known healthy):
+3. Otherwise run the **plugin wrapper only** (no bare python3):
 
    ```bash
-   python3 "${CLAUDE_PROJECT_DIR:-.}/scripts/pin_harness_generation.py" \
+   bash "${CLAUDE_PLUGIN_ROOT:-plugins/digital-brain-buddy}/scripts/open-harness-session.sh" \
      --host "${HOST:-unknown}" \
      ${SESSION_ID:+--session-id "$SESSION_ID"} \
-     ${FORCE:+--force-new} \
-     --use-open-api \
-     --skip-record \
-     --json
+     ${FORCE:+--force-new}
    ```
 
-   Use `uv run --group dev python` when `uv` is available.
+   The wrapper sets `--use-open-api --skip-record --json` and picks uv / `.venv` /
+   stdlib python so the host never fails on missing pydantic.
 
 4. Parse JSON → sticky for this chat:
    - `session_id`

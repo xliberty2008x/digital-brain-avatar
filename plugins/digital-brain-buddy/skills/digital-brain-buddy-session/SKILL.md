@@ -13,35 +13,32 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    from the template with `python3 ../../scripts/init_soul.py ../../SOUL.MD`
    (or identity-bootstrap). `SOUL.MD` is local/per-user, not shipped personal data.
 
-2. **Harness session (portable step 0 — all brains).** Resolve a
-   `SessionHandle` for *this* conversation before any quality sensor:
+2. **Harness session (portable step 0 — all brains, automatic).** Before the
+   first user-facing reply and before any quality sensor, open a session handle.
+   Do **not** ask the user to run pin commands. Do **not** invent ids from
+   `active/` alone.
 
    a. If `DIGITAL_BRAIN_HARNESS_GENERATION_ID` **and**
-      `DIGITAL_BRAIN_SESSION_ID` are already in env (Claude SessionStart /
-      prior open in this process) → use them as the handle.
-   b. Else if a pin exists under
-      `$DIGITAL_BRAIN_STATE_DIR/sessions/<this_session_id>/harness_generation.json`
-      → resume that pin (do not recollect digests).
-   c. Else **open** a session (do not invent ids by reading `active/` alone):
+      `DIGITAL_BRAIN_SESSION_ID` are already in env → use them (Claude SessionStart).
+   b. Else run **only** this wrapper (resolves uv / `.venv` / stdlib python):
 
       ```bash
-      python3 "${CLAUDE_PROJECT_DIR:-.}/scripts/pin_harness_generation.py" \
-        --host <claude|grok|codex|unknown> \
-        --session-id "${DIGITAL_BRAIN_SESSION_ID:-}" \
-        --skip-record \
-        --json
+      bash "${CLAUDE_PLUGIN_ROOT:-plugins/digital-brain-buddy}/scripts/open-harness-session.sh" \
+        --host <grok|claude|codex|unknown> \
+        ${DIGITAL_BRAIN_SESSION_ID:+--session-id "$DIGITAL_BRAIN_SESSION_ID"}
       ```
 
-      Prefer `--use-open-api` when available. Parse JSON for
-      `session_id` + `harness_generation_id`. Keep both sticky for the rest of
-      the conversation (subagent prompts must receive the same
-      `harness_generation_id` unchanged).
+      If `CLAUDE_PLUGIN_ROOT` is unset, use the path under the workspace:
+      `plugins/digital-brain-buddy/scripts/open-harness-session.sh`.
+      Parse stdout JSON for `session_id` + `harness_generation_id`. Keep both
+      sticky for the whole conversation (pass the same generation id into every
+      Feedback/RunEvent and subagent prompt).
 
-   **Never** adopt `$STATE/active/harness_generation.json` as “my” pin — that
-   file is a dual-process breadcrumb and may belong to another session
-   (e.g. verify runs). Memory BOOTSTRAP may proceed without a handle;
-   **sensors (Feedback/RunEvent) must refuse** until a handle exists.
-   Do not recollect digests mid-session; do not put SOUL body into logs.
+   **Never** bare `python3 scripts/pin_harness_generation.py` without the
+   wrapper (old hosts hit missing deps). **Never** adopt
+   `$STATE/active/harness_generation.json` alone as “my” pin.
+   Memory BOOTSTRAP may proceed if open fails after one retry with the wrapper;
+   **sensors must refuse** until a handle exists.
 
 2b. **Active trial overlays (reviewed digests only).** If the host has pinned a
    session overlay set under
@@ -370,8 +367,10 @@ harness session handle for this conversation**, not a leftover file from another
 
 - **Library:** `digital_brain.maintenance.session.open_harness_session` →
   `SessionHandle` (`session_id`, `harness_generation_id`, `pin_path`, …).
-- **CLI:** `scripts/pin_harness_generation.py --host <brain> [--session-id …]
-  [--use-open-api] --json` (Claude SessionStart / `compose-up.sh` is one adapter).
+- **In-session open (required):** `plugins/digital-brain-buddy/scripts/open-harness-session.sh`
+  — agents must use this wrapper, not bare `python3`.
+- **CLI/library:** `scripts/pin_harness_generation.py` / `open_harness_session`
+  (Claude SessionStart / `compose-up.sh` is one adapter).
 - **Resolve order for this chat:** env session+generation →
   `sessions/<session_id>/harness_generation.json` → open new. **Never** use
   `$STATE/active/` alone (breadcrumb for MCP dual-process only).
