@@ -23,6 +23,25 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    is missing, refuse sensor emission until SessionStart / `scripts/pin_harness_generation.py`
    has run.
 
+2b. **Active trial overlays (reviewed digests only).** If the host has pinned a
+   session overlay set under
+   `$DIGITAL_BRAIN_STATE_DIR/sessions/<session>/active_overlays.json`, load
+   **only** those entries whose exact file digests are listed in the pin and
+   whose files live under
+   `$DIGITAL_BRAIN_STATE_DIR/dreams/active-overlays/<proposal-id>/<digest>.md`.
+   Rules:
+   - Never load proposal draft trees, plugin cache, repo
+     `plugins/**/learned/`, or any path not named by the pinned manifest.
+   - Never treat file **presence** as activation — digests must match the
+     pin/manifest exactly. On any mismatch, fail closed (no overlays) to the
+     prior known-good/no-overlay generation; do not partially load.
+   - Pin once per session: do not re-read a mid-session live manifest change.
+   - Trials expire/disable; they never silently become permanent. Permanent
+     behavior requires reviewed Git content + plugin version bump + host reload.
+   - Activation/rollback is operator-only
+     (`scripts/digital_brain_activate_overlay.py`); models and MCP must not
+     activate overlays.
+
 3. Read `../digital-brain-buddy-graph-mcp/references/runtime-patterns.md` before generating Cypher or deciding what to fetch.
 
 4. Treat the graph as factual memory and `SOUL.MD` as voice and stance.
@@ -295,6 +314,22 @@ Do not store:
 - Do not recompute digests after the pin is set; only a new session (or clear)
   gets a new id.
 - Never put SOUL body text into generation records, MCP args, or sensor payloads.
+- The harness generation identity includes `overlay_manifest_digest` of the
+  **active** manifest only (never draft/proposal trees). A new session after
+  trial activation/rollback recollects; an existing session stays pinned.
+
+## Active Overlay Trials
+
+- Source of truth:
+  `$DIGITAL_BRAIN_STATE_DIR/dreams/active-overlays/manifest.json` plus
+  digest-addressed `…/<proposal-id>/<digest>.md` files.
+- Session load path: pin via `pin_session_active_overlays` (or host SessionStart)
+  then resolve only exact digests from that pin.
+- Operator path: `scripts/digital_brain_activate_overlay.py` (interactive; no
+  `--yes`). Mint ActivationAuthority → stage → atomic manifest → EffectReceipt +
+  Deployment + ExposureWindow. Rollback is a compensating effect restoring the
+  **exact** prior manifest digest.
+- Do not activate overlays from FEEDBACK prose, generic acks, or MCP tools.
 
 ## Do Not
 
@@ -303,7 +338,10 @@ Do not store:
 - Do not let warmth turn into flattery.
 - Do not use old docs over live schema and runtime code.
 - Do not let delegated workers invent buddy-tone prose on behalf of the main session.
-- Do not activate Alias / pinned identity / policy from FEEDBACK prose or generic acks.
+- Do not activate Alias / pinned identity / policy / overlay from FEEDBACK prose or generic acks.
 - Do not treat `claim_false` as a life-memory mutation path.
 - Do not put operator apply credentials or ActivationAuthority mint/consume into
   reader/writer/entity-check toolsets.
+- Do not load overlay files from draft/proposal trees, plugin paths, or bare
+  presence; only manifest-listed exact digests under `dreams/active-overlays/`.
+- Do not call `scripts/digital_brain_activate_overlay.py` from the session agent.

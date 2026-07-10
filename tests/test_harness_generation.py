@@ -589,6 +589,164 @@ def test_export_pin_to_claude_env_file(tmp_path: pathlib.Path):
     assert f"export {SESSION_ENV_PIN_PATH}='{pin}'" in text
 
 
+def test_overlay_manifest_digest_changes_generation_and_session_pin_stable(
+    tmp_path: pathlib.Path,
+):
+    """Active-overlay manifest is part of harness identity; session pin holds."""
+    from digital_brain.maintenance.active_overlays import (
+        ActiveManifest,
+        ActiveOverlayEntry,
+        atomic_replace_manifest,
+        pin_session_active_overlays,
+        stage_overlay_content,
+    )
+    from digital_brain.maintenance.models import digest_text
+
+    state = tmp_path / "state"
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    (plugin / "version.json").write_text('"0.2.0"\n', encoding="utf-8")
+    soul = tmp_path / "SOUL.MD"
+    soul.write_text("voice v1", encoding="utf-8")
+
+    g1 = get_or_pin_session_generation(
+        state_dir=state,
+        session_id="sess-ov",
+        repo_root=tmp_path,
+        plugin_root=plugin,
+        soul_path=soul,
+        mcp_version="0.1.0",
+        model_id=None,
+        core_commit="c1",
+        core_tree_digest="t1",
+        dirty_state_digest=EMPTY_DIGEST,
+    )
+    assert g1.overlay_manifest_digest == EMPTY_DIGEST
+
+    content = (
+        "<!-- OVERLAY_SLOT:fail_soft_language BEGIN -->\n"
+        "### Rule `r1`\n"
+        "<!-- OVERLAY_SLOT:fail_soft_language END -->\n"
+    )
+    _path, digest = stage_overlay_content(
+        state_dir=state, proposal_id="prop-1", content=content
+    )
+    entry = ActiveOverlayEntry(
+        proposal_id="prop-1",
+        digest=digest,
+        rule_id="r1",
+        extension_slot="fail_soft_language",
+        target_skill="digital-brain-buddy-session",
+        target_file="skills/digital-brain-buddy-session/SKILL.md",
+        trial_expires_at="2099-01-01T00:00:00Z",
+        exposure_budget=10,
+        rollback_generation="hg-prior",
+        status="trial_active",
+        base_commit="c1",
+        artifact_hash=digest,
+    )
+    atomic_replace_manifest(
+        state_dir=state,
+        manifest=ActiveManifest(
+            schema_version="1",
+            entries=(entry,),
+            prior_manifest_digest=EMPTY_DIGEST,
+            rollback_generation="hg-prior",
+            created_at="2026-07-10T12:00:00Z",
+            generation_counter=1,
+        ),
+    )
+
+    # Existing session pin unchanged after mid-session overlay activation.
+    still = get_or_pin_session_generation(
+        state_dir=state,
+        session_id="sess-ov",
+        repo_root=tmp_path,
+        plugin_root=plugin,
+        soul_path=soul,
+        mcp_version="0.1.0",
+        model_id=None,
+        core_commit="c1",
+        core_tree_digest="t1",
+        dirty_state_digest=EMPTY_DIGEST,
+    )
+    assert still.id == g1.id
+
+    # Overlay session pin is independent and stable.
+    ov_pin = pin_session_active_overlays(state_dir=state, session_id="sess-ov")
+    assert len(ov_pin.entries) == 1
+    assert ov_pin.entries[0].digest == digest
+
+    # New session recollects and includes new overlay_manifest_digest.
+    g2 = get_or_pin_session_generation(
+        state_dir=state,
+        session_id="sess-ov-2",
+        force_new=True,
+        repo_root=tmp_path,
+        plugin_root=plugin,
+        soul_path=soul,
+        mcp_version="0.1.0",
+        model_id=None,
+        core_commit="c1",
+        core_tree_digest="t1",
+        dirty_state_digest=EMPTY_DIGEST,
+    )
+    assert g2.id != g1.id
+    assert g2.overlay_manifest_digest != EMPTY_DIGEST
+    from digital_brain.maintenance.models import digest_bytes
+
+    manifest_bytes = (
+        state / "dreams" / "active-overlays" / "manifest.json"
+    ).read_bytes()
+    assert g2.overlay_manifest_digest == digest_bytes(manifest_bytes)
+
+
+def test_fail_closed_overlay_does_not_open_on_mismatch(tmp_path: pathlib.Path):
+    from digital_brain.maintenance.active_overlays import (
+        ActiveManifest,
+        ActiveOverlayEntry,
+        atomic_replace_manifest,
+        load_validated_active_overlays,
+        resolve_loadable_overlays,
+        stage_overlay_content,
+    )
+
+    state = tmp_path / "state"
+    content = "### Rule `r1`\n"
+    path, digest = stage_overlay_content(
+        state_dir=state, proposal_id="prop-1", content=content
+    )
+    atomic_replace_manifest(
+        state_dir=state,
+        manifest=ActiveManifest(
+            schema_version="1",
+            entries=(
+                ActiveOverlayEntry(
+                    proposal_id="prop-1",
+                    digest=digest,
+                    rule_id="r1",
+                    extension_slot="fail_soft_language",
+                    target_skill="digital-brain-buddy-session",
+                    target_file="skills/digital-brain-buddy-session/SKILL.md",
+                    trial_expires_at="2099-01-01T00:00:00Z",
+                    exposure_budget=5,
+                    rollback_generation="hg-prior",
+                    status="trial_active",
+                    artifact_hash=digest,
+                ),
+            ),
+            prior_manifest_digest=EMPTY_DIGEST,
+            rollback_generation="hg-prior",
+            created_at="2026-07-10T12:00:00Z",
+            generation_counter=1,
+        ),
+    )
+    path.write_text(content + "TAMPER", encoding="utf-8")
+    closed = load_validated_active_overlays(state_dir=state)
+    assert closed.fail_closed is True
+    assert resolve_loadable_overlays(state_dir=state) == []
+
+
 def test_pin_script_public_summary_has_no_soul_body(tmp_path: pathlib.Path, monkeypatch):
     """scripts/pin_harness_generation.py summary path (offline, skip-record)."""
     plugin = tmp_path / "plugin"
