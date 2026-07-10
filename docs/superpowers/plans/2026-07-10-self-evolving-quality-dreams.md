@@ -562,22 +562,22 @@ The analyzer may classify into housekeeping, memory, behaviour, or engineering
 lanes. It writes only typed output through the coordinator; it cannot access
 Neo4j, repo files, quarantine, activation code, or network tools directly.
 
-- [ ] Define strict Pydantic schemas and reject unknown lanes, effect types,
+- [x] Define strict Pydantic schemas and reject unknown lanes, effect types,
   extension slots, fields, and overlong summaries.
-- [ ] Treat all evidence strings as untrusted data; delimit them and reject
+- [x] Treat all evidence strings as untrusted data; delimit them and reject
   instruction/tool-shaped content from ChangeIntent fields.
-- [ ] Build deterministic invariant scenarios for journal safety, identity,
+- [x] Build deterministic invariant scenarios for journal safety, identity,
   BOOTSTRAP exclusion, privacy, route behavior, and fail-soft language.
-- [ ] Require holdout fixtures disjoint from proposal-generation evidence.
-- [ ] Record baseline/candidate, fixture digest, evaluator version, target
+- [x] Require holdout fixtures disjoint from proposal-generation evidence.
+- [x] Record baseline/candidate, fixture digest, evaluator version, target
   results, guardrails, privacy, invariants, and `passed|failed|inconclusive`.
-- [ ] Route embedding/MCP outages and code failures to engineering proposals;
+- [x] Route embedding/MCP outages and code failures to engineering proposals;
   add a test proving they cannot produce semantic memory effects.
-- [ ] Test rejected-proposal suppression by finding/recurrence key: unrelated
+- [x] Test rejected-proposal suppression by finding/recurrence key: unrelated
   new evidence must not recreate it; a material same-key delta may.
-- [ ] Keep model rubrics advisory initially; hard invariant/privacy failures
+- [x] Keep model rubrics advisory initially; hard invariant/privacy failures
   block review/approval.
-- [ ] If a Grok adapter is added, run it outside the repo against a sanitized
+- [x] If a Grok adapter is added, run it outside the repo against a sanitized
   snapshot directory with strict read-only tools, schema-constrained output,
   bounded turns, no auto-update, and **no `--yolo`**. Inspect argv/env in tests.
 
@@ -618,23 +618,23 @@ extension slots from repository-owned templates. The model does not emit
 arbitrary deployable Markdown. Core skill/code diffs route to the engineering
 lane until separately approved.
 
-- [ ] Resolve a secure state directory (`0700`) outside the repo and plugin
+- [x] Resolve a secure state directory (`0700`) outside the repo and plugin
   caches; refuse symlinked/unowned/insecure paths.
-- [ ] Bind artifact to proposal, snapshot, target skill/slot, rule id, base
+- [x] Bind artifact to proposal, snapshot, target skill/slot, rule id, base
   commit, exact target-file before hashes, compiler/schema versions, and patch
   digest.
-- [ ] Make compilation deterministic and immutable per dream/epoch/proposal.
-- [ ] Reject path traversal, symlinks, executable-mode changes, deletes,
+- [x] Make compilation deterministic and immutable per dream/epoch/proposal.
+- [x] Reject path traversal, symlinks, executable-mode changes, deletes,
   frontmatter/tool injection, arbitrary include paths, locked-rule changes,
   unknown slots, conflicts, and size/file-count overflow.
-- [ ] Stop on base drift; never automatically rebase or three-way merge.
-- [ ] Add coordinator-only `publish_patch_artifact`: revalidate
+- [x] Stop on base drift; never automatically rebase or three-way merge.
+- [x] Add coordinator-only `publish_patch_artifact`: revalidate
   `run_id + lease_epoch`, artifact digest, snapshot/proposal state, and base
   fingerprints before recording the published manifest in the control plane.
-- [ ] Test that a stale worker may leave an orphan in its epoch quarantine but
+- [x] Test that a stale worker may leave an orphan in its epoch quarantine but
   cannot publish it; review/runtime ignores all unrecorded artifacts.
-- [ ] Validate in an isolated worktree using repository-owned fixed commands.
-- [ ] Add a static test proving quarantine is not mentioned by any runtime
+- [x] Validate in an isolated worktree using repository-owned fixed commands.
+- [x] Add a static test proving quarantine is not mentioned by any runtime
   loader/session skill.
 
 **Gate:** writing or modifying any quarantine file must have zero runtime effect.
@@ -663,28 +663,28 @@ commit/file hashes, approver, expiry, and single-use nonce. There is no
 unattended `--yes` path and no activation tool in model-facing MCP or maintainer
 toolsets.
 
-- [ ] Add wrong/expired/replayed nonce, changed hash/target/base, and stale
+- [x] Add wrong/expired/replayed nonce, changed hash/target/base, and stale
   proposal rejection tests before activation code.
-- [ ] Stage reviewed overlay and manifest on the same filesystem; fsync and use
+- [x] Stage reviewed overlay and manifest on the same filesystem; fsync and use
   atomic manifest replacement.
-- [ ] Promote only to
+- [x] Promote only to
   `$DIGITAL_BRAIN_STATE_DIR/dreams/active-overlays/<proposal-id>/<digest>.md`;
   quarantine and plugin cache/repo paths are never runtime trial sources.
-- [ ] Make the active manifest list exact file digests, rule ids, proposal ids,
+- [x] Make the active manifest list exact file digests, rule ids, proposal ids,
   trial expiry, exposure budget, and rollback generation.
-- [ ] At session start, validate all manifest/file digests; on any mismatch,
+- [x] At session start, validate all manifest/file digests; on any mismatch,
   fail closed to the prior known-good/no-overlay generation.
-- [ ] Pin the manifest once per session; an existing session never changes
+- [x] Pin the manifest once per session; an existing session never changes
   behavior halfway through.
-- [ ] Record activation EffectReceipt, Deployment, and ExposureWindow separately.
-- [ ] Define eligible decision point, duration/exposure cap, target recurrence,
+- [x] Record activation EffectReceipt, Deployment, and ExposureWindow separately.
+- [x] Define eligible decision point, duration/exposure cap, target recurrence,
   counterevidence, and guardrail rollback thresholds before trial activation.
-- [ ] Trials expire and disable; they never silently promote.
-- [ ] Make rollback a new compensating effect restoring the prior manifest;
+- [x] Trials expire and disable; they never silently promote.
+- [x] Make rollback a new compensating effect restoring the prior manifest;
   preserve all audit history.
-- [ ] Reconcile crashes between filesystem manifest replacement and graph
+- [x] Reconcile crashes between filesystem manifest replacement and graph
   receipt; same request replays without duplicate activation.
-- [ ] For permanent deployment, require reviewed Git content, plugin version
+- [x] For permanent deployment, require reviewed Git content, plugin version
   bump, host reload, and proof that a new generation actually loaded.
 
 **Gate:** stop if activation is reachable by the analyzer/model, if presence
