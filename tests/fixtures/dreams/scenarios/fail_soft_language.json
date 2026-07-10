@@ -1,0 +1,12 @@
+{
+  "id": "scenario-fail-soft-language",
+  "category": "fail_soft_language",
+  "description": "Infra timeouts remain fail-soft notes and must not become life-memory claims.",
+  "use_builtin": true,
+  "hard": true,
+  "fail_on_markers": [
+    "timeout_is_life_fact",
+    "outage_as_journal",
+    "infra_as_personal_memory"
+  ]
+}

@@ -96,6 +96,13 @@ if [ "$docker_memory_bytes" -lt "$MIN_DOCKER_MEMORY_BYTES" ]; then
   warn_and_exit "Docker has ${docker_memory_mib} MiB available; allocate at least 6 GiB in Docker Desktop before bringing up Neo4j + Ollama"
 fi
 
+# Resolve host state dir before any compose up that mounts it into mcp-cypher.
+# Must match digital_brain.maintenance.generation.resolve_state_dir / XDG rules
+# and the pin write location later in this script so the volume bind tracks pins.
+STATE_DIR="${DIGITAL_BRAIN_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/digital-brain}"
+export DIGITAL_BRAIN_STATE_DIR="$STATE_DIR"
+mkdir -p "$STATE_DIR"
+
 if ! docker compose up -d neo4j ollama; then
   warn_and_exit "failed to start neo4j/ollama, skipping mcp-cypher bring-up"
 fi
@@ -106,6 +113,35 @@ fi
 
 if ! wait_for_service_health ollama "$OLLAMA_HEALTH_MAX_ATTEMPTS" "ollama"; then
   warn_and_exit "ollama is not healthy; no MCP service was started"
+fi
+
+# Optional: apply runtime/quality Neo4j roles when credentials are configured.
+# Explicit, non-silent — skipped unless DIGITAL_BRAIN_APPLY_QUALITY_ROLES=1 and
+# NEO4J_RUNTIME_PASSWORD + NEO4J_QUALITY_PASSWORD are set. Documented path for
+# dual-layer security (see .env.example). Never mounts operator activation
+# credentials into mcp-cypher. Does not run Operational backfill migration
+# (scripts/migrate_operational_labels.py is operator-reviewed only).
+#
+# After roles apply, mcp-cypher below receives NEO4J_RUNTIME_* / NEO4J_QUALITY_*
+# from the host env / .env. Verify with:
+#   DIGITAL_BRAIN_REQUIRE_ROLE_SMOKE=1 uv run --group dev python tests/e2e/quality_control_smoke.py
+if [ "${DIGITAL_BRAIN_APPLY_QUALITY_ROLES:-0}" = "1" ]; then
+  if [ -n "${NEO4J_RUNTIME_PASSWORD:-}" ] && [ -n "${NEO4J_QUALITY_PASSWORD:-}" ]; then
+    echo "$PLUGIN_NAME: applying Neo4j runtime/quality roles (reviewed bootstrap)..."
+    if command -v uv >/dev/null 2>&1; then
+      if ! uv run --group dev python scripts/init_quality_roles.py --apply; then
+        echo "$PLUGIN_NAME: quality role bootstrap failed; continuing with existing Neo4j auth" >&2
+      else
+        echo "$PLUGIN_NAME: quality roles applied (runtime DENY covers all PROTECTED_QUALITY_LABELS)"
+      fi
+    else
+      echo "$PLUGIN_NAME: uv not found; skip quality role bootstrap" >&2
+    fi
+  else
+    echo "$PLUGIN_NAME: DIGITAL_BRAIN_APPLY_QUALITY_ROLES=1 but runtime/quality passwords unset; skip" >&2
+  fi
+else
+  echo "$PLUGIN_NAME: skip role bootstrap (set DIGITAL_BRAIN_APPLY_QUALITY_ROLES=1 after configuring NEO4J_RUNTIME_PASSWORD + NEO4J_QUALITY_PASSWORD)"
 fi
 
 # Rebuild + recreate mcp-cypher so SessionStart / /digital-brain-up pick up
@@ -122,4 +158,176 @@ if ! wait_for_service_health mcp-cypher "$MCP_READY_MAX_ATTEMPTS" "mcp-cypher (/
 fi
 
 echo "$PLUGIN_NAME: local Neo4j + Ollama + Cypher MCP stack is ready for writes"
+
+# ---------------------------------------------------------------------------
+# Harness generation pin (session-scoped)
+# ---------------------------------------------------------------------------
+# Claude SessionStart hooks send JSON on stdin with session_id + source.
+#   startup|clear  → force-new pin (recollect)
+#   resume|compact → reload existing pin for that session
+# Fallback when no host session id: mint a timestamped local id (never reuse a
+# sticky global "current" pin across SessionStarts). Prefer DIGITAL_BRAIN_SESSION_ID
+# when the operator sets it explicitly.
+#
+# Exports: state-dir pin JSON + harness_generation.env, process env, and when
+# CLAUDE_ENV_FILE is set (SessionStart), host session env via the pin script:
+#   export DIGITAL_BRAIN_HARNESS_GENERATION_ID=...
+#   export DIGITAL_BRAIN_HARNESS_PIN_PATH=...
+# ---------------------------------------------------------------------------
+
+# Capture SessionStart stdin once (empty when run interactively /digital-brain-up).
+HOOK_STDIN=""
+if [ ! -t 0 ]; then
+  HOOK_STDIN="$(cat || true)"
+fi
+
+HOOK_SESSION_ID=""
+HOOK_SOURCE=""
+if [ -n "$HOOK_STDIN" ]; then
+  # Parse with Python so we do not depend on jq.
+  HOOK_META="$(
+    printf '%s' "$HOOK_STDIN" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+sid = str(data.get("session_id") or "").strip()
+src = str(data.get("source") or "").strip().lower()
+# TAB-separated; values should be UUID-like / simple tokens
+print(sid.replace("\t", " ").replace("\n", " "))
+print(src.replace("\t", " ").replace("\n", " "))
+' 2>/dev/null || true
+  )"
+  HOOK_SESSION_ID="$(printf '%s\n' "$HOOK_META" | sed -n '1p')"
+  HOOK_SOURCE="$(printf '%s\n' "$HOOK_META" | sed -n '2p')"
+fi
+
+PIN_CMD=(python3)
+if command -v uv >/dev/null 2>&1; then
+  PIN_CMD=(uv run --group dev python)
+fi
+
+# Resolve session id + force-new via shared Python helper (single source of truth).
+BINDING_OUT="$(
+  DIGITAL_BRAIN_SESSION_ID="${DIGITAL_BRAIN_SESSION_ID:-}" \
+  HOOK_SESSION_ID="$HOOK_SESSION_ID" \
+  HOOK_SOURCE="$HOOK_SOURCE" \
+  "${PIN_CMD[@]}" -c '
+import os
+from digital_brain.maintenance.generation import resolve_session_binding
+sid, force = resolve_session_binding(
+    env_session_id=os.environ.get("DIGITAL_BRAIN_SESSION_ID") or None,
+    hook_session_id=os.environ.get("HOOK_SESSION_ID") or None,
+    hook_source=os.environ.get("HOOK_SOURCE") or None,
+)
+print(sid)
+print("1" if force else "0")
+' 2>/dev/null || true
+)"
+if [ -z "$BINDING_OUT" ]; then
+  # Interpreter/import failure fallback: still avoid sticky "current".
+  RESOLVED_SESSION_ID="${DIGITAL_BRAIN_SESSION_ID:-${HOOK_SESSION_ID:-local-$(date -u +%Y%m%dT%H%M%SZ)-$$}}"
+  case "$HOOK_SOURCE" in
+    startup|clear) PIN_FORCE_NEW=1 ;;
+    *) PIN_FORCE_NEW=0 ;;
+  esac
+  if [ -z "${DIGITAL_BRAIN_SESSION_ID:-}" ] && [ -z "$HOOK_SESSION_ID" ]; then
+    PIN_FORCE_NEW=1
+  fi
+else
+  RESOLVED_SESSION_ID="$(printf '%s\n' "$BINDING_OUT" | sed -n '1p')"
+  PIN_FORCE_NEW="$(printf '%s\n' "$BINDING_OUT" | sed -n '2p')"
+fi
+export DIGITAL_BRAIN_SESSION_ID="$RESOLVED_SESSION_ID"
+
+echo "$PLUGIN_NAME: pinning harness generation for session=${DIGITAL_BRAIN_SESSION_ID} source=${HOOK_SOURCE:-manual} force_new=${PIN_FORCE_NEW}..."
+PIN_SCRIPT="$CLAUDE_PROJECT_DIR/scripts/pin_harness_generation.py"
+if [ ! -f "$PIN_SCRIPT" ]; then
+  echo "$PLUGIN_NAME: pin script missing at $PIN_SCRIPT; continuing without pin" >&2
+  exit 0
+fi
+# Prefer plugin SOUL when present; pin script also falls back to repo SOUL.
+SOUL_ARGS=()
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT}/SOUL.MD" ]; then
+  SOUL_ARGS=(--soul-path "${CLAUDE_PLUGIN_ROOT}/SOUL.MD")
+elif [ -f "$CLAUDE_PROJECT_DIR/SOUL.MD" ]; then
+  SOUL_ARGS=(--soul-path "$CLAUDE_PROJECT_DIR/SOUL.MD")
+fi
+PLUGIN_ARGS=()
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  PLUGIN_ARGS=(--plugin-root "$CLAUDE_PLUGIN_ROOT")
+fi
+PIN_EXTRA=()
+if [ "$PIN_FORCE_NEW" = "1" ]; then
+  PIN_EXTRA+=(--force-new)
+fi
+if [ -n "$HOOK_SOURCE" ]; then
+  PIN_EXTRA+=(--hook-source "$HOOK_SOURCE")
+fi
+if ! "${PIN_CMD[@]}" "$PIN_SCRIPT" \
+    --repo-root "$CLAUDE_PROJECT_DIR" \
+    "${PLUGIN_ARGS[@]}" \
+    "${SOUL_ARGS[@]}" \
+    --session-id "$DIGITAL_BRAIN_SESSION_ID" \
+    "${PIN_EXTRA[@]}"; then
+  echo "$PLUGIN_NAME: harness generation pin failed; session continues without a recorded pin" >&2
+  # Non-fatal for compose bring-up so journal writes still work if MCP quality
+  # path is unavailable; RunEvent emission must refuse without a pin (Task 4).
+  exit 0
+fi
+
+# Load pin into this shell (pin script cannot export to the parent process).
+# STATE_DIR already resolved + exported before docker compose up (see above).
+STATE_DIR="${DIGITAL_BRAIN_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/digital-brain}"
+ENV_FILE="${STATE_DIR}/sessions/${DIGITAL_BRAIN_SESSION_ID}/harness_generation.env"
+if [ -f "$ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+fi
+
+# Ensure host session env sees the pin even if pin script missed CLAUDE_ENV_FILE.
+if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${DIGITAL_BRAIN_HARNESS_GENERATION_ID:-}" ]; then
+  {
+    echo "export DIGITAL_BRAIN_HARNESS_GENERATION_ID='${DIGITAL_BRAIN_HARNESS_GENERATION_ID}'"
+    echo "export DIGITAL_BRAIN_HARNESS_PIN_PATH='${DIGITAL_BRAIN_HARNESS_PIN_PATH:-${DIGITAL_BRAIN_HARNESS_GENERATION_PIN:-}}'"
+    echo "export DIGITAL_BRAIN_SESSION_ID='${DIGITAL_BRAIN_SESSION_ID}'"
+  } >> "$CLAUDE_ENV_FILE"
+fi
+
+# Ensure well-known active pin exists for mcp-cypher (mounted DIGITAL_BRAIN_STATE_DIR).
+# Pin script / pin_session_generation already write it; reinforce after env load.
+if [ -n "${DIGITAL_BRAIN_HARNESS_GENERATION_ID:-}" ]; then
+  ACTIVE_DIR="${STATE_DIR}/active"
+  mkdir -p "$ACTIVE_DIR"
+  printf '%s\n' "${DIGITAL_BRAIN_HARNESS_GENERATION_ID}" > "${ACTIVE_DIR}/harness_generation.id"
+  printf '{\n  "id": "%s",\n  "session_id": "%s"\n}\n' \
+    "${DIGITAL_BRAIN_HARNESS_GENERATION_ID}" \
+    "${DIGITAL_BRAIN_SESSION_ID}" > "${ACTIVE_DIR}/harness_generation.json"
+  echo "$PLUGIN_NAME: harness generation pinned id=${DIGITAL_BRAIN_HARNESS_GENERATION_ID} session=${DIGITAL_BRAIN_SESSION_ID} active_pin=${ACTIVE_DIR}/harness_generation.id"
+else
+  echo "$PLUGIN_NAME: harness generation pin completed but id env not visible in this shell (checked $ENV_FILE)"
+fi
+
+# Pin validated active overlay manifest once per session (Task 11).
+# Fail-closed load if digests mismatch; mid-session live edits do not change pin.
+echo "$PLUGIN_NAME: pinning session active overlays for session=${DIGITAL_BRAIN_SESSION_ID}..."
+if ! "${PIN_CMD[@]}" -c "
+from digital_brain.maintenance.active_overlays import pin_session_active_overlays
+import os
+m = pin_session_active_overlays(
+    state_dir=os.environ.get('DIGITAL_BRAIN_STATE_DIR'),
+    session_id=os.environ['DIGITAL_BRAIN_SESSION_ID'],
+)
+print(f'overlay_pin entries={len(m.loadable_entries())} fail_closed={m.fail_closed}')
+"; then
+  echo "$PLUGIN_NAME: session overlay pin failed; refusing an unpinned session" >&2
+  exit 1
+fi
+
 exit 0

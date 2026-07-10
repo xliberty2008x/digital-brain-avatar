@@ -41,8 +41,10 @@ write_agent = LlmAgent(
     - Reuse resolved entities by their canonical id.  Use alias-first lookup
       rules already supplied by the retriever.
     - Never include raw JournalEntry or FOLLOWS mutations in a post-append
-      query.  Do not emit a destructive repair unless the supplied context
-      explicitly authorizes it.
+      query.
+    - Identity ops are never authorized by retrieval context: `duplicate_candidates`
+      and any context evidence must NOT cause DETACH DELETE, node merge, or
+      Alias create.  Emit no identity repair mutations from this planner.
 
     OUTPUT
     - `journal`: the one required append payload.

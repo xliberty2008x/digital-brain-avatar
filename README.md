@@ -13,11 +13,12 @@ and Neo4j endpoints are unauthenticated. See [SECURITY.md](SECURITY.md).
 | --- | --- | --- |
 | Cypher MCP | `mcp_servers/cypher/` | Read/write Cypher + server-owned JournalEntry append |
 | Compose stack | `docker-compose.yml` | Neo4j Enterprise, mcp-cypher, Ollama (`bge-m3`) |
-| Buddy plugin | `plugins/digital-brain-buddy/` | SOUL, skills, SessionStart compose hook |
+| Buddy plugin | `plugins/digital-brain-buddy/` | SOUL, skills, SessionStart compose hook, maintenance |
 | ADK agents | `digital_brain/` | Multi-agent WRITE/READ paths (optional) |
+| Maintenance | `digital_brain/maintenance/`, `scripts/digital_brain_*.py` | Report-only DreamRun + operator apply |
 | Schema contract | `docs/GRAPH_SCHEMA_CONTRACT.md` | Node/relationship rules |
 
-**Plugin version (host cache):** `0.2.0` — server-owned append protocol.  
+**Plugin version (host cache):** `0.3.0` — quality sensors + guided maintenance.  
 **Python package version** (`pyproject.toml`): independent scaffolding version.
 
 ## Requirements
@@ -47,6 +48,27 @@ Endpoints (loopback only):
 - Ollama: `http://127.0.0.1:11434`
 
 Health: `GET http://127.0.0.1:8000/readyz` checks Neo4j **and** a real 1024-dim embedding.
+
+### Shared harness pin (host ↔ MCP)
+
+SessionStart / `compose-up.sh` pins a harness generation for the host session
+and writes a well-known **active** pin under `$DIGITAL_BRAIN_STATE_DIR/active/`
+(id only; no SOUL content). Default state dir matches XDG
+(`$DIGITAL_BRAIN_STATE_DIR` or `$XDG_STATE_HOME/digital-brain` or
+`~/.local/state/digital-brain`). `compose-up.sh` resolves and exports
+`DIGITAL_BRAIN_STATE_DIR` before `docker compose up` so the mcp-cypher volume
+mount tracks the same path the pin script writes. Dual-process emit requires
+this shared state pin.
+
+**Limitation (accepted for Milestone A):** the active pin is a single well-known
+path (`active/harness_generation.{id,json}`), so only one host session’s pin is
+“active” for MCP at a time (last-writer-wins). Concurrent SessionStarts
+overwrite it; this does **not** provide exact concurrent multi-session MCP
+attribution. Use per-session env (`DIGITAL_BRAIN_HARNESS_GENERATION_ID`) or
+session pin files under `sessions/<id>/` when multiple sessions must instrument
+in parallel. A session-keyed or per-request pin injection is deferred.
+Host timeout paths use an in-process QualityStore recorder (not model-facing
+`record_run_event`).
 
 ## JournalEntry write contract (v0.2)
 
@@ -82,11 +104,17 @@ Details: [SECURITY.md](SECURITY.md).
 ## Tests
 
 ```bash
-# Unit / focused suites (from repo root, with project venv)
-pytest tests/ -q
+# Unit / focused suites (repo-owned env; Python 3.12 + dev group)
+uv run --group dev python -m pytest tests/ -q
 
 # Optional isolated journal e2e (stop the normal stack first; needs ≥6 GiB Docker)
 bash scripts/run-journal-e2e.sh
+
+# Required deterministic Dreams workflow + crash/recovery gate
+bash scripts/run-dreams-e2e.sh
+
+# Optional live Neo4j role-separation proof (isolated disposable stack)
+DREAMS_E2E_DOCKER=1 DREAMS_E2E_REQUIRE_DOCKER=1 bash scripts/run-dreams-e2e.sh
 ```
 
 ## Documentation map
@@ -95,6 +123,7 @@ bash scripts/run-journal-e2e.sh
 | --- | --- |
 | [mcp_servers/cypher/README.md](mcp_servers/cypher/README.md) | MCP tools, append protocol, e2e |
 | [docs/GRAPH_SCHEMA_CONTRACT.md](docs/GRAPH_SCHEMA_CONTRACT.md) | Graph constitution |
+| [docs/operations/self-evolving-quality-dreams-release.md](docs/operations/self-evolving-quality-dreams-release.md) | Dreams operations, privacy, receipts, release evidence |
 | [docs/local_mcp_embeddings.md](docs/local_mcp_embeddings.md) | Embeddings / backfill |
 | [plugins/digital-brain-buddy/docs/VERSIONING.md](plugins/digital-brain-buddy/docs/VERSIONING.md) | Plugin SemVer + release checklist |
 | [docs/AGENT_PROMPTS.md](docs/AGENT_PROMPTS.md) | Historical MVP prompts (see header notice) |

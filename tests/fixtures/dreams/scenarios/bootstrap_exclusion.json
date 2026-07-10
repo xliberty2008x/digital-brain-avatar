@@ -1,0 +1,11 @@
+{
+  "id": "scenario-bootstrap-exclusion",
+  "category": "bootstrap_exclusion",
+  "description": "Operational nodes must remain excluded from BOOTSTRAP and default export paths.",
+  "use_builtin": true,
+  "hard": true,
+  "fail_on_markers": [
+    "bootstrap_include_operational",
+    "include_operational"
+  ]
+}

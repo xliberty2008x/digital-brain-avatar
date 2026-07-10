@@ -8,6 +8,10 @@ The goal is consistency:
 - reader worker gathers evidence
 - entity-check worker verifies whether a candidate entity is a duplicate before a write
 - writer worker persists one bounded memory update
+- FEEDBACK evidence and review cards stay with the parent session agent
+  (subagents never mint ActivationAuthority or apply Alias)
+- maintenance / DreamRun review uses `digital-brain-maintainer` (report-only;
+  no Bash/Edit/activation)
 
 If the host runtime has an explicit permission gate for subagents, this file still defines the default intended pattern. The parent session agent should switch to it as soon as that gate is satisfied.
 
@@ -104,9 +108,25 @@ Output contract:
 Constraints:
 - do not write to the graph
 - never merge entities yourself; only report whether a merge is authorized
+- never create or activate Alias / EntityProtection records
 - when evidence is thin or ambiguous, return not authorized rather than guessing
 - do not produce buddy-tone prose for the user
 ```
+
+## FEEDBACK (parent session only)
+
+Do not spawn reader/writer/entity-check workers to activate identity effects.
+On a `FEEDBACK` turn the parent session agent:
+
+1. classifies kind (`entity_wrong` | `claim_false` | `miss` | `invent` | `praise`)
+2. calls `create_feedback` with the pinned harness generation id
+3. for `entity_wrong`, may show a propose-only Alias review card
+4. for `claim_false`, remains propose-only (no life-memory mutation)
+5. for `praise`, records a counter only (never a JournalEntry)
+6. never treats generic ack (`yes`/`ok`/👍) as activation
+7. max one confirmation prompt per user turn
+8. leaves apply/revoke to the operator script
+   `scripts/digital_brain_apply_proposal.py` (no unattended `--yes`)
 
 ## Writer Worker
 
@@ -138,7 +158,35 @@ Output contract:
 Constraints:
 - one JournalEntry only unless explicitly told otherwise
 - writer tasks must be serialized; on timeout reconcile the same append key rather than retrying blindly
+- if emitting any quality sensor (RunEvent/Feedback), pass the session-pinned
+  `harness_generation_id` (`DIGITAL_BRAIN_HARNESS_GENERATION_ID`) unchanged; never recompute it
+- do not create Alias, ActivationAuthority, or EntityProtection nodes
+- do not treat FEEDBACK / claim_false as a journal write path
 - do not produce buddy-tone prose for the user
+```
+
+## Maintainer Worker (report-only)
+
+Use for DreamRun report framing and proposal review cards. Never for activation.
+
+```text
+Use $digital-brain-buddy-maintenance (or native digital-brain-maintainer).
+
+Task type: MAINTENANCE_REVIEW
+processing_mode expectation: report_only / local_only
+
+What I need from you:
+- summarize the public DreamRun report: counts, ids, processing_mode
+- list waiting_for_owner proposal ids and deliberately_left_alone ids
+- prepare at most one progressive-disclosure review card when asked
+- never paste raw intimate Feedback/journal quotes in the default report
+
+Constraints:
+- host tools: Read/Grep/Glob only — no Bash, Edit, Write, or activation
+- do not call apply/activate scripts or mint ActivationAuthority
+- exact-token APPLY alias:<id> is intent only, not authorization
+- no scheduled run, no heartbeat, no shared-session private proposal queue
+- approval, application, deployment, and effectiveness are separate messages
 ```
 
 ## Parent-Agent Reminder
@@ -152,3 +200,20 @@ After a delegated write:
 
 - the parent session agent still decides whether to mention that memory was stored
 - the parent session agent still owns the conversational response
+
+## Harness Generation (all sensor-capable sessions)
+
+Every session that may emit RunEvents or Feedback — not only private buddy
+sessions — must carry the SessionStart-pinned generation id:
+
+- source: `DIGITAL_BRAIN_HARNESS_GENERATION_ID` or the session pin file
+- pass the **same** id into every sensor call for the session
+- do not recollect core commit, SOUL hash, overlay/policy digests mid-session
+- never include SOUL content in worker prompts or tool arguments; digests only
+
+When spawning workers that might emit sensors, include:
+
+```text
+Pinned harness_generation_id (do not recompute):
+<paste DIGITAL_BRAIN_HARNESS_GENERATION_ID>
+```

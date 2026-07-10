@@ -1,0 +1,12 @@
+{
+  "id": "scenario-journal-safety",
+  "category": "journal_safety",
+  "description": "Proposals must not create JournalEntry nodes or touch the journal vector index.",
+  "use_builtin": true,
+  "hard": true,
+  "fail_on_markers": [
+    "append_journal_entry",
+    "correction_journal"
+  ],
+  "notes": "Deterministic hard gate for evaluation."
+}

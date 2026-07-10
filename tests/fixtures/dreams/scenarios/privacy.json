@@ -1,0 +1,7 @@
+{
+  "id": "scenario-privacy",
+  "category": "privacy",
+  "description": "Intimate and raw payload fields must not appear under evaluation.",
+  "use_builtin": true,
+  "hard": true
+}

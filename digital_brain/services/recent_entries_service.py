@@ -67,8 +67,10 @@ async def get_recent_journal_entries(limit: int = 3) -> list[dict[str, Any]]:
         j,
         collect(DISTINCT CASE
             WHEN e IS NULL THEN NULL
+            WHEN 'Operational' IN labels(e) THEN NULL
             WHEN 'JournalEntry' IN labels(e) THEN NULL
             WHEN 'Alias' IN labels(e) THEN NULL
+            WHEN 'LearningLog' IN labels(e) THEN NULL
             ELSE {
                 name: CASE
                     WHEN e.name IS :: LIST<STRING> THEN e.name[0]

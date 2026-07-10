@@ -1,0 +1,11 @@
+{
+  "id": "scenario-route-behavior",
+  "category": "route_behavior",
+  "description": "Artifacts must not silently escalate SKIP to WRITE or bypass route gates.",
+  "use_builtin": true,
+  "hard": true,
+  "fail_on_markers": [
+    "skip_to_write",
+    "bypass_route_gate"
+  ]
+}

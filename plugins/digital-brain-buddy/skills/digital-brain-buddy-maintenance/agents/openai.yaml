@@ -1,0 +1,4 @@
+interface:
+  display_name: "Digital Brain Buddy Maintenance"
+  short_description: "Report-only DreamRun and proposal review (no activation)"
+  default_prompt: "Use $digital-brain-buddy-maintenance for guided, report-only digital-brain maintenance. Prefer scripts/digital_brain_dream.py. Present counts, ids, and processing_mode only. Never activate Alias, policy, overlay, code, SOUL, or journal changes; exact-token APPLY intent is not authorization. On Codex, server-side capability separation is the hard boundary — this yaml is not a per-worker tool fence."

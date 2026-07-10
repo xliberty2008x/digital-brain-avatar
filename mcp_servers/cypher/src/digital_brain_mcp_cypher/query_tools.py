@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .quality import PROTECTED_QUALITY_LABELS
+
 
 READ_FORBIDDEN_RE = re.compile(
     r"\b(CREATE|MERGE|SET|DELETE|DETACH|DROP|REMOVE|CALL\s+dbms|LOAD\s+CSV|CREATE\s+INDEX|DROP\s+INDEX)\b",
@@ -29,6 +31,18 @@ _CHAIN_LABEL = r"(?:JournalChain|`JournalChain`)"
 _FOLLOWS_TYPE = r"(?:FOLLOWS|`FOLLOWS`)"
 _HEAD_TYPE = r"(?:HEAD|`HEAD`)"
 _PROTECTED_LABEL_NAMES = frozenset({"journalentry", "journalchain"})
+_PROTECTED_QUALITY_LABEL_NAMES = frozenset(
+    label.lower() for label in PROTECTED_QUALITY_LABELS
+)
+# Alternation of protected quality labels for node-pattern / SET-label scans.
+_QUALITY_LABEL_ALTERNATION = "|".join(
+    sorted(
+        {re.escape(label) for label in PROTECTED_QUALITY_LABELS}
+        | {re.escape(f"`{label}`") for label in PROTECTED_QUALITY_LABELS},
+        key=len,
+        reverse=True,
+    )
+)
 
 
 def _node_label_pattern(label: str) -> str:
@@ -95,8 +109,27 @@ PROTECTED_TYPE_PREDICATE_RE = re.compile(
     re.IGNORECASE,
 )
 JOURNAL_ENTRY_NODE_RE = re.compile(_node_label_pattern(_JOURNAL_LABEL), re.IGNORECASE)
+# Any node pattern carrying a protected quality/control label (Operational,
+# Alias, Feedback, receipts, policy slots, ...).
+QUALITY_NODE_RE = re.compile(
+    _node_label_pattern(rf"(?:{_QUALITY_LABEL_ALTERNATION})"),
+    re.IGNORECASE,
+)
+# CREATE/MERGE that introduces a protected quality label (including chained
+# relationship patterns such as MERGE (p)-[:X]->(a:Alias)).
+QUALITY_WRITE_RE = re.compile(
+    rf"\b(?:CREATE|MERGE)\b(?:(?!\b(?:{_CLAUSE_KEYWORDS_RE})\b).)*?"
+    rf"{_node_label_pattern(rf'(?:{_QUALITY_LABEL_ALTERNATION})')}",
+    re.IGNORECASE | re.DOTALL,
+)
 DYNAMIC_PROPERTY_REFERENCE_RE = re.compile(
     rf"\b{_CYPHER_IDENTIFIER}\s*\[\s*(?:\$|['\"])",
+    re.IGNORECASE,
+)
+# Neo4j dynamic labels in SET (e.g. SET n:$($label), SET n:$(expr), SET n:$p)
+# bypass the static SET_LABEL_LIST_RE scan and must be rejected wholesale.
+DYNAMIC_SET_LABEL_RE = re.compile(
+    rf"(?:\bSET\b|,)\s*{_CYPHER_IDENTIFIER}(?:\s*:\s*{_CYPHER_IDENTIFIER})*\s*:\s*\$",
     re.IGNORECASE,
 )
 _PROTECTED_JOURNAL_PROPERTIES = (
@@ -124,6 +157,16 @@ PROTECTED_JOURNAL_PROPERTY_RE = re.compile(
 )
 EMBEDDING_PARAM_RE = re.compile(r"\$embedding\b")
 SET_CLAUSE_RE = re.compile(r"\bSET\b", re.IGNORECASE)
+PROPERTY_SET_TARGET_RE = re.compile(
+    rf"(?:\bSET\b|,)\s*({_CYPHER_IDENTIFIER})\s*(?:\.|\[|\+=|=(?!=))",
+    re.IGNORECASE,
+)
+NODE_VARIABLE_PATTERN_RE = re.compile(
+    rf"\(\s*({_CYPHER_IDENTIFIER})\s*"
+    rf"((?:\s*:\s*{_CYPHER_IDENTIFIER})*)"
+    rf"(?=\s*(?:\{{|\)|WHERE\b))",
+    re.IGNORECASE,
+)
 _MAP_LITERAL_KEY_RE = re.compile(
     r"(?:^|[,{]\s*)(?:`([^`]+)`|['\"]([^'\"]+)['\"]|([A-Za-z_][A-Za-z0-9_]*))\s*:",
 )
@@ -142,6 +185,70 @@ def _set_adds_protected_label(query: str) -> bool:
             if _normalize_label_token(label) in _PROTECTED_LABEL_NAMES:
                 return True
     return False
+
+
+def _set_adds_protected_quality_label(query: str) -> bool:
+    for match in SET_LABEL_LIST_RE.finditer(query):
+        for label in re.findall(rf":\s*({_CYPHER_IDENTIFIER})", match.group(1), re.IGNORECASE):
+            if _normalize_label_token(label) in _PROTECTED_QUALITY_LABEL_NAMES:
+                return True
+    return False
+
+
+def _touches_protected_quality_node(query: str) -> bool:
+    """True when the query names a protected quality/control label."""
+    return QUALITY_NODE_RE.search(query) is not None
+
+
+def _normalize_identifier_token(token: str) -> str:
+    token = token.strip()
+    if token.startswith("`") and token.endswith("`"):
+        token = token[1:-1].replace("``", "`")
+    return token.lower()
+
+
+def _property_set_targets_are_statically_labeled(query: str) -> bool:
+    """Return true only when every property-SET target is explicitly labeled.
+
+    A generic writer cannot know the runtime labels of ``MATCH (n)``.  Allowing
+    ``SET n.foo`` on such a variable lets a caller select an Operational node by
+    id/property/``labels(n)`` and bypass the protected-label lexical guard when
+    database roles have not yet been bootstrapped.  Fail closed: every mutated
+    node variable must have a preceding node pattern carrying at least one
+    static, non-quality-control label.  Aliased ``WITH n AS m``/UNWIND targets
+    have no statically labeled binding for the new variable and are rejected.
+    """
+
+    set_targets = list(PROPERTY_SET_TARGET_RE.finditer(query))
+    if not set_targets:
+        return True
+
+    node_patterns = list(NODE_VARIABLE_PATTERN_RE.finditer(query))
+    for set_match in set_targets:
+        target = _normalize_identifier_token(set_match.group(1))
+        prior_labels: list[set[str]] = []
+        for node_match in node_patterns:
+            if node_match.start() >= set_match.start():
+                continue
+            if _normalize_identifier_token(node_match.group(1)) != target:
+                continue
+            labels = {
+                _normalize_label_token(label)
+                for label in re.findall(
+                    rf":\s*({_CYPHER_IDENTIFIER})",
+                    node_match.group(2),
+                    re.IGNORECASE,
+                )
+            }
+            if labels:
+                prior_labels.append(labels)
+        if not prior_labels:
+            return False
+        if any(
+            labels & _PROTECTED_QUALITY_LABEL_NAMES for labels in prior_labels
+        ):
+            return False
+    return True
 
 
 def _map_literal_has_protected_key(body: str) -> bool:
@@ -220,11 +327,12 @@ def validate_embedding_usage(query: str, embed_text: str | None) -> None:
 
 
 def assert_general_write_allowed(query: str) -> None:
-    """Reserve journal-chain mutations for ``append_journal_entry``.
+    """Reserve journal-chain and quality/control mutations for dedicated paths.
 
     The generic writer remains available for ordinary post-append graph links
     (MATCH + MERGE). It must not bypass the chain protocol by creating,
-    labeling, deleting, fully replacing, or rewiring journal-chain state.
+    labeling, deleting, fully replacing, or rewiring journal-chain state, and
+    must not mutate Operational / Alias / policy / receipt control records.
     """
     query = query or ""
     if CALL_RE.search(query):
@@ -245,6 +353,27 @@ def assert_general_write_allowed(query: str) -> None:
         raise ValueError(
             "write_neo4j_cypher cannot add JournalEntry or JournalChain labels; "
             "use the dedicated journal MCP tools"
+        )
+    # Quality/control boundary: reject CREATE/MERGE/SET-label and any write that
+    # names a protected Operational/Alias/policy/receipt label (including
+    # relationship-chained MATCH ... SET patterns).
+    if QUALITY_WRITE_RE.search(query) or _set_adds_protected_quality_label(query):
+        raise ValueError(
+            "write_neo4j_cypher cannot create or label Operational/quality control "
+            "records; use typed quality tools or the authenticated coordinator API"
+        )
+    if SET_CLAUSE_RE.search(query) and _touches_protected_quality_node(query):
+        raise ValueError(
+            "write_neo4j_cypher cannot mutate protected Operational/quality control "
+            "records; use typed quality tools or the authenticated coordinator API"
+        )
+    if SET_CLAUSE_RE.search(query) and not _property_set_targets_are_statically_labeled(
+        query
+    ):
+        raise ValueError(
+            "write_neo4j_cypher property SET targets must be statically bound "
+            "to explicit non-control labels; unlabeled/dynamic targets require "
+            "a dedicated typed tool"
         )
     if DELETE_DETACH_REMOVE_RE.search(query):
         raise ValueError(
@@ -285,6 +414,20 @@ def assert_general_write_allowed(query: str) -> None:
         raise ValueError(
             "write_neo4j_cypher cannot use dynamic property writes that could "
             "target protected journal fields; set explicit properties only"
+        )
+    if DYNAMIC_SET_LABEL_RE.search(query):
+        raise ValueError(
+            "write_neo4j_cypher cannot use dynamic labels (SET … :$ / :$() ) that "
+            "could target protected Operational/quality control records; "
+            "set explicit labels only"
+        )
+    # Relationship-only MERGE/CREATE onto an existing protected control node
+    # still names the label in a node pattern; reject those writes too.
+    if (re.search(r"\b(?:CREATE|MERGE)\b", query, re.IGNORECASE)
+            and _touches_protected_quality_node(query)):
+        raise ValueError(
+            "write_neo4j_cypher cannot create relationships to protected "
+            "Operational/quality control records; use typed quality tools"
         )
 
 

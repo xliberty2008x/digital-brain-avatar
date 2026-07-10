@@ -13,11 +13,40 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    from the template with `python3 ../../scripts/init_soul.py ../../SOUL.MD`
    (or identity-bootstrap). `SOUL.MD` is local/per-user, not shipped personal data.
 
-2. Read `../digital-brain-buddy-graph-mcp/references/runtime-patterns.md` before generating Cypher or deciding what to fetch.
+2. Confirm the SessionStart-pinned harness generation id is available
+   (`DIGITAL_BRAIN_HARNESS_GENERATION_ID` or the pin under
+   `$DIGITAL_BRAIN_STATE_DIR/sessions/<session>/harness_generation.json`).
+   Every session that can emit quality sensors (Feedback/RunEvent) — private
+   buddy or otherwise — must pass **that same pinned id unchanged** into every
+   event. Do not recollect digests mid-session; do not hash SOUL content into
+   logs; only the local `soul_sha` lives on the generation record. If the pin
+   is missing, refuse sensor emission until SessionStart / `scripts/pin_harness_generation.py`
+   has run.
 
-3. Treat the graph as factual memory and `SOUL.MD` as voice and stance.
+2b. **Active trial overlays (reviewed digests only).** If the host has pinned a
+   session overlay set under
+   `$DIGITAL_BRAIN_STATE_DIR/sessions/<session>/active_overlays.json`, load
+   **only** those entries whose exact file digests are listed in the pin and
+   whose files live under
+   `$DIGITAL_BRAIN_STATE_DIR/dreams/active-overlays/<proposal-id>/<digest>.md`.
+   Rules:
+   - Never load proposal draft trees, plugin cache, repo
+     `plugins/**/learned/`, or any path not named by the pinned manifest.
+   - Never treat file **presence** as activation — digests must match the
+     pin/manifest exactly. On any mismatch, fail closed (no overlays) to the
+     prior known-good/no-overlay generation; do not partially load.
+   - Pin once per session: do not re-read a mid-session live manifest change.
+   - Trials expire/disable; they never silently become permanent. Permanent
+     behavior requires reviewed Git content + plugin version bump + host reload.
+   - Activation/rollback is operator-only
+     (`scripts/digital_brain_activate_overlay.py`); models and MCP must not
+     activate overlays.
 
-4. Use only the plugin-owned `digital-brain-neo4j` MCP server from this
+3. Read `../digital-brain-buddy-graph-mcp/references/runtime-patterns.md` before generating Cypher or deciding what to fetch.
+
+4. Treat the graph as factual memory and `SOUL.MD` as voice and stance.
+
+5. Use only the plugin-owned `digital-brain-neo4j` MCP server from this
    plugin's `.mcp.json`. Do not use the ChatGPT Apps connector
    `mcp__codex_apps__neo4j_cypher`; it is a separate app/link and may still
    point at the retired Cloud Run service. If only that app connector is
@@ -25,7 +54,7 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    to the repo-local HTTP client with `DIGITAL_BRAIN_MCP_URL=<plugin .mcp.json
    url>`.
 
-5. At the start of every new buddy conversation, before the first user-facing
+6. At the start of every new buddy conversation, before the first user-facing
    answer and before creating or merging people, build a mandatory `BOOTSTRAP`
    evidence pack from the graph. Delegate it to
    `../digital-brain-buddy-read-memory/SKILL.md` when possible; otherwise fetch
@@ -36,8 +65,8 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
      relationship to the user when available, and a compact summary of themes
      that tend to involve or trigger that person
    - a top-20 weighted core-node list, plus a compact node label/type weight
-     summary, using graph degree as `weight` and excluding `JournalEntry`,
-     `Alias`, and `LearningLog`
+     summary, using graph degree as `weight` and excluding `Operational`,
+     `JournalEntry`, `Alias`, and `LearningLog`
    - recent valid `JournalEntry` rows only as support for the people/theme
      summaries, not as a raw dump
 
@@ -45,9 +74,9 @@ Use this skill when Codex should become the Digital Brain buddy for an active co
    to avoid duplicate people, stale relationship assumptions, and narrow
    single-turn interpretation.
 
-6. Read `references/subagent-prompts.md` and reuse the canonical reader/writer prompt shapes instead of improvising them whenever delegated execution is available.
+7. Read `references/subagent-prompts.md` and reuse the canonical reader/writer prompt shapes instead of improvising them whenever delegated execution is available.
 
-7. Treat delegated memory I/O as the default internal execution pattern for this skill:
+8. Treat delegated memory I/O as the default internal execution pattern for this skill:
 - keep the main agent focused on conversation, judgment, and final phrasing
 - delegate bounded graph retrieval to `../digital-brain-buddy-read-memory/SKILL.md` — on hosts with native subagents (Claude Code, Cowork), invoke `digital-brain-reader` directly instead of improvising the delegation
 - delegate persistence to `../digital-brain-buddy-write-memory/SKILL.md` — on hosts with native subagents, invoke `digital-brain-writer` directly
@@ -77,20 +106,96 @@ Classify each turn before acting:
 - `SKIP`: greetings, filler, tiny acknowledgements, trivial chat.
 - `READ`: the user asks about prior events, people, patterns, or wants context-aware advice.
 - `WRITE`: the user shares a meaningful event, emotion, realization, relationship change, fear, goal, or decision that should be remembered.
+- `FEEDBACK`: the user corrects identity, disputes a claim, reports a miss/invention, or gives praise about what the buddy just said or wrote.
+
+When a turn is pure correction/praise about a prior answer, prefer `FEEDBACK`
+over `WRITE`. Do not fold identity corrections into a life journal append.
+
+## FEEDBACK Route
+
+Use this route for user-visible quality signals. It captures **immutable
+evidence** and may draft a **typed review proposal**. It never activates Alias,
+pinned-identity, policy, overlay, or SOUL changes from prose.
+
+### Intent gate
+
+Enter FEEDBACK only when at least one holds:
+
+- a pending review proposal is in scope for this session, or
+- a grounded correction cue is present (wrong entity name, “that never
+  happened”, “you forgot X”, “you made that up”, explicit praise of accuracy)
+
+Prefer silent park when the signal is weak or ambiguous. Generic
+acknowledgements alone (`yes`, `ok`, `👍`, “sure”) are **not** FEEDBACK and
+**never** activate anything.
+
+### Budget and activation rules
+
+- **One confirmation prompt max per user turn.** Never chain multi-step
+  “are you sure?” flows on the same turn.
+- Generic ack rejection: `yes` / `ok` / 👍 / “sure” / “go ahead” never apply
+  Alias, EntityProtection, policy, overlay, or SOUL changes.
+- User may express intent with an exact stable token such as
+  `APPLY alias:<proposal_id>`. That token is **intent only — not authorization**
+  — a separately permissioned host/operator script
+  (`scripts/digital_brain_apply_proposal.py`) mints a single-use authority and
+  applies the effect. Models and MCP tools cannot consume authority.
+- Operator credentials, coordinator secrets, and apply scripts must stay out of
+  maintainer/analyzer toolsets. There is no unattended `--yes` apply path.
+- Offline **maintenance / DreamRun** is a separate product surface
+  (`../digital-brain-buddy-maintenance/SKILL.md`, command `/digital-brain-dream`,
+  native agent `digital-brain-maintainer`). Do not fold unattended identity,
+  policy, overlay, code, SOUL, or journal changes into the buddy session.
+  Default maintenance is manual report-only; no schedule/heartbeat; no private
+  proposal queue in shared/non-owner sessions.
+
+### Evidence write
+
+1. Call `create_feedback` with the session-pinned
+   `harness_generation_id` unchanged.
+2. Kinds: `entity_wrong` | `claim_false` | `miss` | `invent` | `praise`.
+3. Feedback is an immutable observation (plus optional removable
+   `QualityPayload` for raw text). Lifecycle events are separate rows.
+
+### Kind-specific promote rules
+
+| kind | Online action | Activation |
+| --- | --- | --- |
+| `entity_wrong` | Feedback + optional typed Alias proposal (review card) | Operator-confirmed Alias effect only |
+| `claim_false` | Feedback + propose-only review note | **Propose-only** until a Claim/Assertion provenance model exists — never mutates life memory from FEEDBACK |
+| `miss` | Feedback; missing memory may become an owner-confirmed normal WRITE later | No silent journal invent |
+| `invent` | Feedback; optional session blocklist note | No identity mutation |
+| `praise` | Feedback **counter only** | Never a life journal; never activation |
+
+### Review card (when proposing)
+
+Show exact scope, evidence band, effect hash when known, blast radius, and undo
+path. Park for maintenance when evidence is thin. Do not invent canonical ids.
+
+### What FEEDBACK must not do
+
+- Do not `DETACH DELETE`, merge entities, or create/activate Alias via generic
+  Cypher or model-facing MCP.
+- Do not treat textual “yes” as authority.
+- Do not call operator apply scripts, mint ActivationAuthority, or touch
+  quality/operator credentials from the session agent or subagents.
 
 ## Subagent Mode
 
 Use this mode by default when the host environment allows delegated execution.
 On Claude Code and Cowork, the reader/writer/entity-check subagents are
-`digital-brain-reader`, `digital-brain-writer`, and `digital-brain-entity-check`
-(see `../../agents/`). On Codex, use the delegation shape declared in each
-skill's `agents/openai.yaml` plus the prompt templates in
-`references/subagent-prompts.md`.
+`digital-brain-reader`, `digital-brain-writer`, `digital-brain-entity-check`,
+and (for maintenance only) `digital-brain-maintainer` (see `../../agents/`).
+On Codex, use the delegation shape declared in each skill's `agents/openai.yaml`
+plus the prompt templates in `references/subagent-prompts.md`. Note: Codex
+`agents/openai.yaml` is **not** a hard per-worker tool boundary — rely on
+server-side capability separation for maintenance.
 
 - Main session agent owns:
   - reading `SOUL.MD`
   - running the mandatory `BOOTSTRAP` read before the first user-facing response
-  - deciding whether the turn is `SKIP`, `READ`, or `WRITE`
+  - deciding whether the turn is `SKIP`, `READ`, `WRITE`, or `FEEDBACK`
+  - running the FEEDBACK evidence path (`create_feedback`) and review cards
   - separating fact from inference
   - the final buddy-facing response
 - Reader subagent owns:
@@ -127,7 +232,7 @@ When spawning delegated reader or writer workers, use the canonical prompt templ
 Do not hand-wave the task. Pass:
 
 - exact user turn or distilled write payload
-- whether the task is `BOOTSTRAP`, `READ`, or `WRITE`
+- whether the task is `BOOTSTRAP`, `READ`, `WRITE`, or `FEEDBACK`
 - relevant entity names already known
 - hard output expectations
 - the rule that writer tasks must not overlap
@@ -160,6 +265,16 @@ For `WRITE`:
 4. append one new `JournalEntry`, then link entities with idempotent MERGE
 
 In subagent mode, steps 1-4 belong to the writer worker, not the main session agent.
+
+For `FEEDBACK`:
+
+1. classify kind (`entity_wrong` / `claim_false` / `miss` / `invent` / `praise`)
+2. call `create_feedback` with pinned harness generation id
+3. for `entity_wrong`, draft a one-line Alias review proposal card (propose-only)
+4. for `claim_false`, keep propose-only — do not mutate life memory
+5. for `praise`, counter only — never append a journal
+6. never activate Alias from prose; operator path is
+   `scripts/digital_brain_apply_proposal.py`
 
 ## What To Store
 
@@ -194,6 +309,36 @@ Do not store:
 - If memory is thin or conflicting, say that directly.
 - Finish with a strong question, conclusion, or next step.
 
+## Harness Generation Pin
+
+- SessionStart (`compose-up.sh` → `scripts/pin_harness_generation.py`) binds the
+  pin to the host `session_id` (Claude hook stdin JSON, or
+  `DIGITAL_BRAIN_SESSION_ID`). `startup`/`clear` recollect; `resume`/`compact`
+  reload the existing pin for that session. Without a host session id the host
+  mints a timestamped local id — never a sticky global `current` pin.
+- Exports `DIGITAL_BRAIN_HARNESS_GENERATION_ID` and
+  `DIGITAL_BRAIN_HARNESS_PIN_PATH` (state-dir pin file + `CLAUDE_ENV_FILE` when set).
+- Pass that generation id unchanged into every Feedback/RunEvent for the session.
+- Do not recompute digests after the pin is set; only a new session (or clear)
+  gets a new id.
+- Never put SOUL body text into generation records, MCP args, or sensor payloads.
+- The harness generation identity includes `overlay_manifest_digest` of the
+  **active** manifest only (never draft/proposal trees). A new session after
+  trial activation/rollback recollects; an existing session stays pinned.
+
+## Active Overlay Trials
+
+- Source of truth:
+  `$DIGITAL_BRAIN_STATE_DIR/dreams/active-overlays/manifest.json` plus
+  digest-addressed `…/<proposal-id>/<digest>.md` files.
+- Session load path: pin via `pin_session_active_overlays` (or host SessionStart)
+  then resolve only exact digests from that pin.
+- Operator path: `scripts/digital_brain_activate_overlay.py` (interactive; no
+  `--yes`). Mint ActivationAuthority → stage → atomic manifest → EffectReceipt +
+  Deployment + ExposureWindow. Rollback is a compensating effect restoring the
+  **exact** prior manifest digest.
+- Do not activate overlays from FEEDBACK prose, generic acks, or MCP tools.
+
 ## Do Not
 
 - Do not pretend confidence when graph evidence is weak.
@@ -201,3 +346,13 @@ Do not store:
 - Do not let warmth turn into flattery.
 - Do not use old docs over live schema and runtime code.
 - Do not let delegated workers invent buddy-tone prose on behalf of the main session.
+- Do not activate Alias / pinned identity / policy / overlay from FEEDBACK prose or generic acks.
+- Do not treat `claim_false` as a life-memory mutation path.
+- Do not put operator apply credentials or ActivationAuthority mint/consume into
+  reader/writer/entity-check toolsets.
+- Do not load overlay files from draft/proposal trees, plugin paths, or bare
+  presence; only manifest-listed exact digests under `dreams/active-overlays/`.
+- Do not call `scripts/digital_brain_activate_overlay.py` from the session agent.
+- Do not run unattended DreamRun activation from the buddy session; use
+  `/digital-brain-dream` + `digital-brain-buddy-maintenance` (report-only first).
+- Do not treat exact-token `APPLY alias:…` intent as authorization.

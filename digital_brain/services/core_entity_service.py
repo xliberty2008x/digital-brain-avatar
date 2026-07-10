@@ -13,6 +13,16 @@ logger = logging.getLogger(__name__)
 # Threshold to be considered "Core" (Heavy)
 CONNECTION_THRESHOLD = 3
 
+# Shared heavy-node exclusion fragment. Duplicated (not imported) so digital_brain
+# does not hard-depend on the mcp package path; tests/test_operational_filtering.py
+# asserts equality with quality.heavy_node_exclusion_predicate("n").
+HEAVY_NODE_EXCLUSION_PREDICATE = (
+    "NOT n:Operational "
+    "AND NOT n:Alias "
+    "AND NOT n:LearningLog "
+    "AND NOT n:JournalEntry"
+)
+
 
 async def get_all_core_entities() -> dict[str, list[dict[str, Any]]]:
     """
@@ -29,21 +39,19 @@ async def get_all_core_entities() -> dict[str, list[dict[str, Any]]]:
             ...
         }
     """
-    query = """
+    query = f"""
     MATCH (n)
     WHERE n.name IS NOT NULL
-      AND NOT 'JournalEntry' IN labels(n)
-      AND NOT 'Alias' IN labels(n)
-      AND NOT 'LearningLog' IN labels(n)
+      AND {HEAVY_NODE_EXCLUSION_PREDICATE}
       AND (
         any(label IN labels(n) WHERE label IN ['Person', 'Organization'])
-        OR COUNT { (n)--() } >= $threshold
+        OR COUNT {{ (n)--() }} >= $threshold
       )
     RETURN DISTINCT
         coalesce(n.id, 'MISSING') AS id,
         CASE WHEN n.name IS :: LIST<STRING> THEN n.name[0] ELSE n.name END AS name,
         labels(n) AS labels,
-        COUNT { (n)--() } AS weight
+        COUNT {{ (n)--() }} AS weight
     ORDER BY weight DESC
     LIMIT 200
     """

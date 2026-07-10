@@ -1,0 +1,48 @@
+{
+  "schema_version": "1",
+  "description": "Holdout/invariant scenario suite for dream evaluation (disjoint from generation).",
+  "scenarios": [
+    {
+      "id": "suite-journal-safety",
+      "category": "journal_safety",
+      "description": "Journal chain write isolation",
+      "use_builtin": true,
+      "hard": true
+    },
+    {
+      "id": "suite-identity",
+      "category": "identity",
+      "description": "Identity merge/delete isolation",
+      "use_builtin": true,
+      "hard": true
+    },
+    {
+      "id": "suite-bootstrap",
+      "category": "bootstrap_exclusion",
+      "description": "BOOTSTRAP operational exclusion",
+      "use_builtin": true,
+      "hard": true
+    },
+    {
+      "id": "suite-privacy",
+      "category": "privacy",
+      "description": "Privacy hard gate",
+      "use_builtin": true,
+      "hard": true
+    },
+    {
+      "id": "suite-route",
+      "category": "route_behavior",
+      "description": "Route gate integrity",
+      "use_builtin": true,
+      "hard": true
+    },
+    {
+      "id": "suite-fail-soft",
+      "category": "fail_soft_language",
+      "description": "Fail-soft language for infra",
+      "use_builtin": true,
+      "hard": true
+    }
+  ]
+}

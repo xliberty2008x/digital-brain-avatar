@@ -19,7 +19,7 @@ it resembles, run the "Related nodes via shared connections" query from
 
 ```cypher
 MATCH (a {id: $entity_id}), (b)
-WHERE b <> a AND NOT b:JournalEntry AND NOT b:Alias
+WHERE b <> a AND NOT b:Operational AND NOT b:JournalEntry AND NOT b:Alias AND NOT b:LearningLog
 OPTIONAL MATCH (a)-[]-(common)-[]-(b)
 WITH b, count(DISTINCT common) AS shared_connections
 WHERE shared_connections > 0
@@ -36,3 +36,11 @@ creating a new entity when a merge isn't authorized.
 
 Return: `{ "authorized": bool, "keep_id": ..., "keep_name": ..., "reason": ... }`.
 Never write to the graph and never produce final buddy-voice prose.
+
+## Boundaries
+
+- Report-only: never create Alias, merge nodes, or mint ActivationAuthority.
+- A positive shared-connections signal is evidence for a later operator-reviewed
+  Alias proposal — not online activation.
+- FEEDBACK `entity_wrong` / `claim_false` paths stay outside this worker.
+- Do not run maintenance apply/try paths; operator-only scripts own activation.

@@ -206,17 +206,11 @@ class DigitalBrainOrchestrator(BaseAgent):
             # idempotency key instead.
             async for event in executor_agent.run_async(ctx):
                 yield event
-            
-            # Step 5.5: POST-WRITE REFLEX LOOP (Phase 3)
-            # Check for duplicates that slipped through and auto-merge them
-            try:
-                from .services.consistency_checker import run_consistency_check
-                consistency_result = await run_consistency_check()
-                if consistency_result.get("merged", 0) > 0:
-                    print(f"🔄 REFLEX LOOP: Merged {consistency_result['merged']} duplicates, created {consistency_result['aliases_created']} aliases")
-            except Exception as e:
-                print(f"⚠️ Consistency check failed: {e}")
-            
+
+            # Identity merges/deletes/Alias creation are never automatic after WRITE.
+            # Duplicate detection is report-only (find_duplicate_candidates) and is
+            # not invoked as a post-write mutation reflex.
+
             # Step 6: Final Psychologist Response
             async for event in response_agent.run_async(ctx):
                 yield event

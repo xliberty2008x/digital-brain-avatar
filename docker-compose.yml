@@ -42,8 +42,22 @@ services:
       - "127.0.0.1:${MCP_CYPHER_PORT:-8000}:8000"
     environment:
       NEO4J_URI: "bolt://neo4j:7687"
+      # Fallback life-graph auth (first boot / pre-role stacks only).
+      # Dual-layer security requires NEO4J_RUNTIME_* after:
+      #   DIGITAL_BRAIN_APPLY_QUALITY_ROLES=1 → scripts/init_quality_roles.py --apply
+      # See .env.example. server.py prefers runtime/quality when set.
       NEO4J_USERNAME: "${NEO4J_USERNAME:-neo4j}"
       NEO4J_PASSWORD: "${NEO4J_PASSWORD:-password}"
+      # Model-facing runtime role (usernames default; passwords from .env after bootstrap).
+      NEO4J_RUNTIME_USERNAME: "${NEO4J_RUNTIME_USERNAME:-digital_brain_runtime}"
+      NEO4J_RUNTIME_PASSWORD: "${NEO4J_RUNTIME_PASSWORD:-}"
+      # Typed quality transactions (separate credential). Not an operator key.
+      NEO4J_QUALITY_USERNAME: "${NEO4J_QUALITY_USERNAME:-digital_brain_quality}"
+      NEO4J_QUALITY_PASSWORD: "${NEO4J_QUALITY_PASSWORD:-}"
+      # Coordinator control API secret (local non-MCP). Absent from analyzer envs.
+      DIGITAL_BRAIN_COORDINATOR_SECRET: "${DIGITAL_BRAIN_COORDINATOR_SECRET:-}"
+      # Intentionally NOT mounted: NEO4J_ADMIN_*, NEO4J_OPERATOR_*,
+      # DIGITAL_BRAIN_OPERATOR_SECRET (activation/operator boundary).
       NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
       NEO4J_TRANSPORT: "streamable-http"
       NEO4J_MCP_SERVER_HOST: "0.0.0.0"
@@ -57,8 +71,19 @@ services:
       # localhost for host-side tools; that must not leak into this container.
       OLLAMA_BASE_URL: "http://ollama:11434"
       HF_HOME: "/models/huggingface"
+      # Shared host↔MCP state for the well-known active harness pin (id only).
+      # SessionStart / pin script writes active/harness_generation.{id,json};
+      # MCP instrumentation reads it when DIGITAL_BRAIN_HARNESS_GENERATION_ID
+      # is not injected into the container env.
+      # Host default matches resolve_state_dir / XDG rules (compose-up exports
+      # DIGITAL_BRAIN_STATE_DIR before `up` so this mount tracks the pin path).
+      DIGITAL_BRAIN_STATE_DIR: "/var/lib/digital-brain"
     volumes:
       - hf-cache:/models/huggingface
+      # Bind host state dir so dual-process RunEvent emit can resolve the pin.
+      # Default: $DIGITAL_BRAIN_STATE_DIR or $XDG_STATE_HOME/digital-brain or
+      # ~/.local/state/digital-brain (same as digital_brain.maintenance.resolve_state_dir).
+      - "${DIGITAL_BRAIN_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/digital-brain}:/var/lib/digital-brain"
     # /readyz verifies both Neo4j and a real bge-m3 embedding (1024 dims), so
     # a healthy container is safe for JournalEntry writes rather than merely
     # accepting TCP connections.

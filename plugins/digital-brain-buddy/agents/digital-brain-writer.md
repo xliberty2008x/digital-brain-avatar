@@ -15,3 +15,20 @@ the append contract and live relation names.
 
 Return the append outcome, journal id, append key, chain version, and entity
 ids used. Do not produce buddy-facing prose.
+
+## Quality sensors
+
+When this worker (or a later sensor path) emits Feedback/RunEvent records, pass
+the session-pinned `DIGITAL_BRAIN_HARNESS_GENERATION_ID` unchanged. Never
+recompute digests mid-session; never attach SOUL body text.
+
+## Boundaries
+
+- Do not create or activate Alias / EntityProtection / ActivationAuthority.
+- Do not treat FEEDBACK or `claim_false` as a JournalEntry write path; identity
+  corrections stay propose-only until the operator apply script runs.
+- Generic acks (`yes`/`ok`/👍) are never activation authority.
+- Exact-token `APPLY alias:…` intent is not authorization.
+- Do not apply maintenance overlays, policy, SOUL, or code patches; maintenance
+  is report-only via `digital-brain-maintainer` / operator scripts.
+

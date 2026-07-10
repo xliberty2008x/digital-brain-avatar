@@ -13,6 +13,8 @@ wheels/
 *.json
 !plugins/**/*.json
 !.claude-plugin/*.json
+!.agents/plugins/marketplace.json
+!tests/fixtures/**/*.json
 .env
 .env.*
 !.env.example
@@ -25,8 +27,10 @@ wheels/
 # Local database backups
 backups/
 
-# Prompts
+# Prompts (personal/local only; keep in-repo analyzer prompt templates)
 prompts/
+!digital_brain/maintenance/prompts/
+!digital_brain/maintenance/prompts/**
 
 # Local scratch (architecture drafts, ad-hoc notes)
 tmp/
@@ -42,3 +46,6 @@ digital_brain/misc/
 plugins/digital-brain-buddy/SOUL.MD
 plugins/digital-brain-buddy/SOUL.md
 
+
+# Superpowers / agent isolated worktrees
+.worktrees/
