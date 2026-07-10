@@ -1,0 +1,61 @@
+{
+  "schema_version": "1",
+  "description": "Repository-owned named extension slots for additive overlay rules. Compiler templates only — never auto-loaded from quarantine.",
+  "slots": {
+    "session_preamble": {
+      "id": "session_preamble",
+      "target_skill": "digital-brain-buddy-session",
+      "target_file": "skills/digital-brain-buddy-session/SKILL.md",
+      "marker_begin": "<!-- OVERLAY_SLOT:session_preamble BEGIN -->",
+      "marker_end": "<!-- OVERLAY_SLOT:session_preamble END -->",
+      "max_rules": 32,
+      "max_bytes": 8192,
+      "operations": ["add_rule"],
+      "description": "Additive preamble guidance before session body"
+    },
+    "route_guidance": {
+      "id": "route_guidance",
+      "target_skill": "digital-brain-buddy-session",
+      "target_file": "skills/digital-brain-buddy-session/SKILL.md",
+      "marker_begin": "<!-- OVERLAY_SLOT:route_guidance BEGIN -->",
+      "marker_end": "<!-- OVERLAY_SLOT:route_guidance END -->",
+      "max_rules": 32,
+      "max_bytes": 8192,
+      "operations": ["add_rule"],
+      "description": "Additive routing guidance within the session skill"
+    },
+    "fail_soft_language": {
+      "id": "fail_soft_language",
+      "target_skill": "digital-brain-buddy-session",
+      "target_file": "skills/digital-brain-buddy-session/SKILL.md",
+      "marker_begin": "<!-- OVERLAY_SLOT:fail_soft_language BEGIN -->",
+      "marker_end": "<!-- OVERLAY_SLOT:fail_soft_language END -->",
+      "max_rules": 32,
+      "max_bytes": 8192,
+      "operations": ["add_rule"],
+      "description": "Fail-soft language for empty/failed READ routes"
+    },
+    "retrieval_hints": {
+      "id": "retrieval_hints",
+      "target_skill": "digital-brain-buddy-read-memory",
+      "target_file": "skills/digital-brain-buddy-read-memory/SKILL.md",
+      "marker_begin": "<!-- OVERLAY_SLOT:retrieval_hints BEGIN -->",
+      "marker_end": "<!-- OVERLAY_SLOT:retrieval_hints END -->",
+      "max_rules": 32,
+      "max_bytes": 8192,
+      "operations": ["add_rule"],
+      "description": "Additive retrieval hints for the read-memory skill"
+    },
+    "engineering_note": {
+      "id": "engineering_note",
+      "target_skill": null,
+      "target_file": null,
+      "marker_begin": "<!-- OVERLAY_SLOT:engineering_note BEGIN -->",
+      "marker_end": "<!-- OVERLAY_SLOT:engineering_note END -->",
+      "max_rules": 64,
+      "max_bytes": 4096,
+      "operations": ["file_issue", "report"],
+      "description": "Non-deployable engineering notes; never loaded by runtime"
+    }
+  }
+}

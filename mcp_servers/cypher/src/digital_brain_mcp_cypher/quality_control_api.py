@@ -38,6 +38,7 @@ COORDINATOR_OPERATIONS: frozenset[str] = frozenset(
         "record_evaluation",
         "record_decision",
         "record_retention_effect",
+        "publish_patch_artifact",
     }
 )
 
@@ -55,6 +56,7 @@ WORKFLOW_OPERATIONS: frozenset[str] = frozenset(
         "record_evaluation",
         "record_decision",
         "record_retention_effect",
+        "publish_patch_artifact",
     }
 )
 
@@ -72,6 +74,7 @@ COORDINATOR_FORBIDDEN_MCP_TOOL_NAMES: frozenset[str] = frozenset(
         "record_evaluation",
         "record_decision",
         "record_retention_effect",
+        "publish_patch_artifact",
         "activate_alias",
         "revoke_alias",
         "apply_alias",

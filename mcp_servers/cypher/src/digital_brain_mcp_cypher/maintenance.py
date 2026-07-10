@@ -3439,6 +3439,373 @@ class MaintenanceStore:
             "applied_at": created.get("applied_at"),
         }
 
+    # ------------------------------------------------------------------
+    # PatchArtifact publish (control plane metadata only — no activation)
+    # ------------------------------------------------------------------
+
+    def publish_patch_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Coordinator-only: record a quarantined PatchArtifact after fence checks.
+
+        Revalidates ``run_id + lease_epoch``, artifact digest, proposal/snapshot
+        state, and base fingerprints. Never loads or activates the artifact;
+        orphan quarantine files without a published record are ignored by review
+        and runtime.
+        """
+        if not isinstance(payload, dict):
+            raise TypeError("payload must be an object")
+        assert_no_absorption_field(payload)
+
+        artifact_id = _require_id(payload.get("id"), "id")
+        proposal_id = _require_id(payload.get("proposal_id"), "proposal_id")
+        evidence_snapshot_id = _require_id(
+            payload.get("evidence_snapshot_id"), "evidence_snapshot_id"
+        )
+        base_commit = _require_id(payload.get("base_commit"), "base_commit")
+        before_hashes_json = _json_field(
+            payload.get("before_hashes_json") or payload.get("before_hashes") or "{}",
+            "before_hashes_json",
+            default="{}",
+        )
+        compiler_version = _require_id(
+            payload.get("compiler_version") or "1", "compiler_version"
+        )
+        schema_version = _require_id(
+            payload.get("schema_version") or "1", "schema_version"
+        )
+        target_path_allowlist_json = _json_field(
+            payload.get("target_path_allowlist_json")
+            or payload.get("target_path_allowlist")
+            or "[]",
+            "target_path_allowlist_json",
+            default="[]",
+        )
+        patch_sha256 = _require_id(payload.get("patch_sha256"), "patch_sha256")
+        # Paths may be longer than id fields (host state dir + quarantine layout).
+        if not isinstance(payload.get("artifact_path"), str) or not str(
+            payload.get("artifact_path")
+        ).strip():
+            raise ValueError("artifact_path must be a non-empty string")
+        artifact_path = str(payload["artifact_path"]).strip()
+        if len(artifact_path) > 1024:
+            raise ValueError("artifact_path exceeds max length 1024")
+        # Quarantine paths only — refuse plugin / active-overlay publish targets.
+        norm_path = artifact_path.replace("\\", "/")
+        if ".." in norm_path.split("/"):
+            raise ValueError("artifact_path_traversal_forbidden")
+        if "quarantine" not in norm_path:
+            raise ValueError("artifact_path_must_be_quarantine")
+        for forbidden in ("/plugins/", "active-overlays", "/SOUL", "node_modules"):
+            if forbidden in norm_path:
+                raise ValueError(f"artifact_path_forbidden_segment:{forbidden}")
+
+        expected_plugin_generation = _optional_text(
+            payload.get("expected_plugin_generation"),
+            "expected_plugin_generation",
+            MAX_REF_LEN,
+        )
+        rollback_ref = _optional_text(
+            payload.get("rollback_ref"), "rollback_ref", MAX_REF_LEN
+        )
+        rule_id = _optional_text(payload.get("rule_id"), "rule_id", MAX_REF_LEN)
+        extension_slot = _optional_text(
+            payload.get("extension_slot"), "extension_slot", MAX_REF_LEN
+        )
+        target_skill = _optional_text(
+            payload.get("target_skill"), "target_skill", MAX_REF_LEN
+        )
+        target_file = _optional_text(
+            payload.get("target_file"), "target_file", MAX_REF_LEN
+        )
+        declared_base_commit = _optional_text(
+            payload.get("declared_base_commit") or base_commit,
+            "declared_base_commit",
+            MAX_REF_LEN,
+        )
+        measured_base_commit = _optional_text(
+            payload.get("measured_base_commit"), "measured_base_commit", MAX_REF_LEN
+        )
+        if (
+            measured_base_commit is not None
+            and declared_base_commit is not None
+            and measured_base_commit != declared_base_commit
+        ):
+            return {
+                "outcome": "stale",
+                "reason": "base_commit_drift",
+                "declared_base_commit": declared_base_commit,
+                "measured_base_commit": measured_base_commit,
+            }
+
+        epoch = _require_int(
+            payload.get("epoch")
+            if payload.get("epoch") is not None
+            else payload.get("lease_epoch"),
+            "epoch",
+            min_value=1,
+        )
+        run_id = _require_id(payload.get("run_id"), "run_id")
+        lease_key = _require_id(
+            payload.get("lease_key") or DEFAULT_LEASE_KEY, "lease_key"
+        )
+
+        identity = {
+            "artifact_path": artifact_path,
+            "base_commit": base_commit,
+            "compiler_version": compiler_version,
+            "evidence_snapshot_id": evidence_snapshot_id,
+            "id": artifact_id,
+            "patch_sha256": patch_sha256,
+            "proposal_id": proposal_id,
+            "schema_version": schema_version,
+        }
+        request_fingerprint = _digest_text(_canonical_json(identity))
+
+        def operation(session: Any) -> dict[str, Any]:
+            return _execute_write(
+                session,
+                lambda tx: self._publish_patch_artifact_tx(
+                    tx,
+                    artifact_id=artifact_id,
+                    proposal_id=proposal_id,
+                    evidence_snapshot_id=evidence_snapshot_id,
+                    base_commit=base_commit,
+                    before_hashes_json=before_hashes_json,
+                    compiler_version=compiler_version,
+                    schema_version=schema_version,
+                    target_path_allowlist_json=target_path_allowlist_json,
+                    patch_sha256=patch_sha256,
+                    artifact_path=artifact_path,
+                    expected_plugin_generation=expected_plugin_generation,
+                    rollback_ref=rollback_ref,
+                    rule_id=rule_id,
+                    extension_slot=extension_slot,
+                    target_skill=target_skill,
+                    target_file=target_file,
+                    request_fingerprint=request_fingerprint,
+                    epoch=epoch,
+                    run_id=run_id,
+                    lease_key=lease_key,
+                ),
+            )
+
+        return self._with_session(operation)
+
+    def _publish_patch_artifact_tx(
+        self,
+        tx: Any,
+        *,
+        artifact_id: str,
+        proposal_id: str,
+        evidence_snapshot_id: str,
+        base_commit: str,
+        before_hashes_json: str,
+        compiler_version: str,
+        schema_version: str,
+        target_path_allowlist_json: str,
+        patch_sha256: str,
+        artifact_path: str,
+        expected_plugin_generation: str | None,
+        rollback_ref: str | None,
+        rule_id: str | None,
+        extension_slot: str | None,
+        target_skill: str | None,
+        target_file: str | None,
+        request_fingerprint: str,
+        epoch: int,
+        run_id: str,
+        lease_key: str,
+    ) -> dict[str, Any]:
+        fence_err = self._assert_fence(
+            tx, lease_key=lease_key, run_id=run_id, epoch=epoch
+        )
+        if fence_err is not None:
+            return fence_err
+
+        existing = _run_one(
+            tx,
+            """
+            MATCH (a:Operational:PatchArtifact {id: $id})
+            RETURN a.id AS id,
+                   a.request_fingerprint AS request_fingerprint,
+                   a.patch_sha256 AS patch_sha256,
+                   a.proposal_id AS proposal_id
+            LIMIT 1
+            """,
+            {"id": artifact_id},
+        )
+        if existing is not None:
+            if existing.get("request_fingerprint") == request_fingerprint:
+                return {
+                    "outcome": "replayed",
+                    "artifact_id": existing["id"],
+                    "proposal_id": existing.get("proposal_id"),
+                    "patch_sha256": existing.get("patch_sha256"),
+                    "request_fingerprint": existing.get("request_fingerprint"),
+                    "published": True,
+                }
+            return {
+                "outcome": "conflict",
+                "reason": "artifact_id_reused",
+                "artifact_id": existing["id"],
+            }
+
+        # Same patch digest already published for this proposal → replay.
+        by_digest = _run_one(
+            tx,
+            """
+            MATCH (a:Operational:PatchArtifact {patch_sha256: $patch_sha256})
+            WHERE a.proposal_id = $proposal_id
+            RETURN a.id AS id,
+                   a.request_fingerprint AS request_fingerprint,
+                   a.patch_sha256 AS patch_sha256,
+                   a.proposal_id AS proposal_id
+            LIMIT 1
+            """,
+            {"patch_sha256": patch_sha256, "proposal_id": proposal_id},
+        )
+        if by_digest is not None:
+            return {
+                "outcome": "replayed",
+                "artifact_id": by_digest["id"],
+                "proposal_id": by_digest.get("proposal_id"),
+                "patch_sha256": by_digest.get("patch_sha256"),
+                "request_fingerprint": by_digest.get("request_fingerprint"),
+                "published": True,
+            }
+
+        proposal = _run_one(
+            tx,
+            """
+            MATCH (p:Operational:Proposal {id: $id})
+            RETURN p.id AS id,
+                   p.status_projection AS status_projection,
+                   p.evidence_snapshot_id AS evidence_snapshot_id,
+                   p.dream_id AS dream_id
+            LIMIT 1
+            """,
+            {"id": proposal_id},
+        )
+        if proposal is None:
+            return {
+                "outcome": "not_found",
+                "reason": "proposal_not_found",
+                "proposal_id": proposal_id,
+            }
+        status = str(proposal.get("status_projection") or "")
+        if status in {"stale", "invalid", "superseded", "withdrawn", "rejected"}:
+            return {
+                "outcome": "stale",
+                "reason": f"proposal_status_{status}",
+                "proposal_id": proposal_id,
+                "status_projection": status,
+            }
+        prop_snap = proposal.get("evidence_snapshot_id")
+        if prop_snap and str(prop_snap) != evidence_snapshot_id:
+            return {
+                "outcome": "conflict",
+                "reason": "snapshot_proposal_mismatch",
+                "proposal_id": proposal_id,
+                "proposal_snapshot_id": prop_snap,
+                "evidence_snapshot_id": evidence_snapshot_id,
+            }
+
+        snapshot = _run_one(
+            tx,
+            """
+            MATCH (s:Operational:EvidenceSnapshot {id: $id})
+            RETURN s.id AS id,
+                   s.base_commit AS base_commit,
+                   s.dream_id AS dream_id,
+                   s.harness_generation_id AS harness_generation_id
+            LIMIT 1
+            """,
+            {"id": evidence_snapshot_id},
+        )
+        if snapshot is None:
+            return {
+                "outcome": "not_found",
+                "reason": "snapshot_not_found",
+                "evidence_snapshot_id": evidence_snapshot_id,
+            }
+        snap_base = snapshot.get("base_commit")
+        if snap_base and str(snap_base) != base_commit:
+            return {
+                "outcome": "stale",
+                "reason": "base_commit_drift",
+                "snapshot_base_commit": snap_base,
+                "declared_base_commit": base_commit,
+            }
+
+        created = _run_one(
+            tx,
+            """
+            CREATE (a:Operational:PatchArtifact)
+            SET a.id = $id,
+                a.proposal_id = $proposal_id,
+                a.evidence_snapshot_id = $evidence_snapshot_id,
+                a.base_commit = $base_commit,
+                a.before_hashes_json = $before_hashes_json,
+                a.compiler_version = $compiler_version,
+                a.schema_version = $schema_version,
+                a.target_path_allowlist_json = $target_path_allowlist_json,
+                a.patch_sha256 = $patch_sha256,
+                a.artifact_path = $artifact_path,
+                a.expected_plugin_generation = $expected_plugin_generation,
+                a.rollback_ref = $rollback_ref,
+                a.rule_id = $rule_id,
+                a.extension_slot = $extension_slot,
+                a.target_skill = $target_skill,
+                a.target_file = $target_file,
+                a.lease_epoch = $epoch,
+                a.run_id = $run_id,
+                a.request_fingerprint = $fp,
+                a.published = true,
+                a.created_at = datetime()
+            WITH a
+            MATCH (p:Operational:Proposal {id: $proposal_id})
+            SET p.artifact_ref = $artifact_id_ref
+            MERGE (p)-[:HAS_ARTIFACT]->(a)
+            RETURN a.id AS id,
+                   a.patch_sha256 AS patch_sha256,
+                   toString(a.created_at) AS created_at
+            """,
+            {
+                "id": artifact_id,
+                "proposal_id": proposal_id,
+                "evidence_snapshot_id": evidence_snapshot_id,
+                "base_commit": base_commit,
+                "before_hashes_json": before_hashes_json,
+                "compiler_version": compiler_version,
+                "schema_version": schema_version,
+                "target_path_allowlist_json": target_path_allowlist_json,
+                "patch_sha256": patch_sha256,
+                "artifact_path": artifact_path,
+                "expected_plugin_generation": expected_plugin_generation,
+                "rollback_ref": rollback_ref,
+                "rule_id": rule_id,
+                "extension_slot": extension_slot,
+                "target_skill": target_skill,
+                "target_file": target_file,
+                "epoch": epoch,
+                "run_id": run_id,
+                "fp": request_fingerprint,
+                "artifact_id_ref": artifact_id,
+            },
+        )
+        if created is None:
+            raise RuntimeError("PatchArtifact create returned no row")
+        return {
+            "outcome": "created",
+            "artifact_id": created["id"],
+            "proposal_id": proposal_id,
+            "patch_sha256": created["patch_sha256"],
+            "request_fingerprint": request_fingerprint,
+            "published": True,
+            "created_at": created.get("created_at"),
+            # Explicit: publish records metadata only; no activation / load.
+            "runtime_effect": "none",
+        }
+
     def dispatch(self, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Route a coordinator operation name to the matching store method."""
         handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -3453,6 +3820,7 @@ class MaintenanceStore:
             "record_evaluation": self.record_evaluation,
             "record_decision": self.record_decision,
             "record_retention_effect": self.record_retention_effect,
+            "publish_patch_artifact": self.publish_patch_artifact,
         }
         handler = handlers.get(operation)
         if handler is None:

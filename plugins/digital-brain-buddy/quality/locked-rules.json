@@ -1,0 +1,34 @@
+{
+  "schema_version": "1",
+  "description": "Locked safety rules that overlays must never revise, delete, or weaken. Rule ids are closed; compiler rejects any ChangeIntent targeting them.",
+  "locked_rule_ids": [
+    "journal-append-only",
+    "journal-chain-cas",
+    "no-generic-ack-activation",
+    "no-auto-alias-activation",
+    "soul-owner-edit-only",
+    "claim-false-propose-only",
+    "no-intimate-external-dispatch",
+    "mcp-write-guards",
+    "activation-requires-authority",
+    "no-proposal-by-presence",
+    "evaluation-required-for-validation",
+    "lease-fence-required"
+  ],
+  "forbidden_path_prefixes": [
+    "SOUL",
+    "scripts/",
+    "hooks/",
+    ".mcp.json",
+    "version.json",
+    "assets/",
+    "commands/"
+  ],
+  "forbidden_path_substrings": [
+    "..",
+    "\u0000",
+    "learned/",
+    "node_modules/",
+    ".git/"
+  ]
+}

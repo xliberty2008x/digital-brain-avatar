@@ -181,6 +181,8 @@ class _FakeMaintSession:
         self.decisions: dict[str, dict[str, Any]] = {}
         self.effects: dict[str, dict[str, Any]] = {}
         self.effects_by_key: dict[str, str] = {}
+        self.patch_artifacts: dict[str, dict[str, Any]] = {}
+        self.patch_by_digest: dict[tuple[str, str], str] = {}
         self.evidence_refs: dict[str, dict[str, Any]] = {}
         # (snapshot_id, evidence_id) -> rel props
         self.includes: dict[tuple[str, str], dict[str, Any]] = {}
@@ -190,6 +192,8 @@ class _FakeMaintSession:
         self.supported_by: set[tuple[str, str]] = set()
         # (proposal_id, evaluation_id)
         self.has_evaluation: set[tuple[str, str]] = set()
+        # (proposal_id, artifact_id)
+        self.has_artifact: set[tuple[str, str]] = set()
         self.calls: list[str] = []
 
     def execute_write(self, fn):  # noqa: ANN001
@@ -372,6 +376,8 @@ class _FakeMaintSession:
                 "id": sid,
                 "dream_id": params["dream_id"],
                 "request_fingerprint": params["fp"],
+                "base_commit": params.get("base_commit"),
+                "harness_generation_id": params.get("harness_generation_id"),
                 "created_at": self._ts(),
             }
             return _Result({"id": sid, "created_at": self._ts()})
@@ -411,12 +417,44 @@ class _FakeMaintSession:
                 "id": pid,
                 "status_projection": params["status_projection"],
                 "request_fingerprint": params["fp"],
+                "evidence_snapshot_id": params.get("evidence_snapshot_id"),
+                "dream_id": params.get("dream_id"),
+                "artifact_ref": params.get("artifact_ref"),
                 "created_at": self._ts(),
             }
             return _Result(
                 {
                     "id": pid,
                     "status_projection": params["status_projection"],
+                    "created_at": self._ts(),
+                }
+            )
+
+        if "CREATE (a:Operational:PatchArtifact)" in q:
+            aid = params["id"]
+            node = {
+                "id": aid,
+                "proposal_id": params["proposal_id"],
+                "evidence_snapshot_id": params.get("evidence_snapshot_id"),
+                "base_commit": params.get("base_commit"),
+                "patch_sha256": params["patch_sha256"],
+                "artifact_path": params.get("artifact_path"),
+                "request_fingerprint": params["fp"],
+                "published": True,
+                "lease_epoch": params.get("epoch"),
+                "run_id": params.get("run_id"),
+                "created_at": self._ts(),
+            }
+            self.patch_artifacts[aid] = node
+            self.patch_by_digest[(params["proposal_id"], params["patch_sha256"])] = aid
+            prop = self.proposals.get(params["proposal_id"])
+            if prop is not None:
+                prop["artifact_ref"] = params.get("artifact_id_ref") or aid
+                self.has_artifact.add((params["proposal_id"], aid))
+            return _Result(
+                {
+                    "id": aid,
+                    "patch_sha256": params["patch_sha256"],
                     "created_at": self._ts(),
                 }
             )
@@ -595,6 +633,16 @@ class _FakeMaintSession:
         if "MATCH (r:Operational:EffectReceipt {effect_key:" in q:
             eid = self.effects_by_key.get(params["effect_key"])
             node = self.effects.get(eid) if eid else None
+            return _Result(None if node is None else dict(node))
+
+        if "MATCH (a:Operational:PatchArtifact {id:" in q:
+            node = self.patch_artifacts.get(params["id"])
+            return _Result(None if node is None else dict(node))
+
+        if "MATCH (a:Operational:PatchArtifact {patch_sha256:" in q:
+            key = (params.get("proposal_id"), params.get("patch_sha256"))
+            aid = self.patch_by_digest.get(key)  # type: ignore[arg-type]
+            node = self.patch_artifacts.get(aid) if aid else None
             return _Result(None if node is None else dict(node))
 
         raise AssertionError(f"unexpected maintenance query: {q[:200]}")
