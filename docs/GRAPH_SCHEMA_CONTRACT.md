@@ -72,9 +72,15 @@ Relationships define the "web of thought". Direction matters.
 - Post-append mutations must `MATCH (j:JournalEntry {id: $journal_id})` and
   never set protected receipt/chain fields or create FOLLOWS/HEAD.
 
-### Rule 4: Self-Hexing (Prevention of Duplicates)
-- Every write operation is subject to **Phase 3 Reflex Loop**.
-- If two nodes have a Levenshtein similarity > 0.8 AND share a relationship to the same `JournalEntry`, they are automatically merged.
+### Rule 4: Duplicate Detection (Detect-and-Propose Only)
+- Duplicate detection is **report-only**. Services and agents may surface
+  candidate pairs (name similarity, shared `JournalEntry` topology, etc.) as
+  evidence for later review.
+- **Never** auto-merge nodes, auto-`DETACH DELETE` a supposed duplicate, or
+  auto-create `Alias` records on wake, post-write, callback, prompt, or
+  service paths.
+- Identity changes require owner-confirmed, typed review outside the live
+  write loop. Prefer alias-first resolution on new writes over deleting history.
 
 ---
 
