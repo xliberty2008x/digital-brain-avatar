@@ -1,0 +1,108 @@
+{
+  "cutoff_hint": "2026-07-10T12:00:00Z",
+  "evidence": [
+    {
+      "id": "fb-entity-1",
+      "label": "Feedback",
+      "kind": "entity_wrong",
+      "sensitivity": "public_ops",
+      "created_at": "2026-07-09T10:00:00Z",
+      "evidence_hash": "hash-fb-entity-1",
+      "redacted_summary": "entity name mismatch on person",
+      "eligible_exposure": true
+    },
+    {
+      "id": "fb-miss-1",
+      "label": "Feedback",
+      "kind": "miss",
+      "sensitivity": "personal",
+      "created_at": "2026-07-09T11:00:00Z",
+      "evidence_hash": "hash-fb-miss-1",
+      "redacted_summary": "missed known relationship",
+      "eligible_exposure": true
+    },
+    {
+      "id": "fb-intimate-1",
+      "label": "Feedback",
+      "kind": "entity_wrong",
+      "sensitivity": "intimate",
+      "created_at": "2026-07-09T12:00:00Z",
+      "evidence_hash": "hash-fb-intimate-1",
+      "raw_payload": "never surface this intimate quote in reports",
+      "redacted_summary": "private correction detail"
+    },
+    {
+      "id": "fb-praise-1",
+      "label": "Feedback",
+      "kind": "praise",
+      "sensitivity": "public_ops",
+      "created_at": "2026-07-09T13:00:00Z",
+      "evidence_hash": "hash-fb-praise-1",
+      "is_counterevidence": true,
+      "redacted_summary": "successful alias resolve"
+    },
+    {
+      "id": "re-fail-1",
+      "label": "RunEvent",
+      "route": "READ",
+      "tool": "read_neo4j_cypher",
+      "tool_outcome": "empty",
+      "error_class": "no_hits",
+      "sensitivity": "public_ops",
+      "created_at": "2026-07-09T14:00:00Z",
+      "evidence_hash": "hash-re-fail-1",
+      "eligible_exposure": true
+    },
+    {
+      "id": "re-late-1",
+      "label": "RunEvent",
+      "route": "WRITE",
+      "tool": "append_journal_entry",
+      "tool_outcome": "success",
+      "sensitivity": "public_ops",
+      "created_at": "2026-07-11T00:00:00Z",
+      "evidence_hash": "hash-re-late-1"
+    },
+    {
+      "id": "fb-revoked-1",
+      "label": "Feedback",
+      "kind": "claim_false",
+      "sensitivity": "public_ops",
+      "created_at": "2026-07-08T09:00:00Z",
+      "evidence_hash": "hash-fb-revoked-1",
+      "revoked": true,
+      "redacted_summary": "user revoked this feedback"
+    },
+    {
+      "id": "fb-ambig-1",
+      "label": "Feedback",
+      "kind": "claim_false",
+      "sensitivity": "public_ops",
+      "created_at": "2026-07-09T15:00:00Z",
+      "evidence_hash": "hash-fb-ambig-1",
+      "redacted_summary": "ambiguous claim without provenance"
+    },
+    {
+      "id": "re-fail-2",
+      "label": "RunEvent",
+      "route": "READ",
+      "tool": "read_neo4j_cypher",
+      "tool_outcome": "fail",
+      "error_class": "timeout",
+      "sensitivity": "public_ops",
+      "created_at": "2026-07-09T16:00:00Z",
+      "evidence_hash": "hash-re-fail-2",
+      "eligible_exposure": false
+    },
+    {
+      "id": "re-fail-3",
+      "label": "RunEvent",
+      "route": "FEEDBACK",
+      "tool": "create_feedback",
+      "tool_outcome": "success",
+      "sensitivity": "public_ops",
+      "created_at": "2026-07-09T17:00:00Z",
+      "evidence_hash": "hash-re-fail-3"
+    }
+  ]
+}
