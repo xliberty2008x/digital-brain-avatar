@@ -27,6 +27,7 @@ from .journal import (
     build_append_request,
     replay_or_key_conflict,
 )
+from .maintenance import MaintenanceStore
 from .quality import QualityStore, try_record_tool_outcome_run_event
 from .quality_control_api import handle_quality_control
 from .query_tools import (
@@ -131,6 +132,10 @@ def _quality_store() -> QualityStore:
     return QualityStore(_quality_driver, _neo4j_database())
 
 
+def _maintenance_store() -> MaintenanceStore:
+    return MaintenanceStore(_quality_driver, _neo4j_database())
+
+
 def _ensure_journal_schema() -> None:
     """Create only the new safe uniqueness constraints once per process."""
     global _journal_schema_ready
@@ -152,6 +157,7 @@ def _ensure_quality_schema() -> None:
         if _quality_schema_ready:
             return
         _quality_store().ensure_constraints()
+        _maintenance_store().ensure_constraints()
         _quality_schema_ready = True
 
 
@@ -265,9 +271,19 @@ async def quality_control(request: Request) -> JSONResponse:
     ``X-Digital-Brain-Coordinator-Secret``. Analyzer/evaluator environments
     must not receive ``DIGITAL_BRAIN_COORDINATOR_SECRET``.
     """
+    def _maintenance_dispatch(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
+        # Lazy schema ensure only when a workflow op is authorized — never on
+        # the auth/ping path (unit tests must not require a live Neo4j).
+        try:
+            _ensure_quality_schema()
+        except Exception as exc:  # noqa: BLE001 — best-effort; write will surface errors
+            _logger.debug("maintenance schema ensure: %s", exc)
+        return _maintenance_store().dispatch(operation, payload)
+
     return await handle_quality_control(
         request,
         quality_ping=lambda: _quality_store().ping(),
+        maintenance_dispatch=_maintenance_dispatch,
     )
 
 

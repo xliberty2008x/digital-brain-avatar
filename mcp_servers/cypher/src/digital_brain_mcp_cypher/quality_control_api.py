@@ -5,8 +5,8 @@ effects, deployments) are intentionally **not** registered as FastMCP tools.
 Deterministic host/coordinator code calls this HTTP surface with a shared
 secret that must not be present in analyzer/evaluator environments.
 
-Task 2 ships the auth boundary, payload bounds, and a ping/health operation.
-Workflow stores and legal transitions arrive in Tasks 5+.
+Workflow stores (Task 5) implement fenced lease + DreamRun stage transitions.
+Activation mint/consume and effects stay off this model-facing surface.
 """
 
 from __future__ import annotations
@@ -22,13 +22,27 @@ from starlette.responses import JSONResponse
 # Max JSON body size for coordinator requests (bytes).
 MAX_COORDINATOR_BODY_BYTES = 16_384
 
-# Operations accepted on the control API in Task 2 (scaffold).
-# Later tasks expand this set; activation/effect ops stay off the MCP surface.
+# Operations accepted on the control API. Workflow ops dispatch to MaintenanceStore.
+# Activation/effect ops remain absent (not even stubs that agents might discover).
 COORDINATOR_OPERATIONS: frozenset[str] = frozenset(
     {
         "ping",
-        # Reserved names for Task 5+ — accepted only as "not_implemented" stubs
-        # so contracts are stable; full workflow stores are deferred.
+        "acquire_maintenance_lease",
+        "renew_maintenance_lease",
+        "release_maintenance_lease",
+        "create_dream_run",
+        "record_dream_stage",
+        "create_evidence_snapshot",
+        "create_finding",
+        "create_proposal",
+        "record_evaluation",
+        "record_decision",
+    }
+)
+
+# Workflow operations implemented by MaintenanceStore.dispatch.
+WORKFLOW_OPERATIONS: frozenset[str] = frozenset(
+    {
         "acquire_maintenance_lease",
         "renew_maintenance_lease",
         "release_maintenance_lease",
@@ -128,6 +142,7 @@ def dispatch_coordinator(
     body: dict[str, Any],
     *,
     quality_ping: Callable[[], dict[str, Any]] | None = None,
+    maintenance_dispatch: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
 ) -> JSONResponse:
     operation = body.get("operation")
     if not isinstance(operation, str) or not operation.strip():
@@ -158,12 +173,60 @@ def dispatch_coordinator(
                 probe["quality"] = {"outcome": "unavailable"}
         return JSONResponse(probe, status_code=200)
 
-    # Scaffold: named operations reserved for Task 5+ workflow stores.
+    if operation in WORKFLOW_OPERATIONS:
+        if maintenance_dispatch is None:
+            return JSONResponse(
+                {
+                    "outcome": "unavailable",
+                    "operation": operation,
+                    "reason": "maintenance_store_not_configured",
+                },
+                status_code=503,
+            )
+        try:
+            result = maintenance_dispatch(operation, payload)
+        except (TypeError, ValueError) as exc:
+            return JSONResponse(
+                {
+                    "outcome": "error",
+                    "operation": operation,
+                    "reason": str(exc),
+                },
+                status_code=400,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            return JSONResponse(
+                {
+                    "outcome": "error",
+                    "operation": operation,
+                    "reason": f"internal_error:{type(exc).__name__}",
+                },
+                status_code=500,
+            )
+        if not isinstance(result, dict):
+            return JSONResponse(
+                {
+                    "outcome": "error",
+                    "operation": operation,
+                    "reason": "invalid_store_result",
+                },
+                status_code=500,
+            )
+        body_out = dict(result)
+        body_out.setdefault("operation", operation)
+        # Domain outcomes (stale_epoch, illegal_transition, held, …) are 200
+        # with structured outcome — only transport/config failures use non-2xx.
+        status = 200
+        outcome = body_out.get("outcome")
+        if outcome == "not_implemented":
+            status = 501
+        return JSONResponse(body_out, status_code=status)
+
     return JSONResponse(
         {
             "outcome": "not_implemented",
             "operation": operation,
-            "reason": "deferred_to_workflow_tasks",
+            "reason": "deferred",
         },
         status_code=501,
     )
@@ -173,6 +236,7 @@ async def handle_quality_control(
     request: Request,
     *,
     quality_ping: Callable[[], dict[str, Any]] | None = None,
+    maintenance_dispatch: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
 ) -> JSONResponse:
     """HTTP entrypoint for the authenticated coordinator control API."""
     auth_error = authorize_coordinator(request)
@@ -183,4 +247,8 @@ async def handle_quality_control(
     if parse_error is not None:
         return parse_error
     assert body is not None
-    return dispatch_coordinator(body, quality_ping=quality_ping)
+    return dispatch_coordinator(
+        body,
+        quality_ping=quality_ping,
+        maintenance_dispatch=maintenance_dispatch,
+    )
