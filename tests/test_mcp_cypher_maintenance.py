@@ -178,6 +178,8 @@ class _FakeMaintSession:
         self.proposals: dict[str, dict[str, Any]] = {}
         self.evaluations: dict[str, dict[str, Any]] = {}
         self.decisions: dict[str, dict[str, Any]] = {}
+        self.effects: dict[str, dict[str, Any]] = {}
+        self.effects_by_key: dict[str, str] = {}
         self.evidence_refs: dict[str, dict[str, Any]] = {}
         # (snapshot_id, evidence_id) -> rel props
         self.includes: dict[tuple[str, str], dict[str, Any]] = {}
@@ -459,6 +461,32 @@ class _FakeMaintSession:
                 }
             )
 
+        if "CREATE (r:Operational:EffectReceipt)" in q:
+            rid = params["id"]
+            node = {
+                "id": rid,
+                "effect_key": params["effect_key"],
+                "request_fingerprint": params["fp"],
+                "request_hash": params.get("request_hash"),
+                "outcome": params["effect_outcome"],
+                "verification_status": params["verification_status"],
+                "fence_epoch": params["epoch"],
+                "run_id": params["run_id"],
+                "effect_type": params["effect_type"],
+                "applied_at": self._ts(),
+            }
+            self.effects[rid] = node
+            self.effects_by_key[params["effect_key"]] = rid
+            return _Result(
+                {
+                    "id": rid,
+                    "effect_key": params["effect_key"],
+                    "outcome": params["effect_outcome"],
+                    "fence_epoch": params["epoch"],
+                    "applied_at": self._ts(),
+                }
+            )
+
         # ---- Reads ----
 
         if "MATCH (l:Operational:MaintenanceLease {key:" in q:
@@ -499,6 +527,15 @@ class _FakeMaintSession:
 
         if "MATCH (d:Operational:Decision {id:" in q:
             node = self.decisions.get(params["id"])
+            return _Result(None if node is None else dict(node))
+
+        if "MATCH (r:Operational:EffectReceipt {id:" in q:
+            node = self.effects.get(params["id"])
+            return _Result(None if node is None else dict(node))
+
+        if "MATCH (r:Operational:EffectReceipt {effect_key:" in q:
+            eid = self.effects_by_key.get(params["effect_key"])
+            node = self.effects.get(eid) if eid else None
             return _Result(None if node is None else dict(node))
 
         raise AssertionError(f"unexpected maintenance query: {q[:200]}")
@@ -577,16 +614,36 @@ def test_create_dream_and_stage_pipeline_with_replay():
     )
     assert bad["outcome"] == "illegal_transition"
 
-    # Legal advance + crash/replay on same stage key
-    for stage in ("leased", "snapshotting", "normalizing"):
+    # Crash/replay on every pipeline stage after queued (stable stage keys).
+    # create_dream_run already recorded queued; re-record is also replayed.
+    queued_replay = store.record_dream_stage(
+        {"run_id": "run-1", "epoch": epoch, "stage": "queued"}
+    )
+    assert queued_replay["outcome"] == "replayed"
+
+    remaining = [s for s in DREAM_PIPELINE_STAGES if s != "queued"]
+    for stage in remaining:
+        stage_key = stage_idempotency_key(run_id="run-1", stage=stage, attempt=0)
         r1 = store.record_dream_stage(
-            {"run_id": "run-1", "epoch": epoch, "stage": stage}
+            {
+                "run_id": "run-1",
+                "epoch": epoch,
+                "stage": stage,
+                "stage_key": stage_key,
+            }
         )
-        assert r1["outcome"] == "recorded"
+        assert r1["outcome"] == "recorded", stage
+        assert r1["stage_key"] == stage_key
         r2 = store.record_dream_stage(
-            {"run_id": "run-1", "epoch": epoch, "stage": stage}
+            {
+                "run_id": "run-1",
+                "epoch": epoch,
+                "stage": stage,
+                "stage_key": stage_key,
+            }
         )
-        assert r2["outcome"] == "replayed"
+        assert r2["outcome"] == "replayed", stage
+        assert session.dreams["run-1"]["stage"] == stage
 
 
 def test_evidence_supports_multiple_findings_and_proposals_no_absorption():
@@ -712,12 +769,26 @@ def test_evidence_supports_multiple_findings_and_proposals_no_absorption():
 def test_evaluation_and_decision_are_separate_from_application():
     session = _FakeMaintSession()
     store = _store_with(session)
-    # Seed a draft proposal without full dream fence for decision path.
+    lease = _acquire(store, run_id="run-eval")
+    epoch = lease["epoch"]
+    # Seed a draft proposal; evaluation/decision still require the lease fence.
     session.proposals["prop-x"] = {
         "id": "prop-x",
         "status_projection": "draft",
         "request_fingerprint": "seed",
     }
+
+    with pytest.raises(ValueError):
+        store.record_evaluation(
+            {
+                "id": "eval-missing-fence",
+                "proposal_id": "prop-x",
+                "evaluator_version": "ev-1",
+                "baseline_ref": "base",
+                "candidate_ref": "cand",
+                "outcome": "passed",
+            }
+        )
 
     ev = store.record_evaluation(
         {
@@ -727,6 +798,8 @@ def test_evaluation_and_decision_are_separate_from_application():
             "baseline_ref": "base",
             "candidate_ref": "cand",
             "outcome": "passed",
+            "run_id": "run-eval",
+            "epoch": epoch,
         }
     )
     assert ev["outcome"] == "created"
@@ -740,8 +813,24 @@ def test_evaluation_and_decision_are_separate_from_application():
             "baseline_ref": "base",
             "candidate_ref": "cand",
             "outcome": "passed",
+            "run_id": "run-eval",
+            "epoch": epoch,
         }
     )["outcome"] == "replayed"
+
+    with pytest.raises(ValueError):
+        store.record_decision(
+            {
+                "id": "dec-missing-fence",
+                "proposal_id": "prop-x",
+                "decision": "approved",
+                "proposal_hash": "ph",
+                "target_ref": "t",
+                "before_fingerprint": "bf",
+                "artifact_or_effect_hash": "eh",
+                "decided_by": "owner",
+            }
+        )
 
     dec = store.record_decision(
         {
@@ -753,14 +842,113 @@ def test_evaluation_and_decision_are_separate_from_application():
             "before_fingerprint": "bf",
             "artifact_or_effect_hash": "eh",
             "decided_by": "owner",
+            "run_id": "run-eval",
+            "epoch": epoch,
         }
     )
     assert dec["outcome"] == "created"
     assert dec["application_status"] == "not_applied"
     assert session.proposals["prop-x"]["status_projection"] == "approved"
     # No EffectReceipt or Deployment created by decision alone.
-    assert not any("EffectReceipt" in c for c in session.calls)
+    assert not any("CREATE (r:Operational:EffectReceipt)" in c for c in session.calls)
     assert not any("Deployment" in c for c in session.calls)
+
+
+def test_finding_and_proposal_require_run_id_and_epoch():
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    lease = _acquire(store, run_id="run-fence-fp")
+    epoch = lease["epoch"]
+    store.create_dream_run(
+        {
+            "id": "run-fence-fp",
+            "run_id": "run-fence-fp",
+            "epoch": epoch,
+            "harness_generation_id": GENERATION_ID,
+        }
+    )
+    store.create_evidence_snapshot(
+        {
+            "id": "snap-fp",
+            "dream_id": "run-fence-fp",
+            "run_id": "run-fence-fp",
+            "epoch": epoch,
+            "cutoff_at": "2026-07-10T00:00:00Z",
+            "source_ids_digest": "d",
+            "harness_generation_id": GENERATION_ID,
+        }
+    )
+
+    with pytest.raises(ValueError):
+        store.create_finding(
+            {
+                "id": "find-no-epoch",
+                "dream_id": "run-fence-fp",
+                "snapshot_id": "snap-fp",
+                "class_key": "x",
+                "lane": "memory",
+                "summary": "s",
+                "evidence_strength": "tentative",
+                "run_id": "run-fence-fp",
+            }
+        )
+    with pytest.raises(ValueError):
+        store.create_proposal(
+            {
+                "id": "prop-no-epoch",
+                "kind": "alias",
+                "title": "t",
+                "target_ref": "entity:x",
+                "evidence_snapshot_id": "snap-fp",
+                "run_id": "run-fence-fp",
+            }
+        )
+
+
+def test_record_retention_effect_is_fenced_and_idempotent():
+    session = _FakeMaintSession()
+    store = _store_with(session)
+    lease = _acquire(store, run_id="run-ret")
+    epoch = lease["epoch"]
+
+    with pytest.raises(ValueError):
+        store.record_retention_effect(
+            {
+                "id": "eff-1",
+                "effect_key": "ret:fb-1",
+                "target_ref": "Feedback:fb-1",
+            }
+        )
+
+    r1 = store.record_retention_effect(
+        {
+            "id": "eff-1",
+            "effect_key": "ret:fb-1",
+            "run_id": "run-ret",
+            "epoch": epoch,
+            "target_ref": "Feedback:fb-1",
+            "before_ref": "Feedback:fb-1:payload",
+            "after_ref": "Feedback:fb-1:redacted",
+            "effect_type": "retention_redact",
+        }
+    )
+    assert r1["outcome"] == "created"
+    assert r1["fence_epoch"] == epoch
+    assert "eff-1" in session.effects
+
+    r2 = store.record_retention_effect(
+        {
+            "id": "eff-1",
+            "effect_key": "ret:fb-1",
+            "run_id": "run-ret",
+            "epoch": epoch,
+            "target_ref": "Feedback:fb-1",
+            "before_ref": "Feedback:fb-1:payload",
+            "after_ref": "Feedback:fb-1:redacted",
+            "effect_type": "retention_redact",
+        }
+    )
+    assert r2["outcome"] == "replayed"
 
 
 def test_maintenance_module_not_registered_as_fastmcp_tools():

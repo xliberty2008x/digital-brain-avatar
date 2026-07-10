@@ -153,6 +153,77 @@ def test_expired_holder_cannot_commit_after_new_epoch():
     assert stale_snap["outcome"] == "stale_epoch"
     assert "snap-stale" not in session.snapshots
 
+    # Stale A cannot create findings/proposals or record eval/decision/retention.
+    assert store.create_finding(
+        {
+            "id": "find-stale",
+            "dream_id": "run-a",
+            "snapshot_id": "snap-x",
+            "class_key": "x",
+            "lane": "memory",
+            "summary": "stale",
+            "evidence_strength": "tentative",
+            "run_id": "run-a",
+            "epoch": 1,
+        }
+    )["outcome"] == "stale_epoch"
+    assert "find-stale" not in session.findings
+
+    assert store.create_proposal(
+        {
+            "id": "prop-stale",
+            "kind": "alias",
+            "title": "stale",
+            "target_ref": "entity:x",
+            "evidence_snapshot_id": "snap-x",
+            "dream_id": "run-a",
+            "run_id": "run-a",
+            "epoch": 1,
+        }
+    )["outcome"] == "stale_epoch"
+    assert "prop-stale" not in session.proposals
+
+    assert store.record_evaluation(
+        {
+            "id": "eval-stale",
+            "proposal_id": "prop-x",
+            "evaluator_version": "ev-1",
+            "baseline_ref": "b",
+            "candidate_ref": "c",
+            "outcome": "passed",
+            "run_id": "run-a",
+            "epoch": 1,
+        }
+    )["outcome"] == "stale_epoch"
+    assert "eval-stale" not in session.evaluations
+
+    assert store.record_decision(
+        {
+            "id": "dec-stale",
+            "proposal_id": "prop-x",
+            "decision": "approved",
+            "proposal_hash": "ph",
+            "target_ref": "t",
+            "before_fingerprint": "bf",
+            "artifact_or_effect_hash": "eh",
+            "decided_by": "owner",
+            "run_id": "run-a",
+            "epoch": 1,
+        }
+    )["outcome"] == "stale_epoch"
+    assert "dec-stale" not in session.decisions
+
+    assert store.record_retention_effect(
+        {
+            "id": "eff-stale",
+            "effect_key": "ret:stale",
+            "run_id": "run-a",
+            "epoch": 1,
+            "target_ref": "Feedback:x",
+        }
+    )["outcome"] == "stale_epoch"
+    assert "eff-stale" not in session.effects
+
 
 def test_renew_requires_matching_run_id_and_epoch():
     session = _FakeMaintSession()
@@ -245,7 +316,7 @@ def test_same_holder_active_acquire_renews_without_epoch_bump():
 
 
 def test_stage_and_retention_hooks_require_run_id_plus_epoch():
-    """Stage transitions (and any future retention effects) need the fence pair."""
+    """Stage transitions and retention effects need the fence pair."""
     session = _FakeMaintSession()
     store = _store_with(session)
     lease = store.acquire_maintenance_lease(
@@ -279,3 +350,23 @@ def test_stage_and_retention_hooks_require_run_id_plus_epoch():
         }
     )
     assert ok["outcome"] == "recorded"
+
+    with pytest.raises(ValueError):
+        store.record_retention_effect(
+            {"id": "eff-fence", "effect_key": "ret:x", "run_id": "run-fence"}
+        )
+    with pytest.raises(ValueError):
+        store.record_retention_effect(
+            {"id": "eff-fence", "effect_key": "ret:x", "epoch": lease["epoch"]}
+        )
+
+    ret = store.record_retention_effect(
+        {
+            "id": "eff-fence",
+            "effect_key": "ret:x",
+            "run_id": "run-fence",
+            "epoch": lease["epoch"],
+            "target_ref": "Feedback:x",
+        }
+    )
+    assert ret["outcome"] == "created"

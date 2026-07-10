@@ -1522,13 +1522,18 @@ class MaintenanceStore:
             raise TypeError("evidence_ids must be an array")
         evidence_ids = [_require_id(eid, f"evidence_ids[{i}]") for i, eid in enumerate(evidence_ids)]
 
-        epoch = payload.get("epoch")
-        if epoch is None:
-            epoch = payload.get("lease_epoch")
-        if epoch is not None:
-            epoch = _require_int(epoch, "epoch", min_value=1)
-        run_id = payload.get("run_id") or dream_id
-        lease_key = payload.get("lease_key") or DEFAULT_LEASE_KEY
+        # Lease fence is mandatory: stale holders after takeover cannot create findings.
+        epoch = _require_int(
+            payload.get("epoch")
+            if payload.get("epoch") is not None
+            else payload.get("lease_epoch"),
+            "epoch",
+            min_value=1,
+        )
+        run_id = _require_id(payload.get("run_id") or dream_id, "run_id")
+        lease_key = _require_id(
+            payload.get("lease_key") or DEFAULT_LEASE_KEY, "lease_key"
+        )
 
         identity = {
             "class_key": class_key,
@@ -1558,8 +1563,8 @@ class MaintenanceStore:
                     evidence_ids=evidence_ids,
                     request_fingerprint=request_fingerprint,
                     epoch=epoch,
-                    run_id=str(run_id) if run_id else None,
-                    lease_key=str(lease_key) if lease_key else None,
+                    run_id=run_id,
+                    lease_key=lease_key,
                 ),
             )
 
@@ -1580,16 +1585,15 @@ class MaintenanceStore:
         counterevidence_json: str,
         evidence_ids: list[str],
         request_fingerprint: str,
-        epoch: int | None,
-        run_id: str | None,
-        lease_key: str | None,
+        epoch: int,
+        run_id: str,
+        lease_key: str,
     ) -> dict[str, Any]:
-        if epoch is not None and run_id and lease_key:
-            fence_err = self._assert_fence(
-                tx, lease_key=lease_key, run_id=run_id, epoch=epoch
-            )
-            if fence_err is not None:
-                return fence_err
+        fence_err = self._assert_fence(
+            tx, lease_key=lease_key, run_id=run_id, epoch=epoch
+        )
+        if fence_err is not None:
+            return fence_err
 
         existing = _run_one(
             tx,
@@ -1745,13 +1749,18 @@ class MaintenanceStore:
             payload.get("artifact_ref"), "artifact_ref", MAX_REF_LEN
         )
 
-        epoch = payload.get("epoch")
-        if epoch is None:
-            epoch = payload.get("lease_epoch")
-        if epoch is not None:
-            epoch = _require_int(epoch, "epoch", min_value=1)
-        run_id = payload.get("run_id") or dream_id
-        lease_key = payload.get("lease_key") or DEFAULT_LEASE_KEY
+        # Lease fence is mandatory: stale holders after takeover cannot create proposals.
+        epoch = _require_int(
+            payload.get("epoch")
+            if payload.get("epoch") is not None
+            else payload.get("lease_epoch"),
+            "epoch",
+            min_value=1,
+        )
+        run_id = _require_id(payload.get("run_id") or dream_id, "run_id")
+        lease_key = _require_id(
+            payload.get("lease_key") or DEFAULT_LEASE_KEY, "lease_key"
+        )
 
         identity = {
             "dream_id": dream_id,
@@ -1789,8 +1798,8 @@ class MaintenanceStore:
                     artifact_ref=artifact_ref,
                     request_fingerprint=request_fingerprint,
                     epoch=epoch,
-                    run_id=str(run_id) if run_id else None,
-                    lease_key=str(lease_key) if lease_key else None,
+                    run_id=run_id,
+                    lease_key=lease_key,
                 ),
             )
 
@@ -1820,16 +1829,15 @@ class MaintenanceStore:
         proposed_effect_hash: str | None,
         artifact_ref: str | None,
         request_fingerprint: str,
-        epoch: int | None,
-        run_id: str | None,
-        lease_key: str | None,
+        epoch: int,
+        run_id: str,
+        lease_key: str,
     ) -> dict[str, Any]:
-        if epoch is not None and run_id and lease_key:
-            fence_err = self._assert_fence(
-                tx, lease_key=lease_key, run_id=run_id, epoch=epoch
-            )
-            if fence_err is not None:
-                return fence_err
+        fence_err = self._assert_fence(
+            tx, lease_key=lease_key, run_id=run_id, epoch=epoch
+        )
+        if fence_err is not None:
+            return fence_err
 
         existing = _run_one(
             tx,
@@ -1973,6 +1981,18 @@ class MaintenanceStore:
         )
         outcome = _require_enum(payload.get("outcome"), EVALUATION_OUTCOMES, "outcome")
 
+        epoch = _require_int(
+            payload.get("epoch")
+            if payload.get("epoch") is not None
+            else payload.get("lease_epoch"),
+            "epoch",
+            min_value=1,
+        )
+        run_id = _require_id(payload.get("run_id"), "run_id")
+        lease_key = _require_id(
+            payload.get("lease_key") or DEFAULT_LEASE_KEY, "lease_key"
+        )
+
         identity = {
             "baseline_ref": baseline_ref,
             "candidate_ref": candidate_ref,
@@ -2000,6 +2020,9 @@ class MaintenanceStore:
                     invariant_result=invariant_result,
                     outcome=outcome,
                     request_fingerprint=request_fingerprint,
+                    epoch=epoch,
+                    run_id=run_id,
+                    lease_key=lease_key,
                 ),
             )
 
@@ -2021,7 +2044,16 @@ class MaintenanceStore:
         invariant_result: str,
         outcome: str,
         request_fingerprint: str,
+        epoch: int,
+        run_id: str,
+        lease_key: str,
     ) -> dict[str, Any]:
+        fence_err = self._assert_fence(
+            tx, lease_key=lease_key, run_id=run_id, epoch=epoch
+        )
+        if fence_err is not None:
+            return fence_err
+
         existing = _run_one(
             tx,
             """
@@ -2123,6 +2155,18 @@ class MaintenanceStore:
         reason_code = _optional_text(payload.get("reason_code"), "reason_code", MAX_REF_LEN)
         expires_at = _optional_text(payload.get("expires_at"), "expires_at", MAX_REF_LEN)
 
+        epoch = _require_int(
+            payload.get("epoch")
+            if payload.get("epoch") is not None
+            else payload.get("lease_epoch"),
+            "epoch",
+            min_value=1,
+        )
+        run_id = _require_id(payload.get("run_id"), "run_id")
+        lease_key = _require_id(
+            payload.get("lease_key") or DEFAULT_LEASE_KEY, "lease_key"
+        )
+
         identity = {
             "artifact_or_effect_hash": artifact_or_effect_hash,
             "before_fingerprint": before_fingerprint,
@@ -2150,6 +2194,9 @@ class MaintenanceStore:
                     reason_code=reason_code,
                     expires_at=expires_at,
                     request_fingerprint=request_fingerprint,
+                    epoch=epoch,
+                    run_id=run_id,
+                    lease_key=lease_key,
                 ),
             )
 
@@ -2170,7 +2217,16 @@ class MaintenanceStore:
         reason_code: str | None,
         expires_at: str | None,
         request_fingerprint: str,
+        epoch: int,
+        run_id: str,
+        lease_key: str,
     ) -> dict[str, Any]:
+        fence_err = self._assert_fence(
+            tx, lease_key=lease_key, run_id=run_id, epoch=epoch
+        )
+        if fence_err is not None:
+            return fence_err
+
         existing = _run_one(
             tx,
             """
@@ -2256,6 +2312,244 @@ class MaintenanceStore:
             "application_status": "not_applied",
         }
 
+    # ------------------------------------------------------------------
+    # Retention effect (thin fenced receipt; full policy is Task 8)
+    # ------------------------------------------------------------------
+
+    def record_retention_effect(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Record a minimal EffectReceipt for retention under the lease fence.
+
+        Does not apply full retention policy (Task 8). Only durable receipt
+        creation with run_id + epoch fence and effect_key idempotency.
+        """
+        if not isinstance(payload, dict):
+            raise TypeError("payload must be an object")
+        assert_no_absorption_field(payload)
+
+        effect_id = _require_id(payload.get("id"), "id")
+        effect_key = _require_id(
+            payload.get("effect_key") or effect_id, "effect_key"
+        )
+        run_id = _require_id(payload.get("run_id"), "run_id")
+        epoch = _require_int(
+            payload.get("epoch")
+            if payload.get("epoch") is not None
+            else payload.get("lease_epoch"),
+            "epoch",
+            min_value=1,
+        )
+        lease_key = _require_id(
+            payload.get("lease_key") or DEFAULT_LEASE_KEY, "lease_key"
+        )
+        effect_type = _require_id(
+            payload.get("effect_type") or "retention", "effect_type"
+        )
+        actor = _require_id(payload.get("actor") or "maintenance", "actor")
+        before_ref = _require_id(
+            payload.get("before_ref") or "retention:none", "before_ref"
+        )
+        after_ref = _optional_text(payload.get("after_ref"), "after_ref", MAX_REF_LEN)
+        proposal_id = _optional_text(payload.get("proposal_id"), "proposal_id", MAX_ID_LEN)
+        dream_id = _optional_text(
+            payload.get("dream_id") or run_id, "dream_id", MAX_ID_LEN
+        )
+        target_ref = _optional_text(payload.get("target_ref"), "target_ref", MAX_REF_LEN)
+        verification_status = _require_id(
+            payload.get("verification_status") or "recorded", "verification_status"
+        )
+        # Thin path always records as applied receipt; full retention verifies later.
+        effect_outcome = _require_id(
+            payload.get("effect_outcome") or "applied", "effect_outcome"
+        )
+
+        identity = {
+            "before_ref": before_ref,
+            "effect_key": effect_key,
+            "effect_type": effect_type,
+            "id": effect_id,
+            "run_id": run_id,
+            "target_ref": target_ref,
+        }
+        request_fingerprint = _digest_text(_canonical_json(identity))
+        request_hash = _require_id(
+            payload.get("request_hash") or request_fingerprint, "request_hash"
+        )
+
+        def operation(session: Any) -> dict[str, Any]:
+            return _execute_write(
+                session,
+                lambda tx: self._record_retention_effect_tx(
+                    tx,
+                    effect_id=effect_id,
+                    effect_key=effect_key,
+                    run_id=run_id,
+                    epoch=epoch,
+                    lease_key=lease_key,
+                    effect_type=effect_type,
+                    actor=actor,
+                    before_ref=before_ref,
+                    after_ref=after_ref,
+                    proposal_id=proposal_id,
+                    dream_id=dream_id,
+                    target_ref=target_ref,
+                    verification_status=verification_status,
+                    effect_outcome=effect_outcome,
+                    request_hash=request_hash,
+                    request_fingerprint=request_fingerprint,
+                ),
+            )
+
+        return self._with_session(operation)
+
+    def _record_retention_effect_tx(
+        self,
+        tx: Any,
+        *,
+        effect_id: str,
+        effect_key: str,
+        run_id: str,
+        epoch: int,
+        lease_key: str,
+        effect_type: str,
+        actor: str,
+        before_ref: str,
+        after_ref: str | None,
+        proposal_id: str | None,
+        dream_id: str | None,
+        target_ref: str | None,
+        verification_status: str,
+        effect_outcome: str,
+        request_hash: str,
+        request_fingerprint: str,
+    ) -> dict[str, Any]:
+        fence_err = self._assert_fence(
+            tx, lease_key=lease_key, run_id=run_id, epoch=epoch
+        )
+        if fence_err is not None:
+            return fence_err
+
+        existing = _run_one(
+            tx,
+            """
+            MATCH (r:Operational:EffectReceipt {id: $id})
+            RETURN r.id AS id,
+                   r.effect_key AS effect_key,
+                   r.request_fingerprint AS request_fingerprint,
+                   r.request_hash AS request_hash,
+                   r.outcome AS outcome,
+                   r.verification_status AS verification_status,
+                   r.fence_epoch AS fence_epoch
+            LIMIT 1
+            """,
+            {"id": effect_id},
+        )
+        if existing is not None:
+            if existing.get("request_fingerprint") == request_fingerprint:
+                return {
+                    "outcome": "replayed",
+                    "effect_id": existing["id"],
+                    "effect_key": existing.get("effect_key"),
+                    "effect_outcome": existing.get("outcome"),
+                    "request_fingerprint": existing.get("request_fingerprint"),
+                    "fence_epoch": existing.get("fence_epoch"),
+                }
+            return {
+                "outcome": "conflict",
+                "reason": "effect_id_reused",
+                "effect_id": existing["id"],
+            }
+
+        # Also conflict if same effect_key maps to a different id.
+        by_key = _run_one(
+            tx,
+            """
+            MATCH (r:Operational:EffectReceipt {effect_key: $effect_key})
+            RETURN r.id AS id,
+                   r.request_fingerprint AS request_fingerprint,
+                   r.outcome AS outcome,
+                   r.effect_key AS effect_key,
+                   r.fence_epoch AS fence_epoch
+            LIMIT 1
+            """,
+            {"effect_key": effect_key},
+        )
+        if by_key is not None:
+            if by_key.get("request_fingerprint") == request_fingerprint:
+                return {
+                    "outcome": "replayed",
+                    "effect_id": by_key["id"],
+                    "effect_key": by_key.get("effect_key"),
+                    "effect_outcome": by_key.get("outcome"),
+                    "request_fingerprint": by_key.get("request_fingerprint"),
+                    "fence_epoch": by_key.get("fence_epoch"),
+                }
+            return {
+                "outcome": "conflict",
+                "reason": "effect_key_reused",
+                "effect_id": by_key["id"],
+                "effect_key": effect_key,
+            }
+
+        created = _run_one(
+            tx,
+            """
+            CREATE (r:Operational:EffectReceipt)
+            SET r.id = $id,
+                r.effect_key = $effect_key,
+                r.request_hash = $request_hash,
+                r.request_fingerprint = $fp,
+                r.proposal_id = $proposal_id,
+                r.dream_id = $dream_id,
+                r.effect_type = $effect_type,
+                r.actor = $actor,
+                r.before_ref = $before_ref,
+                r.after_ref = $after_ref,
+                r.target_ref = $target_ref,
+                r.outcome = $effect_outcome,
+                r.verification_status = $verification_status,
+                r.fence_epoch = $epoch,
+                r.run_id = $run_id,
+                r.applied_at = datetime(),
+                r.created_at = datetime()
+            RETURN r.id AS id,
+                   r.effect_key AS effect_key,
+                   r.outcome AS outcome,
+                   r.fence_epoch AS fence_epoch,
+                   toString(r.applied_at) AS applied_at
+            """,
+            {
+                "id": effect_id,
+                "effect_key": effect_key,
+                "request_hash": request_hash,
+                "fp": request_fingerprint,
+                "proposal_id": proposal_id,
+                "dream_id": dream_id,
+                "effect_type": effect_type,
+                "actor": actor,
+                "before_ref": before_ref,
+                "after_ref": after_ref,
+                "target_ref": target_ref,
+                "effect_outcome": effect_outcome,
+                "verification_status": verification_status,
+                "epoch": epoch,
+                "run_id": run_id,
+            },
+        )
+        if created is None:
+            raise RuntimeError("EffectReceipt create returned no row")
+        return {
+            "outcome": "created",
+            "effect_id": created["id"],
+            "effect_key": created["effect_key"],
+            "effect_type": effect_type,
+            "effect_outcome": created["outcome"],
+            "verification_status": verification_status,
+            "fence_epoch": int(created["fence_epoch"]),
+            "run_id": run_id,
+            "request_fingerprint": request_fingerprint,
+            "applied_at": created.get("applied_at"),
+        }
+
     def dispatch(self, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Route a coordinator operation name to the matching store method."""
         handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -2269,6 +2563,7 @@ class MaintenanceStore:
             "create_proposal": self.create_proposal,
             "record_evaluation": self.record_evaluation,
             "record_decision": self.record_decision,
+            "record_retention_effect": self.record_retention_effect,
         }
         handler = handlers.get(operation)
         if handler is None:

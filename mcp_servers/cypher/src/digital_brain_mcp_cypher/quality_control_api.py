@@ -53,6 +53,7 @@ WORKFLOW_OPERATIONS: frozenset[str] = frozenset(
         "create_proposal",
         "record_evaluation",
         "record_decision",
+        "record_retention_effect",
     }
 )
 
@@ -69,6 +70,7 @@ COORDINATOR_FORBIDDEN_MCP_TOOL_NAMES: frozenset[str] = frozenset(
         "create_proposal",
         "record_evaluation",
         "record_decision",
+        "record_retention_effect",
         "activate_alias",
         "revoke_alias",
         "apply_alias",
