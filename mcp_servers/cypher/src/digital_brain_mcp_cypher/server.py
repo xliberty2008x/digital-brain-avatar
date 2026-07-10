@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import threading
 from typing import Any
@@ -26,7 +27,7 @@ from .journal import (
     build_append_request,
     replay_or_key_conflict,
 )
-from .quality import QualityStore
+from .quality import QualityStore, try_record_tool_outcome_run_event
 from .quality_control_api import handle_quality_control
 from .query_tools import (
     assert_general_write_allowed,
@@ -35,6 +36,8 @@ from .query_tools import (
     validate_embedding_usage,
     with_embedding_param,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 mcp = FastMCP("digital-brain-mcp-cypher")
@@ -152,6 +155,45 @@ def _ensure_quality_schema() -> None:
         _quality_schema_ready = True
 
 
+def _record_deterministic_run_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Trusted MCP-side recorder for instrumented tool outcomes."""
+    try:
+        _ensure_quality_schema()
+    except Exception as exc:  # noqa: BLE001 — best-effort schema
+        _logger.debug("quality schema ensure during instrumentation: %s", exc)
+    return _quality_store().record_deterministic_run_event(event)
+
+
+def _instrument_mcp_tool_outcome(
+    *,
+    tool: str,
+    tool_outcome: str,
+    route: str,
+    error_class: str | None = None,
+    redacted_summary: str | None = None,
+) -> None:
+    """Best-effort MCP-attributed RunEvent; never raises into the tool path."""
+    try_record_tool_outcome_run_event(
+        _record_deterministic_run_event,
+        tool=tool,
+        tool_outcome=tool_outcome,
+        route=route,
+        outcome_source="mcp",
+        error_class=error_class,
+        redacted_summary=redacted_summary,
+    )
+
+
+def _error_class_for_exception(exc: BaseException) -> str:
+    name = type(exc).__name__
+    message = str(exc).lower()
+    if "timeout" in name.lower() or "timeout" in message:
+        return "query_timeout"
+    if isinstance(exc, ValueError):
+        return "validation_error"
+    return "query_error"
+
+
 def _readiness() -> tuple[bool, dict[str, str]]:
     """Check both required dependencies without exposing upstream diagnostics."""
     try:
@@ -253,9 +295,25 @@ def read_neo4j_cypher(
     params: dict[str, Any] | None = Field(default=None, description="Cypher parameters"),
     embed_text: str | None = Field(default=None, description="Text to embed into `$embedding`"),
 ) -> str:
-    assert_read_only(query)
-    embedding = generate_embedding(embed_text)
-    rows = _run_cypher(query, with_embedding_param(params, embedding), write=False)
+    try:
+        assert_read_only(query)
+        embedding = generate_embedding(embed_text)
+        rows = _run_cypher(query, with_embedding_param(params, embedding), write=False)
+    except Exception as exc:
+        _instrument_mcp_tool_outcome(
+            tool="read_neo4j_cypher",
+            tool_outcome="fail",
+            route="READ",
+            error_class=_error_class_for_exception(exc),
+        )
+        raise
+    if not rows:
+        _instrument_mcp_tool_outcome(
+            tool="read_neo4j_cypher",
+            tool_outcome="empty",
+            route="READ",
+            error_class="no_hits",
+        )
     return json.dumps(rows, ensure_ascii=False, default=str)
 
 
@@ -280,10 +338,19 @@ def write_neo4j_cypher(
     params: dict[str, Any] | None = Field(default=None, description="Cypher parameters"),
     embed_text: str | None = Field(default=None, description="Text to embed into `$embedding`"),
 ) -> str:
-    assert_general_write_allowed(query)
-    validate_embedding_usage(query, embed_text)
-    embedding = generate_embedding(embed_text)
-    rows = _run_cypher(query, with_embedding_param(params, embedding), write=True)
+    try:
+        assert_general_write_allowed(query)
+        validate_embedding_usage(query, embed_text)
+        embedding = generate_embedding(embed_text)
+        rows = _run_cypher(query, with_embedding_param(params, embedding), write=True)
+    except Exception as exc:
+        _instrument_mcp_tool_outcome(
+            tool="write_neo4j_cypher",
+            tool_outcome="fail",
+            route="WRITE",
+            error_class=_error_class_for_exception(exc),
+        )
+        raise
     return json.dumps(rows, ensure_ascii=False, default=str)
 
 
@@ -352,9 +419,11 @@ def bootstrap_journal_chain(
     annotations=ToolAnnotations(
         title="Get Quality Receipt",
         description=(
-            "Look up a quality/control EffectReceipt by stable id. "
-            "Model-facing recorder/read surface only; coordinator mutations "
-            "use the authenticated local control API."
+            "Look up a quality sensor/control receipt by stable id. Resolves "
+            "Feedback, RunEvent, FeedbackLifecycleEvent, and EffectReceipt. "
+            "Use after transport timeout instead of blind-retrying a write. "
+            "Model-facing read surface; coordinator mutations use the "
+            "authenticated local control API."
         ),
         readOnlyHint=True,
         destructiveHint=False,
@@ -362,7 +431,13 @@ def bootstrap_journal_chain(
     )
 )
 def get_quality_receipt(
-    receipt_id: str = Field(..., description="Stable EffectReceipt id"),
+    receipt_id: str = Field(
+        ...,
+        description=(
+            "Stable id for Feedback, RunEvent, FeedbackLifecycleEvent, or "
+            "EffectReceipt reconciliation"
+        ),
+    ),
 ) -> str:
     """Read-only quality receipt reconciliation helper."""
     try:
@@ -703,11 +778,15 @@ def append_journal_entry(
 
     existing_receipt = store.find_receipt(request.append_key)
     if existing_receipt is not None:
-        return json.dumps(
-            replay_or_key_conflict(existing_receipt, request),
-            ensure_ascii=False,
-            default=str,
-        )
+        payload = replay_or_key_conflict(existing_receipt, request)
+        if payload.get("outcome") == "conflict":
+            _instrument_mcp_tool_outcome(
+                tool="append_journal_entry",
+                tool_outcome="conflict",
+                route="WRITE",
+                error_class="append_key_conflict",
+            )
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
     chain = store.get_chain_head(PRIMARY_JOURNAL_CHAIN_KEY)
     if chain["outcome"] != "ok":
@@ -721,6 +800,14 @@ def append_journal_entry(
         # invariant if an embedding provider is replaced in-process.
         raise RuntimeError("Journal append did not receive an embedding")
     payload = store.append(request.with_embedding(embedding), PRIMARY_JOURNAL_CHAIN_KEY)
+    if payload.get("outcome") == "conflict":
+        reason = str(payload.get("reason") or "chain_conflict")
+        _instrument_mcp_tool_outcome(
+            tool="append_journal_entry",
+            tool_outcome="conflict",
+            route="WRITE",
+            error_class=reason if len(reason) <= 128 else "chain_conflict",
+        )
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 

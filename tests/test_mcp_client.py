@@ -13,6 +13,7 @@ from digital_brain.tools.mcp_client import (
     get_quality_receipt,
     record_run_event,
     revoke_feedback,
+    set_host_deterministic_run_event_recorder,
     McpWriteOutcomeUnknown,
 )
 
@@ -166,6 +167,76 @@ class McpClientTests(IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(session.calls, 1)
+
+    async def test_write_timeout_call_site_emits_host_run_event(self) -> None:
+        """Host path: McpWriteOutcomeUnknown on write tools records host RunEvent."""
+        recorded: list[dict] = []
+
+        def recorder(event: dict) -> dict:
+            recorded.append(event)
+            return {"outcome": "created", "run_event_id": event.get("id")}
+
+        set_host_deterministic_run_event_recorder(recorder)
+        session = _FailingSession()
+        try:
+            with patch.dict(
+                "os.environ",
+                {"DIGITAL_BRAIN_HARNESS_GENERATION_ID": "hg-host-pin"},
+                clear=False,
+            ):
+                with patch(
+                    "digital_brain.tools.mcp_client.aiohttp.ClientSession",
+                    return_value=session,
+                ):
+                    with self.assertRaises(McpWriteOutcomeUnknown):
+                        await call_mcp_tool(
+                            "append_journal_entry",
+                            {
+                                "append_key": "00000000-0000-4000-8000-000000000002",
+                                "content": "memory",
+                                "timestamp": "2026-07-09T00:00:00Z",
+                                "expected_version": 0,
+                            },
+                        )
+        finally:
+            set_host_deterministic_run_event_recorder(None)
+
+        self.assertEqual(len(recorded), 1)
+        event = recorded[0]
+        self.assertEqual(event["tool"], "append_journal_entry")
+        self.assertEqual(event["tool_outcome"], "timeout")
+        self.assertEqual(event["route"], "WRITE")
+        self.assertEqual(event["outcome_source"], "host")
+        self.assertEqual(event["harness_generation_id"], "hg-host-pin")
+        self.assertIn(event.get("error_class"), {"mcp_timeout", "mcp_transport_unknown"})
+
+    async def test_write_timeout_instrumentation_failure_still_raises_unknown(
+        self,
+    ) -> None:
+        """Best-effort: broken host recorder must not swallow McpWriteOutcomeUnknown."""
+
+        def boom(_event: dict) -> dict:
+            raise RuntimeError("host quality store down")
+
+        set_host_deterministic_run_event_recorder(boom)
+        session = _FailingSession()
+        try:
+            with patch.dict(
+                "os.environ",
+                {"DIGITAL_BRAIN_HARNESS_GENERATION_ID": "hg-host-pin"},
+                clear=False,
+            ):
+                with patch(
+                    "digital_brain.tools.mcp_client.aiohttp.ClientSession",
+                    return_value=session,
+                ):
+                    with self.assertRaises(McpWriteOutcomeUnknown):
+                        await call_mcp_tool(
+                            "write_neo4j_cypher",
+                            {"query": "MERGE (t:Topic {id: 'x'})"},
+                        )
+        finally:
+            set_host_deterministic_run_event_recorder(None)
 
     async def test_create_feedback_passes_stable_payload(self) -> None:
         response = {

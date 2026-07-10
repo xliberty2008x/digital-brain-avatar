@@ -24,6 +24,9 @@ from digital_brain_mcp_cypher.quality import (  # noqa: E402
     compute_raw_hmac,
     compute_sensor_request_fingerprint,
     feedback_identity_payload,
+    mint_tool_outcome_event_id,
+    resolve_session_harness_generation_id,
+    try_record_tool_outcome_run_event,
 )
 
 
@@ -578,6 +581,66 @@ def test_deterministic_independent_of_model_prose():
     out = store.record_deterministic_run_event(payload)
     assert out["outcome_source"] == "host"
     assert out["tool_outcome"] == "timeout"
+
+
+def test_try_record_tool_outcome_best_effort_uses_session_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession()
+    store = _store_with(session)
+    monkeypatch.setenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", GENERATION_ID)
+
+    out = try_record_tool_outcome_run_event(
+        store.record_deterministic_run_event,
+        tool="read_neo4j_cypher",
+        tool_outcome="empty",
+        route="READ",
+        outcome_source="mcp",
+        error_class="no_hits",
+        event_id="re-try-record-empty",
+    )
+    assert out is not None
+    assert out["outcome"] == "created"
+    assert out["harness_generation_id"] == GENERATION_ID
+    assert session.run_events["re-try-record-empty"]["outcome_source"] == "mcp"
+
+    # Missing pin → skip (do not raise).
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
+    skipped = try_record_tool_outcome_run_event(
+        store.record_deterministic_run_event,
+        tool="read_neo4j_cypher",
+        tool_outcome="empty",
+        route="READ",
+        outcome_source="mcp",
+    )
+    assert skipped is None
+
+    # Recorder failure → swallow.
+    def boom(_event: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("store down")
+
+    monkeypatch.setenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", GENERATION_ID)
+    assert (
+        try_record_tool_outcome_run_event(
+            boom,
+            tool="write_neo4j_cypher",
+            tool_outcome="fail",
+            route="WRITE",
+            outcome_source="mcp",
+        )
+        is None
+    )
+
+
+def test_resolve_and_mint_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert mint_tool_outcome_event_id("read_neo4j_cypher", "empty").startswith(
+        "re-read_neo4j_cypher-empty-"
+    )
+    assert resolve_session_harness_generation_id(GENERATION_ID) == GENERATION_ID
+    monkeypatch.delenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", raising=False)
+    assert resolve_session_harness_generation_id(None) is None
+    monkeypatch.setenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID", GENERATION_ID)
+    assert resolve_session_harness_generation_id(None) == GENERATION_ID
 
 
 def test_get_receipt_finds_feedback_and_run_event():

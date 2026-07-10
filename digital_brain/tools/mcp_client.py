@@ -8,12 +8,15 @@ Includes retry logic for local MCP startup and temporary unavailability.
 import aiohttp
 import asyncio
 import json
+import logging
 import os
-from typing import Any
+from typing import Any, Callable
 
 from ..config import DEFAULT_LOCAL_MCP_URL, get_mcp_url
 
 DEFAULT_MCP_URL = DEFAULT_LOCAL_MCP_URL
+
+_logger = logging.getLogger(__name__)
 
 # Retry configuration for MCP startup or temporary unavailability.  A retry is
 # safe only for read-style tools; a timed-out generic write may already have
@@ -41,7 +44,35 @@ _QUALITY_SENSOR_WRITE_TOOLS = frozenset(
     }
 )
 
+# Write tools whose client-side timeout is a meaningful host RunEvent.
+_WRITE_TIMEOUT_INSTRUMENT_TOOLS = frozenset(
+    {
+        "write_neo4j_cypher",
+        "append_journal_entry",
+        "create_feedback",
+        "revoke_feedback",
+        "record_run_event",
+        "record_harness_generation",
+        "bootstrap_journal_chain",
+    }
+)
+
 MCP_PROTOCOL_VERSION = "2024-11-05"
+
+# Optional host-side trusted recorder for deterministic RunEvents.
+# Production may inject QualityStore.record_deterministic_run_event; tests
+# inject a spy. Model-facing record_run_event must never be used here.
+_host_deterministic_run_event_recorder: (
+    Callable[[dict[str, Any]], dict[str, Any]] | None
+) = None
+
+
+def set_host_deterministic_run_event_recorder(
+    recorder: Callable[[dict[str, Any]], dict[str, Any]] | None,
+) -> None:
+    """Inject the trusted host recorder (or clear with None)."""
+    global _host_deterministic_run_event_recorder
+    _host_deterministic_run_event_recorder = recorder
 
 
 class McpWriteOutcomeUnknown(RuntimeError):
@@ -218,6 +249,16 @@ async def call_mcp_tool(
             else:
                 print(f"❌ MCP call failed after {max_retries} retries: {e}")
                 if not retry_safe:
+                    if tool_name in _WRITE_TIMEOUT_INSTRUMENT_TOOLS:
+                        is_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError))
+                        _best_effort_host_tool_outcome(
+                            tool=tool_name,
+                            tool_outcome="timeout",
+                            route="WRITE",
+                            error_class=(
+                                "mcp_timeout" if is_timeout else "mcp_transport_unknown"
+                            ),
+                        )
                     raise McpWriteOutcomeUnknown(tool_name, arguments, e) from e
                 raise
         except Exception as e:
@@ -277,6 +318,8 @@ async def append_journal_entry(
     }
     if properties:
         arguments["properties"] = properties
+    # WRITE conflict is instrumented server-side (mcp source). Client timeout
+    # is instrumented in call_mcp_tool as host-attributed RunEvent.
     return _tool_content_json(await call_mcp_tool("append_journal_entry", arguments))
 
 
@@ -356,6 +399,76 @@ def _session_harness_generation_id(explicit: str | None = None) -> str:
             "(set DIGITAL_BRAIN_HARNESS_GENERATION_ID or pass explicitly)"
         )
     return pinned
+
+
+def _best_effort_host_tool_outcome(
+    *,
+    tool: str,
+    tool_outcome: str,
+    route: str,
+    error_class: str | None = None,
+    harness_generation_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Host-attributed deterministic RunEvent; never breaks the primary path.
+
+    Uses the injected trusted recorder when set. Falls back to importing
+    ``try_record_tool_outcome_run_event`` so call sites stay independent of
+    model-facing ``record_run_event``.
+    """
+    try:
+        from digital_brain_mcp_cypher.quality import (  # type: ignore[import-not-found]
+            try_record_tool_outcome_run_event,
+        )
+    except Exception:
+        # When the MCP package is not importable, still try the injected hook.
+        try_record_tool_outcome_run_event = None  # type: ignore[assignment]
+
+    generation_id: str | None
+    try:
+        generation_id = _session_harness_generation_id(harness_generation_id)
+    except ValueError:
+        generation_id = None
+
+    if try_record_tool_outcome_run_event is not None:
+        return try_record_tool_outcome_run_event(
+            _host_deterministic_run_event_recorder,
+            tool=tool,
+            tool_outcome=tool_outcome,
+            route=route,
+            outcome_source="host",
+            harness_generation_id=generation_id,
+            error_class=error_class,
+        )
+
+    # Minimal fallback when quality helpers are unavailable.
+    if _host_deterministic_run_event_recorder is None or generation_id is None:
+        return None
+    try:
+        import uuid
+
+        event = {
+            "id": f"re-{tool}-{tool_outcome}-{uuid.uuid4().hex[:16]}",
+            "harness_generation_id": generation_id,
+            "route": route,
+            "tool": tool,
+            "tool_outcome": tool_outcome,
+            "outcome_source": "host",
+            "error_class": error_class,
+            "entity_refs": [],
+            "journal_refs": [],
+            "sensitivity": "public_ops",
+            "schema_version": "1",
+            "taxonomy_version": "1",
+        }
+        return _host_deterministic_run_event_recorder(event)
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        _logger.warning(
+            "host tool-outcome instrumentation failed (%s/%s): %s",
+            tool,
+            tool_outcome,
+            exc,
+        )
+        return None
 
 
 async def _quality_write_with_receipt_reconcile(

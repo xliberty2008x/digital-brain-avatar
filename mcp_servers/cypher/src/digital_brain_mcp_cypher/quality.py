@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
+import uuid
 from typing import Any, Callable, Mapping
+
+_logger = logging.getLogger(__name__)
 
 # Must match digital_brain.maintenance.models.GENERATION_ID_PREFIX / algorithm.
 _GENERATION_ID_PREFIX = "hg-"
@@ -1622,6 +1627,89 @@ def build_tool_outcome_run_event(
         "schema_version": RUN_EVENT_SCHEMA_VERSION,
         "taxonomy_version": SENSOR_TAXONOMY_VERSION,
     }
+
+
+def resolve_session_harness_generation_id(
+    explicit: str | None = None,
+) -> str | None:
+    """Prefer explicit pin; else ``DIGITAL_BRAIN_HARNESS_GENERATION_ID``.
+
+    Returns ``None`` when neither is set (instrumentation must skip, not fail
+    the primary tool path).
+    """
+    if explicit is not None and str(explicit).strip():
+        return str(explicit).strip()
+    pinned = (os.getenv("DIGITAL_BRAIN_HARNESS_GENERATION_ID") or "").strip()
+    return pinned or None
+
+
+def mint_tool_outcome_event_id(tool: str, tool_outcome: str) -> str:
+    """Stable-prefix event id for instrumented tool outcomes (unique per emit)."""
+    safe_tool = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in tool)[
+        :48
+    ]
+    safe_outcome = "".join(
+        ch if ch.isalnum() or ch in "-_" else "-" for ch in tool_outcome
+    )[:24]
+    return f"re-{safe_tool}-{safe_outcome}-{uuid.uuid4().hex[:16]}"
+
+
+def try_record_tool_outcome_run_event(
+    record_fn: Callable[[dict[str, Any]], dict[str, Any]] | None,
+    *,
+    tool: str,
+    tool_outcome: str,
+    route: str,
+    outcome_source: str,
+    harness_generation_id: str | None = None,
+    error_class: str | None = None,
+    approach: str | None = None,
+    redacted_summary: str | None = None,
+    latency_ms: int | None = None,
+    session_ref: str | None = None,
+    event_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Best-effort deterministic tool-outcome RunEvent recording.
+
+    Never raises: instrumentation must not break the primary tool path.
+    Skips when ``record_fn`` is missing or no session harness pin is available.
+    Uses :func:`build_tool_outcome_run_event` + trusted ``record_fn``
+    (typically ``QualityStore.record_deterministic_run_event``).
+    """
+    if record_fn is None:
+        return None
+    generation_id = resolve_session_harness_generation_id(harness_generation_id)
+    if generation_id is None:
+        _logger.debug(
+            "skip tool-outcome RunEvent (%s/%s): no harness_generation_id pin",
+            tool,
+            tool_outcome,
+        )
+        return None
+    try:
+        payload = build_tool_outcome_run_event(
+            event_id=event_id
+            or mint_tool_outcome_event_id(tool, tool_outcome),
+            harness_generation_id=generation_id,
+            tool=tool,
+            tool_outcome=tool_outcome,
+            route=route,
+            outcome_source=outcome_source,
+            error_class=error_class,
+            approach=approach,
+            redacted_summary=redacted_summary,
+            latency_ms=latency_ms,
+            session_ref=session_ref,
+        )
+        return record_fn(payload)
+    except Exception as exc:  # noqa: BLE001 — best-effort instrumentation
+        _logger.warning(
+            "tool-outcome RunEvent instrumentation failed (%s/%s): %s",
+            tool,
+            tool_outcome,
+            exc,
+        )
+        return None
 
 
 def _now_iso(runner: Any) -> str:
