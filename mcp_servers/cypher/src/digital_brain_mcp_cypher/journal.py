@@ -438,11 +438,16 @@ class JournalStore:
 
             actual_version = int(chain_payload["version"])
             if actual_version != request.expected_version:
+                # Do not put the current head id in `journal_id`. Callers that
+                # treat journal_id as "the entry for this append_key" would
+                # otherwise post-link entities to the wrong node.
                 return {
                     "outcome": "conflict",
                     "reason": "stale_version",
                     "append_key": request.append_key,
-                    "journal_id": chain_payload["journal_id"],
+                    "requested_journal_id": request.journal_id,
+                    "journal_id": None,
+                    "current_head_journal_id": chain_payload["journal_id"],
                     "version": actual_version,
                     "previous_journal_id": chain_payload["journal_id"],
                 }
@@ -482,7 +487,9 @@ class JournalStore:
                     "outcome": "conflict",
                     "reason": "chain_changed",
                     "append_key": request.append_key,
-                    "journal_id": chain_payload["journal_id"],
+                    "requested_journal_id": request.journal_id,
+                    "journal_id": None,
+                    "current_head_journal_id": chain_payload["journal_id"],
                     "version": actual_version,
                     "previous_journal_id": chain_payload["journal_id"],
                 }

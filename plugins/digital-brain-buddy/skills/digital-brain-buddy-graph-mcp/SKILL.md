@@ -14,11 +14,12 @@ Use this skill when Codex needs to inspect or mutate the `avatar_digital_brain` 
 2. Treat runtime code and live schema as the source of truth.
 
 3. If docs conflict with code or live schema, prefer:
+- `mcp_servers/cypher/src/digital_brain_mcp_cypher/journal.py` (append protocol)
+- `mcp_servers/cypher/src/digital_brain_mcp_cypher/query_tools.py` (generic write guard)
+- `mcp_servers/cypher/src/digital_brain_mcp_cypher/server.py` (MCP tools)
 - `digital_brain/tools/mcp_client.py`
 - `digital_brain/services/entity_resolver.py`
-- `digital_brain/services/recent_entries_service.py`
-- `digital_brain/services/core_entity_service.py`
-- `digital_brain/callbacks/journal_chain_guard.py`
+- `digital_brain/callbacks/journal_chain_guard.py` (ADK defense-in-depth only)
 - live `get_neo4j_schema`
 
 ## MCP Tools
@@ -80,9 +81,12 @@ Rules:
 
 1. Mint one UUID `append_key`, then fetch `get_journal_chain_head()` immediately before append.
 
-2. Call `append_journal_entry` with the returned `expected_version`. The server creates the explicit stable id, embedding, HEAD and FOLLOWS atomically.
+2. Call `append_journal_entry` with the returned `expected_version`. The server
+   creates the stable id and embedding; first entry is HEAD-only, later entries
+   also create FOLLOWS. Embedding runs outside the Neo4j lock.
 
-3. On timeout, inspect `get_journal_append_receipt(append_key)`; never submit a new raw write or a new key blindly.
+3. On timeout, inspect `get_journal_append_receipt(append_key)` (`found` |
+   `not_found`); never submit a new raw write or a new key blindly.
 
 4. Reuse existing entities.
 - `MERGE` by `id` when it exists.

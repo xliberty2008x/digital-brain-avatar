@@ -23,7 +23,7 @@ This document defines the strict structure and rules for node creation and relat
 
 | Label | Required Properties | Description |
 | :--- | :--- | :--- |
-| **JournalEntry** | `id`, `append_key`, `content`, `timestamp`, `mood`, `embedding` | The raw thought captured from the user. `append_key` is the idempotency key for new writes. |
+| **JournalEntry** | `id`, `append_key`, `content`, `timestamp`, `embedding`, `request_fingerprint`, `chain_version` | The raw thought captured from the user. `append_key` is the idempotency key for new writes. Optional: `mood`, `previous_journal_id`, `previous_element_id`. |
 | **JournalChain** | `key`, `version` | Server-owned primary append cursor; never inferred from timestamp order. |
 | **Alias** | `from_name`, `to_name`, `canonical_id` | Metadata for "learned" entity resolution. |
 | **LearningLog** | `type`, `entity`, `timestamp` | Audit log of merges and self-corrections. |
@@ -66,8 +66,11 @@ Relationships define the "web of thought". Direction matters.
 - **Relationship Types**: UPPER_SNAKE_CASE (e.g., `MENTIONS`).
 
 ### Rule 3: Psychological Integrity
-- A `JournalEntry` must capture the `mood` of the user at that moment.
+- A `JournalEntry` should capture `mood` when clearly supported by the content
+  (mood is optional on the append API and may be omitted).
 - If the user describes another person's mood, it must be linked via `(Person)-[:EXPERIENCED]->(State)`.
+- Post-append mutations must `MATCH (j:JournalEntry {id: $journal_id})` and
+  never set protected receipt/chain fields or create FOLLOWS/HEAD.
 
 ### Rule 4: Self-Hexing (Prevention of Duplicates)
 - Every write operation is subject to **Phase 3 Reflex Loop**.

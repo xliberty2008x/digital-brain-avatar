@@ -303,12 +303,83 @@ def test_stale_version_conflicts_without_creating_a_node() -> None:
         "outcome": "conflict",
         "reason": "stale_version",
         "append_key": request.append_key,
-        "journal_id": "legacy-head",
+        "requested_journal_id": request.journal_id,
+        "journal_id": None,
+        "current_head_journal_id": "legacy-head",
         "version": 2,
         "previous_journal_id": "legacy-head",
     }
     assert "create_first" not in [name for name, _ in transaction.calls]
     assert "create_next" not in [name for name, _ in transaction.calls]
+
+
+def test_same_key_different_fingerprint_is_key_reuse_conflict() -> None:
+    request = _request()
+    receipt = _created(2, "legacy-head")
+    receipt["request_fingerprint"] = "different-fingerprint"
+    store, transaction = _store(
+        {
+            "lock": [{"chain_element_id": "chain"}],
+            "receipt": [receipt],
+            "unlock": [None],
+        }
+    )
+
+    payload = store.append(request)
+
+    assert payload["outcome"] == "conflict"
+    assert payload["reason"] == "append_key_reused"
+    assert payload["journal_id"] == request.journal_id
+    assert "create_next" not in [name for name, _ in transaction.calls]
+    assert "create_first" not in [name for name, _ in transaction.calls]
+
+
+def test_lock_miss_reports_chain_uninitialized() -> None:
+    request = _request()
+    store, transaction = _store({"lock": [None]})
+
+    payload = store.append(request)
+
+    assert payload["outcome"] == "chain_uninitialized"
+    assert payload["append_key"] == request.append_key
+    assert [name for name, _ in transaction.calls] == ["lock"]
+
+
+def test_multiple_heads_are_chain_invalid() -> None:
+    store, _ = _store(
+        {
+            "chain_state": [
+                {
+                    "version": 1,
+                    "heads": [
+                        {
+                            "journal_id": "a",
+                            "element_id": "e1",
+                            "append_key": None,
+                            "timestamp": None,
+                            "mood": None,
+                            "journal_version": 1,
+                            "previous_journal_id": None,
+                        },
+                        {
+                            "journal_id": "b",
+                            "element_id": "e2",
+                            "append_key": None,
+                            "timestamp": None,
+                            "mood": None,
+                            "journal_version": 1,
+                            "previous_journal_id": None,
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+
+    payload = store.get_chain_head()
+
+    assert payload["outcome"] == "chain_invalid"
+    assert payload["reason"] == "multiple_heads"
 
 
 def test_receipt_reports_not_found_without_journal_content() -> None:

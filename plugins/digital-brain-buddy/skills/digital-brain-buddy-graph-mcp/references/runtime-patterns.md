@@ -97,21 +97,31 @@ Type-specific patterns:
 1. Call `get_journal_chain_head()` immediately before mutation.
 2. Call `append_journal_entry(append_key, content, timestamp, mood,
    expected_version, properties?)`.
-3. The server validates the fingerprint, generates the embedding, locks the
-   chain node, updates HEAD, creates FOLLOWS, and increments version in one
-   transaction.
-4. Outcomes are `created`, `replayed`, or `conflict`. A timeout is reconciled
-   with `get_journal_append_receipt(append_key)`.
+3. Server order of operations:
+   - build request + fingerprint (pre-tx)
+   - receipt lookup (no lock); return `replayed` / `append_key_reused` if hit
+   - head/version check (no lock)
+   - ensure constraints
+   - **generate embedding outside the Neo4j write transaction**
+   - lock → recheck receipt → CAS version → create entry → unlock
+4. First entry on an empty/bootstrapped chain sets `HEAD` only (no `FOLLOWS`).
+   Subsequent appends create `FOLLOWS` to the previous head.
+5. Append outcomes: `created`, `replayed`, or `conflict` (plus
+   `chain_uninitialized` / `chain_invalid`). A timeout is reconciled with
+   `get_journal_append_receipt(append_key)`, which returns only `found` or
+   `not_found`.
 
-Generic `write_neo4j_cypher` rejects JournalEntry and FOLLOWS creation.
+Generic `write_neo4j_cypher` is MERGE-only for post-append links. It rejects
+JournalEntry/FOLLOWS/HEAD/JournalChain creation, DELETE/DETACH/REMOVE, full
+node replacement, and protected field mutation.
 
 ### Execution path
 
 `digital_brain/agents/executor.py`
 
-- all mutations go through `write_neo4j_cypher`
-- JournalEntry core writes go through `append_journal_entry`; generic Cypher is
-  limited to idempotent post-append links
+- JournalEntry core writes go through `append_journal_entry`
+- chain head/receipt helpers are used for CAS and timeout reconciliation
+- generic Cypher is limited to idempotent post-append links
 
 ## Live Graph Snapshot Checked On 2026-04-08
 
@@ -133,7 +143,8 @@ Direct MCP queries showed:
 
 Interpretation:
 
-- `FOLLOWS` is the dominant chain relation and should be the default for new writes.
+- `FOLLOWS` is the historical chain relation; the server append protocol creates
+  it (when a previous head exists). Callers must never emit raw `FOLLOWS`.
 - Generic `MENTIONS` is still the dominant mention relation in the live graph.
 - Typed mention relations also exist and are real, not theoretical.
 
@@ -301,6 +312,11 @@ receipt = append_journal_entry(
 )
 ```
 
-For `created` or matching `replayed`, use `receipt.journal_id` in
-idempotent post-append `MATCH`/`MERGE` queries. For `conflict`, no node has
-been created: read the head again and make an explicit new append decision.
+For append `created` or `replayed`, use `journal_id` in idempotent post-append
+`MATCH`/`MERGE` queries. On transport timeout, `get_journal_append_receipt`
+returns `found` (use its `journal_id`) or `not_found` (retry same key/payload).
+
+Conflict recovery:
+- `stale_version` / `chain_changed`: re-read head; retry **same** key + payload
+  with the new `expected_version` (`journal_id` is null on these conflicts).
+- `append_key_reused`: do not reuse that key for different content.

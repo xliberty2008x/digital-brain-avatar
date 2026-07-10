@@ -17,20 +17,27 @@ Use this skill for one bounded persistence task. Read
 4. Call `append_journal_entry(append_key, content, timestamp, mood,
    expected_version, properties?)` exactly once.
 5. On timeout or transport uncertainty, call `get_journal_append_receipt` with
-   the same key. A `created` or matching `replayed` receipt is success; a
-   `conflict` creates no node and requires a fresh head read before a new
-   append attempt.
-6. Only after a successful append, create entity links with idempotent
-   `MATCH`/`MERGE` Cypher using the returned `journal_id`. Never create a
-   JournalEntry or `FOLLOWS` through `write_neo4j_cypher`.
+   the same key. Receipt outcomes are only:
+   - `found` — entry exists for this key (success; use its `journal_id`)
+   - `not_found` — safe to retry the **same** append payload and key once
+   Append tool outcomes (`created` / `replayed` / `conflict`) are separate.
+6. Conflict recovery for `append_journal_entry`:
+   - `stale_version` / `chain_changed`: re-read head; retry **same** key +
+     same content/timestamp/mood/properties with the new `expected_version`.
+     `journal_id` is null on these conflicts; do not post-link using the head.
+   - `append_key_reused`: stop; only mint a new key for a truly different entry.
+7. Only after append `created`/`replayed` (or receipt `found`), create entity
+   links with idempotent `MATCH`/`MERGE` Cypher using that `journal_id`. Never
+   create a JournalEntry or `FOLLOWS` through `write_neo4j_cypher`.
 
 ## Output
 
 Return a compact mutation report:
 
-- append outcome (`created`, `replayed`, or `conflict`)
+- append outcome (`created`, `replayed`, or `conflict`) or receipt (`found` /
+  `not_found`)
 - journal id and append key
-- chain version and previous journal id when supplied by the receipt
+- chain version and previous journal id when supplied
 - entities reused/created and any incomplete post-append links
 
 ## Do not
@@ -38,5 +45,6 @@ Return a compact mutation report:
 - Do not create more than one JournalEntry unless explicitly asked.
 - Do not use `embed_text`, raw `CREATE (:JournalEntry)`, or raw `FOLLOWS`.
 - Do not mint a new append key after timeout.
+- Do not treat receipt `found` as `created`/`replayed` vocabulary.
 - Do not run unresolved writer tasks in parallel.
 - Do not answer the user in buddy voice.

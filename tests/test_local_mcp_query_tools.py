@@ -184,6 +184,55 @@ def test_general_write_rejects_escaped_labels_and_chain_protocol_mutations():
             raise AssertionError(f"expected protected-write rejection for {query}")
 
 
+def test_general_write_rejects_full_node_replacement_and_multi_label_journal_mint():
+    for query in (
+        "MATCH (j:JournalEntry {id: $id}) SET j = {content: 'hack', embedding: null}",
+        "MATCH (j:JournalEntry {id: $id}) SET j = $props",
+        "CREATE (n {id: $id}) SET n:Person:JournalEntry",
+        "CREATE (n {key: 'primary'}) SET n:Foo:JournalChain",
+        "MATCH (n) SET n:`Person`:`JournalEntry`",
+    ):
+        try:
+            assert_general_write_allowed(query)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected rejection for {query}")
+
+
+def test_general_write_rejects_destructive_and_unlabeled_chain_bypasses():
+    for query in (
+        "MATCH (n {id: $id}) DETACH DELETE n",
+        "MATCH (n) WHERE n.append_key = $k DETACH DELETE n",
+        "MATCH ()-[r]->() WHERE type(r) = 'FOLLOWS' DELETE r",
+        "MATCH ()-[r]->() WHERE type(r) = 'HEAD' DELETE r",
+        "MATCH (n) WHERE n.append_key IS NOT NULL SET n.content = 'x'",
+        "MATCH (j:JournalEntry) REMOVE j:JournalEntry",
+        "MATCH (n) WHERE n.key = 'primary' SET n.version = 999",
+        "MATCH (j:JournalEntry {id: $id}) SET j['append_key'] = $k",
+    ):
+        try:
+            assert_general_write_allowed(query)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected rejection for {query}")
+
+
+def test_general_write_allows_idempotent_post_append_links_and_non_reserved_sets():
+    assert_general_write_allowed(
+        "MATCH (j:JournalEntry {id: $journal_id}) "
+        "MERGE (e:Event {id: $append_key + '-event-1'}) "
+        "MERGE (j)-[:DOCUMENTS]->(e)"
+    )
+    assert_general_write_allowed(
+        "MATCH (j:JournalEntry {id: $journal_id}) SET j.summary = 'ok'"
+    )
+    assert_general_write_allowed(
+        "MATCH (j:JournalEntry {id: $journal_id}) SET j += {summary: 'ok', source: 'buddy'}"
+    )
+
+
 def test_read_only_rejects_dynamic_procedure_escape_hatch_but_allows_vector_search():
     try:
         assert_read_only("CALL apoc.cypher.run($query, {}) YIELD value RETURN value")

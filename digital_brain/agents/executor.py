@@ -34,19 +34,30 @@ executor_agent = LlmAgent(
     2. Call append_journal_entry exactly once using the structured `journal`
        payload, the stable append key, and the returned head version.
     3. If the tool transport fails or times out, call
-       get_journal_append_receipt with the same append key. Never mint a new
-       key or issue a raw JournalEntry CREATE.
-    4. Only after `created` or `replayed`, execute each
-       `post_append_mutations` item. Add the returned `journal_id` and the
-       stable append key to its params. These mutations must be idempotent
-       MERGE/MATCH operations; do not create JournalEntry or FOLLOWS.
-    5. Do not retry the entire write flow. Report a partial post-append
-       failure explicitly so it can be reconciled with the same identifiers.
+       get_journal_append_receipt with the same append key. Receipt outcomes
+       are `found` (success; use its journal_id) or `not_found` (safe to
+       retry the same append payload/key once). Never mint a new key or issue
+       a raw JournalEntry CREATE.
+    4. Only after append `created`/`replayed` (or receipt `found`), execute
+       each `post_append_mutations` item. Add the returned `journal_id` and
+       the stable append key to its params. These mutations must be
+       idempotent MERGE/MATCH operations; do not create JournalEntry or
+       FOLLOWS, and never DELETE/DETACH/REMOVE.
+    5. On append `conflict`:
+       - `stale_version` / `chain_changed`: re-read head; retry **same**
+         append_key + same payload with the new expected_version. Do not use
+         conflict.journal_id (it is null); current head is
+         current_head_journal_id.
+       - `append_key_reused`: stop; mint a new key only for a truly new entry.
+       - Never run post-append links after a conflict.
+    6. Do not retry the entire write flow blindly. Report a partial
+       post-append failure explicitly so it can be reconciled with the same
+       identifiers.
 
     **Output format:**
     {
       "success": true,
-      "journal": {"outcome": "created|replayed|conflict", "id": "..."},
+      "journal": {"outcome": "created|replayed|conflict|found", "id": "..."},
       "post_append_mutations_completed": 0,
       "error": null
     }

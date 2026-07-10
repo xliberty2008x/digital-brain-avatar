@@ -97,15 +97,32 @@ class McpClientTests(IsolatedAsyncioTestCase):
 
     async def test_chain_reads_and_receipt_are_decoded(self) -> None:
         responses = [
-            {"content": [{"type": "text", "text": '{"outcome":"ready","version":4}'}]},
-            {"content": [{"type": "text", "text": '{"outcome":"replayed","append_key":"key-1"}'}]},
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": '{"outcome":"ok","version":4,"journal_id":"journal-head"}',
+                    }
+                ]
+            },
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            '{"outcome":"found","append_key":"key-1",'
+                            '"journal_id":"journal-key-1","version":2}'
+                        ),
+                    }
+                ]
+            },
         ]
         with patch(
             "digital_brain.tools.mcp_client.call_mcp_tool",
             new=AsyncMock(side_effect=responses),
         ) as mocked_call:
             self.assertEqual((await get_journal_chain_head())["version"], 4)
-            self.assertEqual((await get_journal_append_receipt("key-1"))["outcome"], "replayed")
+            self.assertEqual((await get_journal_append_receipt("key-1"))["outcome"], "found")
 
         self.assertEqual(
             mocked_call.await_args_list[0].args,
@@ -124,5 +141,24 @@ class McpClientTests(IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(McpWriteOutcomeUnknown):
                 await call_mcp_tool("write_neo4j_cypher", {"query": "CREATE (n:Topic {id: 'x'})"})
+
+        self.assertEqual(session.calls, 1)
+
+    async def test_transport_failure_on_append_is_outcome_unknown_without_retry(self) -> None:
+        session = _FailingSession()
+        with patch(
+            "digital_brain.tools.mcp_client.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            with self.assertRaises(McpWriteOutcomeUnknown):
+                await call_mcp_tool(
+                    "append_journal_entry",
+                    {
+                        "append_key": "00000000-0000-4000-8000-000000000001",
+                        "content": "memory",
+                        "timestamp": "2026-07-09T00:00:00Z",
+                        "expected_version": 0,
+                    },
+                )
 
         self.assertEqual(session.calls, 1)

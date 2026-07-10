@@ -207,7 +207,14 @@ def read_neo4j_cypher(
     )
 )
 def write_neo4j_cypher(
-    query: str = Field(..., description="Write Cypher query"),
+    query: str = Field(
+        ...,
+        description=(
+            "Write Cypher for post-append graph links only (MATCH/MERGE). "
+            "Cannot create JournalEntry/FOLLOWS/HEAD/JournalChain or mutate "
+            "protected journal fields; use append_journal_entry for the chain."
+        ),
+    ),
     params: dict[str, Any] | None = Field(default=None, description="Cypher parameters"),
     embed_text: str | None = Field(default=None, description="Text to embed into `$embedding`"),
 ) -> str:

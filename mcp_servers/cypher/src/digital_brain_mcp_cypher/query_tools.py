@@ -28,6 +28,7 @@ _JOURNAL_LABEL = r"(?:JournalEntry|`JournalEntry`)"
 _CHAIN_LABEL = r"(?:JournalChain|`JournalChain`)"
 _FOLLOWS_TYPE = r"(?:FOLLOWS|`FOLLOWS`)"
 _HEAD_TYPE = r"(?:HEAD|`HEAD`)"
+_PROTECTED_LABEL_NAMES = frozenset({"journalentry", "journalchain"})
 
 
 def _node_label_pattern(label: str) -> str:
@@ -58,16 +59,25 @@ PROTECTED_RELATIONSHIP_RE = re.compile(
     rf":\s*(?:{_FOLLOWS_TYPE}|{_HEAD_TYPE})(?![A-Za-z0-9_`])",
     re.IGNORECASE,
 )
-SET_PROTECTED_LABEL_RE = re.compile(
-    rf"(?:\bSET\b|,)\s*{_CYPHER_IDENTIFIER}\s*:\s*"
-    rf"(?:{_JOURNAL_LABEL}|{_CHAIN_LABEL})(?![A-Za-z0-9_`])",
+# Captures every label in `SET n:A:B` / `SET n : A : B`, not only the first.
+SET_LABEL_LIST_RE = re.compile(
+    rf"(?:\bSET\b|,)\s*{_CYPHER_IDENTIFIER}((?:\s*:\s*{_CYPHER_IDENTIFIER})+)",
+    re.IGNORECASE,
+)
+# Full node replacement (`SET n = {...}` / `SET n = $map`), not `SET n.prop =`.
+FULL_NODE_SET_RE = re.compile(
+    rf"(?:\bSET\b|,)\s*{_CYPHER_IDENTIFIER}\s*=\s*(?:\{{|\$)",
+    re.IGNORECASE,
+)
+# Post-append path is MERGE-only; destructive clauses bypass label guards easily.
+DELETE_DETACH_REMOVE_RE = re.compile(r"\b(?:DELETE|DETACH|REMOVE)\b", re.IGNORECASE)
+# `type(r) = 'FOLLOWS'` severs the chain without a `:FOLLOWS` literal.
+PROTECTED_TYPE_PREDICATE_RE = re.compile(
+    rf"\btype\s*\(\s*{_CYPHER_IDENTIFIER}\s*\)\s*(?:=\s*['\"](?:FOLLOWS|HEAD)['\"]|"
+    rf"IN\s*\([^)]*(?:FOLLOWS|HEAD)[^)]*\))",
     re.IGNORECASE,
 )
 JOURNAL_ENTRY_NODE_RE = re.compile(_node_label_pattern(_JOURNAL_LABEL), re.IGNORECASE)
-JOURNAL_ENTRY_MUTATION_RE = re.compile(
-    r"\b(?:SET|REMOVE|DELETE|DETACH)\b",
-    re.IGNORECASE,
-)
 DYNAMIC_PROPERTY_REFERENCE_RE = re.compile(
     rf"\b{_CYPHER_IDENTIFIER}\s*\[\s*(?:\$|['\"])",
     re.IGNORECASE,
@@ -83,13 +93,35 @@ _PROTECTED_JOURNAL_PROPERTIES = (
     "chain_version",
     "previous_journal_id",
     "previous_element_id",
+    "_journal_append_lock",
 )
 PROTECTED_JOURNAL_PROPERTY_RE = re.compile(
     rf"\.\s*(?:{'|'.join(_PROTECTED_JOURNAL_PROPERTIES)}|"
     rf"`(?:{'|'.join(_PROTECTED_JOURNAL_PROPERTIES)})`)(?![A-Za-z0-9_`])",
     re.IGNORECASE,
 )
+# Unlabeled chain CAS mutation: SET version while addressing key='primary'.
+CHAIN_VERSION_MUTATION_RE = re.compile(
+    r"(?=.*\bSET\b)(?=.*\.\s*`?version`?\b)(?=.*(?:['\"]primary['\"]|\.\s*`?key`?\b))",
+    re.IGNORECASE | re.DOTALL,
+)
 EMBEDDING_PARAM_RE = re.compile(r"\$embedding\b")
+SET_CLAUSE_RE = re.compile(r"\bSET\b", re.IGNORECASE)
+
+
+def _normalize_label_token(token: str) -> str:
+    token = token.strip()
+    if token.startswith("`") and token.endswith("`"):
+        token = token[1:-1].replace("``", "`")
+    return token.lower()
+
+
+def _set_adds_protected_label(query: str) -> bool:
+    for match in SET_LABEL_LIST_RE.finditer(query):
+        for label in re.findall(rf":\s*({_CYPHER_IDENTIFIER})", match.group(1), re.IGNORECASE):
+            if _normalize_label_token(label) in _PROTECTED_LABEL_NAMES:
+                return True
+    return False
 
 
 def assert_read_only(query: str) -> None:
@@ -122,7 +154,12 @@ def with_embedding_param(params: dict[str, Any] | None, embedding: list[float] |
 
 
 def validate_embedding_usage(query: str, embed_text: str | None) -> None:
-    """Require JournalEntry writes to always pass embed_text and consume `$embedding`."""
+    """Legacy helper for JournalEntry CREATE+embed_text patterns.
+
+    Generic ``write_neo4j_cypher`` now rejects JournalEntry CREATE/MERGE first,
+    so this path is unreachable there. Kept for unit tests and any pre-check
+    tooling that still validates historical query shapes.
+    """
     query = query or ""
     if not JOURNAL_WRITE_RE.search(query):
         return
@@ -139,9 +176,9 @@ def validate_embedding_usage(query: str, embed_text: str | None) -> None:
 def assert_general_write_allowed(query: str) -> None:
     """Reserve journal-chain mutations for ``append_journal_entry``.
 
-    The generic writer remains available for ordinary post-append graph links,
-    but it must not bypass the chain protocol by changing its nodes, relations,
-    labels, receipts, or stored-procedure execution path.
+    The generic writer remains available for ordinary post-append graph links
+    (MATCH + MERGE). It must not bypass the chain protocol by creating,
+    labeling, deleting, fully replacing, or rewiring journal-chain state.
     """
     query = query or ""
     if CALL_RE.search(query):
@@ -158,19 +195,41 @@ def assert_general_write_allowed(query: str) -> None:
             "write_neo4j_cypher cannot access JournalChain, HEAD, or FOLLOWS; "
             "use the dedicated journal MCP tools"
         )
-    if SET_PROTECTED_LABEL_RE.search(query):
+    if _set_adds_protected_label(query):
         raise ValueError(
             "write_neo4j_cypher cannot add JournalEntry or JournalChain labels; "
             "use the dedicated journal MCP tools"
         )
-    if JOURNAL_ENTRY_NODE_RE.search(query) and JOURNAL_ENTRY_MUTATION_RE.search(query):
-        if PROTECTED_JOURNAL_PROPERTY_RE.search(query) or re.search(
-            r"\b(?:DELETE|DETACH)\b|\+=", query, re.IGNORECASE
-        ) or DYNAMIC_PROPERTY_REFERENCE_RE.search(query):
-            raise ValueError(
-                "write_neo4j_cypher cannot mutate protected JournalEntry fields; "
-                "use append_journal_entry instead"
-            )
+    if DELETE_DETACH_REMOVE_RE.search(query):
+        raise ValueError(
+            "write_neo4j_cypher does not allow DELETE/DETACH/REMOVE; "
+            "post-append mutations must be idempotent MATCH/MERGE only"
+        )
+    if FULL_NODE_SET_RE.search(query):
+        raise ValueError(
+            "write_neo4j_cypher does not allow full node replacement (`SET n = {...}`); "
+            "set explicit non-reserved properties only"
+        )
+    if PROTECTED_TYPE_PREDICATE_RE.search(query):
+        raise ValueError(
+            "write_neo4j_cypher cannot target FOLLOWS or HEAD via type(); "
+            "use the dedicated journal MCP tools"
+        )
+    if SET_CLAUSE_RE.search(query) and PROTECTED_JOURNAL_PROPERTY_RE.search(query):
+        raise ValueError(
+            "write_neo4j_cypher cannot mutate protected JournalEntry/chain fields; "
+            "use append_journal_entry instead"
+        )
+    if SET_CLAUSE_RE.search(query) and DYNAMIC_PROPERTY_REFERENCE_RE.search(query):
+        raise ValueError(
+            "write_neo4j_cypher cannot use dynamic property writes that could "
+            "target protected journal fields; set explicit properties only"
+        )
+    if CHAIN_VERSION_MUTATION_RE.search(query):
+        raise ValueError(
+            "write_neo4j_cypher cannot mutate JournalChain version/CAS state; "
+            "use the dedicated journal MCP tools"
+        )
 
 
 def serialize_records(records: list[Any]) -> list[dict[str, Any]]:

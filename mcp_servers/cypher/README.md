@@ -11,24 +11,36 @@ alongside a serialized, idempotent JournalEntry append path:
 - `append_journal_entry`
 - `get_journal_append_receipt`
 
-`write_neo4j_cypher` remains available for non-journal graph mutations, but it
-rejects Cypher that creates or merges `JournalEntry` nodes or `FOLLOWS`
-relationships. Normal writers must use the append API below.
+`write_neo4j_cypher` remains available for idempotent post-append graph links
+(`MATCH`/`MERGE` only). It rejects JournalEntry/FOLLOWS/HEAD/JournalChain
+creation, DELETE/DETACH/REMOVE, full node replacement (`SET n = {...}`), and
+mutation of protected journal/chain fields. Normal writers must use the append
+API below for the journal core.
 
 ## JournalEntry append contract
 
 1. Generate one UUID `append_key` before the first request and retain it for
    every retry of that logical entry.
 2. Read `get_journal_chain_head` immediately before writing; pass its `version`
-   to `append_journal_entry` as `expected_version`.
-3. `append_journal_entry` creates the stable `journal-{append_key}` ID,
-   generates the embedding, and atomically advances `(:JournalChain
-   {key: "primary"})-[:HEAD]->(:JournalEntry)` plus its single `FOLLOWS`
-   relation.
-4. A request returns `created`, `replayed` (same key and request fingerprint),
-   or `conflict` (stale version or mismatched reuse of a key). A timeout must be
-   resolved by `get_journal_append_receipt` or a replay using the same key —
-   never by issuing a new append key.
+   to `append_journal_entry` as `expected_version`. Head outcomes are `ok`,
+   `chain_uninitialized`, or `chain_invalid`.
+3. `append_journal_entry` creates the stable `journal-{append_key}` ID and
+   embedding (embedding runs **outside** the Neo4j write lock). It then
+   atomically advances `(:JournalChain {key: "primary"})-[:HEAD]->(:JournalEntry)`.
+   The first entry on an empty chain is HEAD-only; later appends also create
+   `FOLLOWS` to the previous head.
+4. Append outcomes:
+   - `created` / `replayed` — success; use returned `journal_id` for post-append links
+   - `conflict` with `reason`:
+     - `stale_version` / `chain_changed` — no node for this attempt; re-read head
+       and retry **same** key + same payload (`journal_id` is null;
+       `current_head_journal_id` is the live head)
+     - `append_key_reused` — same key, different fingerprint; mint a new key only
+       for a truly new entry
+   - `chain_uninitialized` / `chain_invalid` — operator action required
+5. Timeout reconciliation uses `get_journal_append_receipt(append_key)`, which
+   returns only `found` or `not_found` (not `created`/`replayed`). Never issue a
+   new append key for the same logical entry after a timeout.
 
 Appending before an operator bootstraps the selected legacy head returns
 `chain_uninitialized`; it does not guess, repair, or rewrite an old chain.

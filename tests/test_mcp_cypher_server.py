@@ -130,6 +130,136 @@ def test_append_generates_embedding_only_after_receipt_and_head_checks(
     assert events == ["receipt", "head", "schema", "embedding", "append"]
 
 
+def test_existing_receipt_skips_embedding_on_replay_and_key_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Store:
+        def __init__(self, receipt: dict[str, Any]):
+            self.receipt = receipt
+
+        def find_receipt(self, _append_key: str):
+            events.append("receipt")
+            return self.receipt
+
+        def get_chain_head(self, _chain_key: str):
+            events.append("head")
+            raise AssertionError("must not read head after receipt hit")
+
+        def append(self, _request, _chain_key: str):
+            events.append("append")
+            raise AssertionError("must not append after receipt hit")
+
+    monkeypatch.setattr(
+        server,
+        "generate_embedding",
+        lambda _text: events.append("embedding") or [0.0, 0.0],
+    )
+    monkeypatch.setattr(server, "_ensure_journal_schema", lambda: events.append("schema"))
+
+    matching = {
+        "journal_id": "journal-00000000-0000-4000-8000-000000000001",
+        "append_key": "00000000-0000-4000-8000-000000000001",
+        "request_fingerprint": None,  # filled below after build
+        "timestamp": "2026-07-09T00:00:00Z",
+        "mood": None,
+        "journal_version": 2,
+        "previous_journal_id": None,
+        "element_id": "el-1",
+    }
+    from digital_brain_mcp_cypher.journal import build_append_request
+
+    request = build_append_request(
+        append_key="00000000-0000-4000-8000-000000000001",
+        content="journal",
+        timestamp="2026-07-09T00:00:00Z",
+        mood=None,
+        expected_version=0,
+        properties=None,
+    )
+    matching["request_fingerprint"] = request.request_fingerprint
+    monkeypatch.setattr(server, "_journal_store", lambda: Store(matching))
+
+    replayed = json.loads(
+        _tool_function(server.append_journal_entry)(
+            append_key="00000000-0000-4000-8000-000000000001",
+            content="journal",
+            timestamp="2026-07-09T00:00:00Z",
+            expected_version=0,
+            mood=None,
+            properties=None,
+        )
+    )
+    assert replayed["outcome"] == "replayed"
+    assert events == ["receipt"]
+
+    events.clear()
+    mismatched = dict(matching)
+    mismatched["request_fingerprint"] = "other-fingerprint"
+    monkeypatch.setattr(server, "_journal_store", lambda: Store(mismatched))
+
+    conflicted = json.loads(
+        _tool_function(server.append_journal_entry)(
+            append_key="00000000-0000-4000-8000-000000000001",
+            content="journal",
+            timestamp="2026-07-09T00:00:00Z",
+            expected_version=0,
+            mood=None,
+            properties=None,
+        )
+    )
+    assert conflicted["outcome"] == "conflict"
+    assert conflicted["reason"] == "append_key_reused"
+    assert events == ["receipt"]
+
+
+def test_chain_uninitialized_short_circuits_before_embedding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Store:
+        def find_receipt(self, _append_key: str):
+            events.append("receipt")
+            return None
+
+        def get_chain_head(self, _chain_key: str):
+            events.append("head")
+            return {
+                "outcome": "chain_uninitialized",
+                "chain_key": "primary",
+                "version": None,
+                "journal_id": None,
+            }
+
+        def append(self, _request, _chain_key: str):
+            events.append("append")
+            raise AssertionError("must not append")
+
+    monkeypatch.setattr(server, "_journal_store", lambda: Store())
+    monkeypatch.setattr(server, "_ensure_journal_schema", lambda: events.append("schema"))
+    monkeypatch.setattr(
+        server,
+        "generate_embedding",
+        lambda _text: events.append("embedding") or [0.0, 0.0],
+    )
+
+    payload = json.loads(
+        _tool_function(server.append_journal_entry)(
+            append_key="00000000-0000-4000-8000-000000000001",
+            content="journal",
+            timestamp="2026-07-09T00:00:00Z",
+            expected_version=0,
+            mood=None,
+            properties=None,
+        )
+    )
+
+    assert payload["outcome"] == "chain_uninitialized"
+    assert events == ["receipt", "head"]
+
+
 def test_bootstrap_uses_the_dedicated_store_path(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
 
