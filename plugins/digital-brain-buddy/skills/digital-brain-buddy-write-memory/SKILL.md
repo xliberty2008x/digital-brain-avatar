@@ -30,6 +30,25 @@ Use this skill for one bounded persistence task. Read
    links with idempotent `MATCH`/`MERGE` Cypher using that `journal_id`. Never
    create a JournalEntry or `FOLLOWS` through `write_neo4j_cypher`.
 
+## Initiation receipt
+
+When the session agent finishes meeting-1 seeds, append one JournalEntry with
+properties:
+
+```json
+{ "kind": "initiation_complete" }
+```
+
+Pass that object as `properties` to `append_journal_entry`. Content should
+briefly name self, anchor person, and focus. Then MENTIONS those three nodes.
+Do not use raw Cypher to create the entry.
+
+Detection:
+
+```cypher
+MATCH (j:JournalEntry {kind: 'initiation_complete'})
+```
+
 ## Output
 
 Return a compact mutation report:
