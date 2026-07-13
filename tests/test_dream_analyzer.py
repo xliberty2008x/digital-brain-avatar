@@ -310,6 +310,21 @@ def test_gotcha_failure_class_clusters_without_intimate_raw_payload():
         if f.lane == "memory" and ("miss" in f.class_key or f.recurrence_key == "memory:miss")
     ]
     assert memory_miss, f"expected memory miss finding from gotcha Feedback; got {findings!r}"
+    # Behaviour lane clusters public_ops corrected RunEvent by recurrence_key/error_class.
+    gotcha_class = [
+        f
+        for f in findings
+        if f.lane == "behaviour"
+        and (
+            "sensitive_person_reply_without_deep_read" in (f.recurrence_key or "")
+            or "sensitive_person_reply_without_deep_read" in (f.class_key or "")
+            or "gotcha" in (f.class_key or "")
+        )
+    ]
+    assert gotcha_class, (
+        "expected behaviour gotcha finding from corrected RunEvent taxonomy; "
+        f"got {[(f.lane, f.class_key, f.recurrence_key) for f in findings]!r}"
+    )
     for finding in findings:
         dumped = finding.model_dump()
         assert_no_intimate_fields(dumped)

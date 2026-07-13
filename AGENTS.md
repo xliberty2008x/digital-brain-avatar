@@ -18,10 +18,16 @@ When the task is to **resolve a GitHub issue end-to-end** (or a goal that tracks
 2. **Test** the real shipped path (unit/integration on real entry points; capture proof when required).
 3. **Commit** with a clear message (why, not only what).
 4. **Push** the branch and open a **PR** linked to the issue (`Fixes #N` / `Closes #N` when appropriate).
-5. **Merge** the PR (or leave ready-for-review only if merge is blocked or the user asked not to merge).
-6. **Close the issue** if merge did not auto-close it; comment with PR link + brief verification evidence.
+5. **Review → fix loop (mandatory before merge)** — do not merge a green PR you never reviewed:
+   - Run a real code review of the PR/diff (reviewer subagent / `/review --pr N` / equivalent).
+   - Fix **bugs** and high-value **suggestions**; re-test changed paths.
+   - Re-review if the fix set is non-trivial (new behavior, security, or > small nits).
+   - Only then merge. Skip this loop only if the user explicitly says so.
+6. **Merge** the PR after the review→fix loop (or leave ready-for-review if merge is blocked / user asked not to merge).
+7. **Close the issue** if merge did not auto-close it; comment with PR link + brief verification evidence.
 
 Do **not** report “issue resolved” or “goal complete” while changes sit only in the working tree with no commit/PR.
+Do **not** treat “tests passed” as a substitute for the review→fix loop before merge.
 
 Optional when the plan says so: leave the issue open and only comment evidence — but say that explicitly; default for “resolve e2e” is ship + close.
 

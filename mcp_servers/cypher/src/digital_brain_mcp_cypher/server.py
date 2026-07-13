@@ -28,7 +28,11 @@ from .journal import (
     replay_or_key_conflict,
 )
 from .maintenance import MaintenanceStore
-from .quality import QualityStore, try_record_tool_outcome_run_event
+from .quality import (
+    QualityStore,
+    create_feedback_contract_hint,
+    try_record_tool_outcome_run_event,
+)
 from .quality_control_api import handle_quality_control
 from .query_tools import (
     assert_general_write_allowed,
@@ -559,9 +563,14 @@ def record_harness_generation(
     annotations=ToolAnnotations(
         title="Create Feedback",
         description=(
-            "Idempotently record an Operational:Feedback observation. "
-            "Requires harness_generation_id. Raw text is stored separately "
-            "as QualityPayload for later redaction; never journal-indexed."
+            "Idempotently record an Operational:Feedback observation (quality plane; "
+            "never journal-indexed). Required exact kwargs: id, kind "
+            "(entity_wrong|claim_false|miss|invent|praise), sensitivity "
+            "(public_ops|personal|intimate), harness_generation_id. Optional: "
+            "redacted_summary (short imperative gotcha rule), raw_payload, "
+            "source_turn_ref. Forbidden aliases (rejected with contract hint): "
+            "summary, detail, payload, note, text, message, body, description, "
+            "content. Prefer typed digital_brain.tools.mcp_client.create_feedback."
         ),
         readOnlyHint=False,
         destructiveHint=False,
@@ -569,55 +578,80 @@ def record_harness_generation(
     )
 )
 def create_feedback(
-    id: str = Field(..., description="Stable feedback id (client-minted)"),
-    kind: str = Field(
-        ...,
-        description="entity_wrong | claim_false | miss | invent | praise",
-    ),
-    sensitivity: str = Field(
-        ...,
-        description="public_ops | personal | intimate",
-    ),
-    harness_generation_id: str = Field(
-        ...,
-        description="Session-pinned HarnessGeneration id (required)",
-    ),
-    source_turn_ref: str | None = Field(
-        default=None, description="Optional source turn reference"
-    ),
-    redacted_summary: str | None = Field(
-        default=None, description="Bounded redacted summary (max 512 chars)"
-    ),
-    raw_payload: str | None = Field(
-        default=None,
-        description="Optional removable raw text (stored as QualityPayload)",
-    ),
-    schema_version: str | None = Field(default=None, description="Feedback schema version"),
-    taxonomy_version: str | None = Field(
-        default=None, description="Evidence taxonomy version"
-    ),
-    request_fingerprint: str | None = Field(
-        default=None, description="Optional client fingerprint for integrity check"
-    ),
-    created_at: str | None = Field(default=None, description="ISO timestamp; set on create"),
+    # Plain None defaults (not FieldInfo objects) so direct .fn / thin-host
+    # calls do not leak pydantic FieldInfo into the quality store. Tool
+    # schema text lives on ToolAnnotations.description above.
+    id: str | None = None,
+    kind: str | None = None,
+    sensitivity: str | None = None,
+    harness_generation_id: str | None = None,
+    source_turn_ref: str | None = None,
+    redacted_summary: str | None = None,
+    raw_payload: str | None = None,
+    schema_version: str | None = None,
+    taxonomy_version: str | None = None,
+    request_fingerprint: str | None = None,
+    created_at: str | None = None,
+    # Declared so thin hosts inventing these names hit our contract error, not a
+    # silent drop or opaque schema miss. Values are never accepted as payload.
+    summary: str | None = None,
+    detail: str | None = None,
+    payload: str | None = None,
+    note: str | None = None,
+    text: str | None = None,
+    message: str | None = None,
+    body: str | None = None,
+    description: str | None = None,
+    content: str | None = None,
 ) -> str:
-    """Quality-plane Feedback create with replay/conflict receipt."""
+    """Idempotent Operational:Feedback create (quality plane; never journal-indexed).
+
+    Required exact kwargs: id, kind (entity_wrong|claim_false|miss|invent|praise),
+    sensitivity (public_ops|personal|intimate), harness_generation_id.
+    Optional: redacted_summary (imperative gotcha rule), raw_payload, source_turn_ref.
+    Forbidden aliases (rejected with contract hint): summary, detail, payload, note,
+    text, message, body, description, content.
+    Prefer typed digital_brain.tools.mcp_client.create_feedback.
+
+    Required fields are optional at the MCP binding layer so missing/alias
+    mistakes reach QualityStore validation and return create_feedback_contract_hint
+    instead of opaque tool schema errors.
+    """
     _ensure_quality_schema()
-    feedback: dict[str, Any] = {
-        "id": id,
-        "kind": kind,
-        "sensitivity": sensitivity,
-        "harness_generation_id": harness_generation_id,
-        "source_turn_ref": source_turn_ref,
-        "redacted_summary": redacted_summary,
-        "raw_payload": raw_payload,
-        "schema_version": schema_version,
-        "taxonomy_version": taxonomy_version,
-        "request_fingerprint": request_fingerprint,
-        "created_at": created_at,
-    }
-    payload = _quality_store().create_feedback(feedback)
-    return json.dumps(payload, ensure_ascii=False, default=str)
+    feedback: dict[str, Any] = {}
+    for key, value in (
+        ("id", id),
+        ("kind", kind),
+        ("sensitivity", sensitivity),
+        ("harness_generation_id", harness_generation_id),
+        ("source_turn_ref", source_turn_ref),
+        ("redacted_summary", redacted_summary),
+        ("raw_payload", raw_payload),
+        ("schema_version", schema_version),
+        ("taxonomy_version", taxonomy_version),
+        ("request_fingerprint", request_fingerprint),
+        ("created_at", created_at),
+        # Alias keys: present only when the agent actually sent them.
+        ("summary", summary),
+        ("detail", detail),
+        ("payload", payload),
+        ("note", note),
+        ("text", text),
+        ("message", message),
+        ("body", body),
+        ("description", description),
+        ("content", content),
+    ):
+        if value is not None:
+            feedback[key] = value
+    try:
+        payload_out = _quality_store().create_feedback(feedback)
+    except (TypeError, ValueError) as exc:
+        msg = str(exc)
+        if "create_feedback requires" not in msg:
+            raise type(exc)(f"{msg}. {create_feedback_contract_hint()}") from exc
+        raise
+    return json.dumps(payload_out, ensure_ascii=False, default=str)
 
 
 @mcp.tool(

@@ -370,6 +370,73 @@ def test_create_feedback_tool_does_not_call_embeddings(
     assert payload["outcome"] == "created"
 
 
+def test_create_feedback_tool_wrong_alias_kwargs_are_agent_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP tool path must surface contract hint for summary/detail (not silent drop)."""
+    from digital_brain_mcp_cypher.quality import QualityStore
+
+    class _FakeSession:
+        def execute_write(self, fn):  # noqa: ANN001
+            return fn(self)
+
+        def write_transaction(self, fn):  # noqa: ANN001
+            return fn(self)
+
+        def run(self, *_a, **_k):
+            raise AssertionError("should not write on bad kwargs")
+
+    def factory():
+        class _Wrapped:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *a):
+                return False
+
+            def session(self_inner, database: str = "neo4j"):
+                class _Ctx:
+                    def __enter__(self_ctx):
+                        return _FakeSession()
+
+                    def __exit__(self_ctx, *a):
+                        return False
+
+                return _Ctx()
+
+        return _Wrapped()
+
+    monkeypatch.setattr(server, "_quality_store", lambda: QualityStore(factory, "neo4j"))
+    monkeypatch.setattr(server, "_ensure_quality_schema", lambda: None)
+
+    with pytest.raises(ValueError) as excinfo:
+        _tool_function(server.create_feedback)(
+            kind="miss",
+            harness_generation_id="hg-" + ("c" * 64),
+            summary="invented field",
+            detail="also wrong",
+        )
+    err = str(excinfo.value)
+    assert "missing required" in err
+    assert "id" in err and "sensitivity" in err
+    assert "summary" in err and "detail" in err
+    assert "redacted_summary" in err or "raw_payload" in err
+    for token in ("entity_wrong", "miss", "public_ops", "intimate"):
+        assert token in err
+
+
+def test_create_feedback_tool_description_documents_contract() -> None:
+    tools = asyncio.run(server.mcp.list_tools())
+    create = next(t for t in tools if t.name == "create_feedback")
+    tool_desc = create.description or ""
+    assert "harness_generation_id" in tool_desc
+    assert "redacted_summary" in tool_desc
+    # Description must warn about aliases / exact required fields.
+    assert "summary" in tool_desc or "alias" in tool_desc.lower()
+    for kind in ("miss", "invent", "entity_wrong"):
+        assert kind in tool_desc
+
+
 def test_revoke_feedback_tool_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     class Store:
         def revoke_feedback(self, revocation):
