@@ -31,6 +31,7 @@ from .maintenance import MaintenanceStore
 from .quality import (
     QualityStore,
     create_feedback_contract_hint,
+    create_feedback_contract_schema,
     try_record_tool_outcome_run_event,
 )
 from .quality_control_api import handle_quality_control
@@ -265,6 +266,17 @@ async def readyz(_: Request) -> JSONResponse:
     # Keep their bounded (20s by default) probe off FastMCP's event loop.
     ready, payload = await asyncio.to_thread(_readiness)
     return JSONResponse(payload, status_code=200 if ready else 503)
+
+
+@mcp.custom_route("/tool-schemas/create_feedback", methods=["GET"], include_in_schema=False)
+async def create_feedback_tool_schema(_: Request) -> JSONResponse:
+    """Session-less create_feedback contract (no MCP tools/list handshake).
+
+    Thin hosts that hit 406 dual-Accept / 400 Missing session ID on raw
+    ``tools/list`` can GET this route instead and pass exact kwargs (or use
+    ``digital_brain.tools.mcp_client.create_feedback``).
+    """
+    return JSONResponse(create_feedback_contract_schema())
 
 
 @mcp.custom_route("/internal/quality-control", methods=["POST"], include_in_schema=False)

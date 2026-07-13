@@ -80,6 +80,28 @@ vector index.
    Host `mcp_client` timeouts use the same QualityStore path by default when
    Neo4j quality credentials are configured.
 
+### `create_feedback` contract (thin hosts)
+
+Required exact kwargs: `id`, `kind`
+(`entity_wrong|claim_false|miss|invent|praise`), `sensitivity`
+(`public_ops|personal|intimate`), `harness_generation_id`. Optional:
+`redacted_summary`, `raw_payload`, `source_turn_ref`, … Forbidden aliases
+(`summary` / `detail` / `payload` / `note` / …) raise an agent-actionable
+error that remaps to `redacted_summary` / `raw_payload` and lists enums.
+
+Prefer the typed helper `digital_brain.tools.mcp_client.create_feedback` over
+free-form MCP `tools/call` when the host cannot open a Streamable HTTP
+session for `tools/list`.
+
+Session-less schema (no MCP session headers, no dual Accept):
+
+```bash
+curl -sS http://localhost:8000/tool-schemas/create_feedback
+```
+
+Do **not** use `append_journal_entry` as the FEEDBACK primary path; journal is
+life memory, not the quality plane.
+
 ## Health endpoints
 
 - `GET /livez` confirms that the MCP process is running.
@@ -87,6 +109,8 @@ vector index.
   `bge-m3` embedding with exactly 1024 dimensions. Dependency failures return
   HTTP 503 with a safe, bounded reason rather than reporting a false ready
   state.
+- `GET /tool-schemas/create_feedback` returns the quality-plane Feedback write
+  contract (required fields, enums, alias remaps) without an MCP session.
 
 Docker Compose uses `/readyz` for the `mcp-cypher` healthcheck, so a healthy
 container is ready for JournalEntry writes rather than merely listening on a

@@ -2685,6 +2685,32 @@ def create_feedback_contract_hint() -> str:
     )
 
 
+def create_feedback_contract_schema() -> dict[str, Any]:
+    """Session-less JSON contract for thin hosts (no MCP tools/list handshake).
+
+    Exposed at ``GET /tool-schemas/create_feedback`` so agents that cannot open
+    a Streamable HTTP MCP session still get required fields, enums, and alias
+    remaps without guessing kwargs.
+    """
+    return {
+        "name": "create_feedback",
+        "plane": "quality",
+        "never_journal_indexed": True,
+        "required": list(FEEDBACK_REQUIRED_FIELDS),
+        "optional": sorted(FEEDBACK_OPTIONAL_FIELDS),
+        "kind": sorted(FEEDBACK_KINDS),
+        "sensitivity": sorted(SENSITIVITIES),
+        "forbidden_aliases": dict(FEEDBACK_ALIAS_FIELD_HINTS),
+        "contract_hint": create_feedback_contract_hint(),
+        "prefer": "digital_brain.tools.mcp_client.create_feedback",
+        "note": (
+            "Do not use append_journal_entry as the FEEDBACK primary path. "
+            "Prefer the typed helper over free-form tools/call when the host "
+            "cannot list MCP tools without a session."
+        ),
+    }
+
+
 def format_gotcha_staged_line(feedback_id: str, rule: str) -> str:
     """Short user-visible confirmation after a durable quality-plane gotcha seed."""
     fid = str(feedback_id or "").strip() or "unknown"

@@ -68,7 +68,8 @@ PIN_ARGS=(--host "$HOST" --use-open-api --json)
 if mcp_ready; then
   echo "open-harness-session: MCP ready → pin + record_harness_generation" >&2
   # One-line quality write recipe for thin hosts (exact create_feedback fields).
-  echo "open-harness-session: quality write recipe → create_feedback(id, kind∈{entity_wrong|claim_false|miss|invent|praise}, sensitivity∈{public_ops|personal|intimate}, harness_generation_id=<pin>; optional redacted_summary=imperative gotcha rule). Prefer digital_brain.tools.mcp_client.create_feedback. On correction FEEDBACK surface: gotcha staged: <id> — <rule> (or parked: sensor down). Never journal-as-gotcha." >&2
+  SCHEMA_BASE="$(printf '%s' "$MCP_URL" | sed -E 's#/api/mcp/?$##')"
+  echo "open-harness-session: quality write recipe → create_feedback(id, kind∈{entity_wrong|claim_false|miss|invent|praise}, sensitivity∈{public_ops|personal|intimate}, harness_generation_id=<pin>; optional redacted_summary=imperative gotcha rule). Prefer digital_brain.tools.mcp_client.create_feedback. Session-less schema: GET ${SCHEMA_BASE}/tool-schemas/create_feedback (no MCP session). On correction FEEDBACK surface: gotcha staged: <id> — <rule> (or parked: sensor down). Never journal-as-gotcha." >&2
 else
   echo "open-harness-session: MCP not ready → local pin only (--skip-record)" >&2
   echo "open-harness-session: sensors may park — user-visible line: parked: sensor down" >&2

@@ -29,6 +29,7 @@ from digital_brain_mcp_cypher.quality import (  # noqa: E402
     compute_raw_hmac,
     compute_sensor_request_fingerprint,
     create_feedback_contract_hint,
+    create_feedback_contract_schema,
     feedback_identity_payload,
     format_gotcha_staged_line,
     mint_tool_outcome_event_id,
@@ -390,6 +391,32 @@ def test_create_feedback_validation_errors():
 
     with pytest.raises(ValueError, match="raw_payload exceeds"):
         store.create_feedback(_feedback(raw_payload="y" * (MAX_RAW_PAYLOAD_LEN + 1)))
+
+
+def test_create_feedback_contract_schema_is_session_less_discoverable():
+    """Pure contract dict names required fields + enums without Neo4j or MCP session."""
+    schema = create_feedback_contract_schema()
+    assert schema["name"] == "create_feedback"
+    assert schema["never_journal_indexed"] is True
+    assert schema["required"] == list(FEEDBACK_REQUIRED_FIELDS)
+    for field in ("id", "kind", "sensitivity", "harness_generation_id"):
+        assert field in schema["required"]
+    assert "miss" in schema["kind"] and "invent" in schema["kind"]
+    assert "public_ops" in schema["sensitivity"] and "intimate" in schema["sensitivity"]
+    assert schema["forbidden_aliases"]["summary"] == "redacted_summary"
+    assert "redacted_summary" in schema["optional"] or "redacted_summary" in str(
+        schema["optional"]
+    )
+    assert "digital_brain.tools.mcp_client.create_feedback" in schema["prefer"]
+    assert "create_feedback requires" in schema["contract_hint"]
+    # Round-trip JSON for HTTP surface.
+    body = json.loads(json.dumps(schema))
+    assert body["required"] == [
+        "id",
+        "kind",
+        "sensitivity",
+        "harness_generation_id",
+    ]
 
 
 def test_create_feedback_wrong_alias_kwargs_and_missing_fields_are_agent_actionable():
