@@ -31,6 +31,64 @@ Do **not** treat “tests passed” as a substitute for the review→fix loop be
 
 Optional when the plan says so: leave the issue open and only comment evidence — but say that explicitly; default for “resolve e2e” is ship + close.
 
+## Issues, PRs, commits (agent conventions)
+
+Audience: **agents** (Grok / Claude / Codex). Lightweight prefixes only — no
+required GitHub templates or labels. Title prefix is the source of truth.
+
+### Issue titles
+
+| Prefix | Use for |
+| --- | --- |
+| `[bug]` | Wrong behavior, regression, broken path |
+| `[feat]` | New product capability |
+| `[dx]` | Agent/host ergonomics (schemas, errors, discoverability) |
+| `[docs]` | Docs-only product/operator docs (rare as issues) |
+| `[release]` | Version / host-cache packaging work |
+
+Body (short): **what / expected / actual or ask / evidence** (logs, session note).
+Link related issues when known.
+
+### When to open an issue vs PR-only
+
+| Open a GitHub issue | PR-only is OK |
+| --- | --- |
+| `[bug]`, `[feat]`, `[dx]`, multi-step product gaps | Tiny docs typos, pure `chore`, version bump already tracked by an issue, drive-by nits the user asked for in-chat |
+
+Default: **bugs / feats / dx → issue first**, then implement on a branch and open
+a PR that closes it.
+
+### Commits and branches
+
+- **Commits:** conventional — `fix:`, `feat:`, `docs:`, `chore:`, `release:`
+  (optional scope: `fix(buddy):`, `release(buddy):`). Message = **why**, not only what.
+- **Branches:** `fix/…`, `feat/…`, `dx/…`, `docs/…`, `release/…` (match the type).
+
+### Pull requests
+
+- **Title:** same conventional form as the main commit (not a free-form essay).
+- **Body (required minimum):**
+
+  ```markdown
+  ## Summary
+  - …
+
+  ## Test plan
+  - [x] …   # or N/A with a one-line reason
+
+  Closes #N   # when an issue exists (Fixes #N also fine)
+  ```
+
+- **Merge:** follow the review→fix loop above. Do not merge unreviewed work
+  unless the user explicitly opts out.
+- **Labels:** optional. Do not block if the host cannot set labels.
+
+### Plugin contract changes
+
+If skills/agent hard rules or host-cached package change, also follow
+**Plugin release / host updates** below (version bump + marketplaces + host
+refresh). Issue type is often `[feat]`, `[dx]`, or `[release]` depending on the work.
+
 ## Quality / buddy sensors (high level)
 
 - Life journal (`JournalEntry`) is **not** the ops-learning store. FEEDBACK corrections use the quality plane (`create_feedback`, optional `record_run_event`).
