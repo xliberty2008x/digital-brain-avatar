@@ -298,8 +298,9 @@ def test_gotcha_failure_class_clusters_without_intimate_raw_payload():
         snapshot_id="snap-gotcha",
     )
     # Frozen analyzer packet must not leak intimate raw.
-    assert_no_intimate_fields(frozen.analyzer_packet)
-    assert intimate_raw not in str(frozen.analyzer_packet)
+    packet = frozen.analyzer_packet()
+    assert_no_intimate_fields(packet)
+    assert intimate_raw not in str(packet)
 
     outputs = analyze(frozen)
     findings = [o for o in outputs if isinstance(o, Finding)]
@@ -310,6 +311,26 @@ def test_gotcha_failure_class_clusters_without_intimate_raw_payload():
         if f.lane == "memory" and ("miss" in f.class_key or f.recurrence_key == "memory:miss")
     ]
     assert memory_miss, f"expected memory miss finding from gotcha Feedback; got {findings!r}"
+    # Behaviour lane clusters public_ops corrected RunEvent by recurrence_key
+    # (must survive EvidenceItem freeze — not only error_class).
+    gotcha_class = [
+        f
+        for f in findings
+        if f.lane == "behaviour"
+        and "sensitive_person_reply_without_deep_read" in (f.recurrence_key or "")
+    ]
+    assert gotcha_class, (
+        "expected behaviour gotcha finding keyed by recurrence_key after freeze; "
+        f"got {[(f.lane, f.class_key, f.recurrence_key) for f in findings]!r}"
+    )
+    # Frozen packet retained taxonomy fields for the corrected RunEvent.
+    frozen_items = {
+        i.get("id"): i for i in packet.get("items", []) if isinstance(i, dict)
+    }
+    re_item = frozen_items.get("re-gotcha-class-1") or {}
+    assert re_item.get("recurrence_key") == "sensitive_person_reply_without_deep_read"
+    assert re_item.get("approach") == "shallow_reply_without_person_pack"
+    assert re_item.get("task_outcome") == "corrected"
     for finding in findings:
         dumped = finding.model_dump()
         assert_no_intimate_fields(dumped)

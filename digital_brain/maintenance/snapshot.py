@@ -84,6 +84,10 @@ class EvidenceItem:
     task_outcome: str | None = None
     error_class: str | None = None
     redacted_summary: str | None = None
+    # Gotcha / corrected RunEvent taxonomy (must survive freeze → analyzer).
+    recurrence_key: str | None = None
+    approach: str | None = None
+    decision_point: str | None = None
     # Never copied into analyzer/report packets.
     raw_payload: str | None = None
     request_fingerprint: str | None = None
@@ -108,6 +112,9 @@ class EvidenceItem:
             "task_outcome": self.task_outcome,
             "error_class": self.error_class,
             "redacted_summary": self.redacted_summary,
+            "recurrence_key": self.recurrence_key,
+            "approach": self.approach,
+            "decision_point": self.decision_point,
             "raw_payload": self.raw_payload,
             "request_fingerprint": self.request_fingerprint,
             "is_counterevidence": self.is_counterevidence,
@@ -189,6 +196,21 @@ class EvidenceItem:
                 None
                 if data.get("redacted_summary") is None
                 else str(data.get("redacted_summary"))
+            ),
+            recurrence_key=(
+                None
+                if data.get("recurrence_key") is None
+                else str(data.get("recurrence_key"))
+            ),
+            approach=(
+                None
+                if data.get("approach") is None
+                else str(data.get("approach"))
+            ),
+            decision_point=(
+                None
+                if data.get("decision_point") is None
+                else str(data.get("decision_point"))
             ),
             raw_payload=(
                 None

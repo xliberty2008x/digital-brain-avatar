@@ -542,6 +542,10 @@ def _is_behaviour_item(item: EvidenceItemView) -> bool:
     # Non-engineering route failures that suggest harness guidance.
     if _is_engineering_item(item) or _is_memory_item(item):
         return False
+    # User-correction gotcha taxonomy (often public_ops RunEvent alongside
+    # intimate Feedback so Dream can cluster without intimate free text).
+    if _is_gotcha_correction_item(item):
+        return True
     route = (item.route or "").upper()
     outcome = (item.tool_outcome or "").lower()
     if route in {"READ", "WRITE", "FEEDBACK", "SKIP"} and outcome in {
@@ -555,6 +559,30 @@ def _is_behaviour_item(item: EvidenceItemView) -> bool:
         if not err and outcome == "empty":
             return True
     return False
+
+
+def _is_gotcha_correction_item(item: EvidenceItemView) -> bool:
+    """RunEvent (or similar) with corrected task_outcome + stable class signal."""
+    if (item.task_outcome or "").lower() != "corrected":
+        return False
+    return bool(
+        (item.recurrence_key or "").strip()
+        or (item.error_class or "").strip()
+        or (item.approach or "").strip()
+    )
+
+
+def _gotcha_class_key(item: EvidenceItemView) -> str:
+    for candidate in (
+        item.recurrence_key,
+        item.error_class,
+        item.approach,
+        "corrected",
+    ):
+        text = (candidate or "").strip().lower()
+        if text:
+            return text
+    return "corrected"
 
 
 def _stable_id(*parts: str) -> str:
@@ -752,27 +780,45 @@ def analyze(
 
     # --- Behaviour lane ---
     if behaviour_ids:
-        rkey = "behaviour:route_empty_or_fail"
-        hashes = [items_by_id[i].evidence_hash or "" for i in behaviour_ids]
-        md = material_digest_for(
-            recurrence_key=rkey,
-            evidence_ids=behaviour_ids,
-            evidence_hashes=hashes,
-            class_key="route_signal",
-        )
-        if not is_suppressed(rkey, md, rejected):
+        gotcha_ids: list[str] = []
+        route_ids: list[str] = []
+        for eid in behaviour_ids:
+            if _is_gotcha_correction_item(items_by_id[eid]):
+                gotcha_ids.append(eid)
+            else:
+                route_ids.append(eid)
+
+        # Cluster user-correction gotchas by recurrence_key / error_class / approach.
+        by_gotcha: dict[str, list[str]] = {}
+        for eid in gotcha_ids:
+            class_key = _gotcha_class_key(items_by_id[eid])
+            by_gotcha.setdefault(class_key, []).append(eid)
+
+        for class_key, ids in sorted(by_gotcha.items()):
+            rkey = f"behaviour:gotcha:{class_key}"
+            hashes = [items_by_id[i].evidence_hash or "" for i in ids]
+            md = material_digest_for(
+                recurrence_key=rkey,
+                evidence_ids=ids,
+                evidence_hashes=hashes,
+                class_key=class_key,
+            )
+            if is_suppressed(rkey, md, rejected):
+                continue
             outputs.append(
                 Finding(
                     id=f"find-{snap.dream_id}-{_stable_id(rkey, md)}",
                     dream_id=snap.dream_id,
                     snapshot_id=snap.snapshot_id,
-                    class_key="behaviour_route_signal",
+                    class_key=f"gotcha_{class_key}"[:128],
                     lane="behaviour",
-                    summary=f"{len(behaviour_ids)} route empty/fail signal(s)",
-                    evidence_strength=_strength(len(behaviour_ids)),
-                    evidence_ids=sorted(behaviour_ids),
+                    summary=(
+                        f"{len(ids)} corrected gotcha signal(s): {class_key}"
+                    ),
+                    evidence_strength=_strength(len(ids)),
+                    evidence_ids=sorted(ids),
                     recurrence_key=rkey,
-                    support_counts={"generation": len(behaviour_ids)},
+                    support_counts={"generation": len(ids)},
                     counterevidence_ids=list(counter_ids),
                     material_digest=md,
                 )
@@ -785,21 +831,71 @@ def analyze(
                     lane="behaviour",
                     effect_type="overlay_rule",
                     operation="add_rule",
-                    rule_id="route-empty-guidance",
-                    summary="Optional fail-soft retrieval guidance for empty READ",
+                    rule_id=f"gotcha-{class_key}"[:MAX_RULE_ID_LEN],
+                    summary=f"Owner-reviewed gotcha reinforcement for {class_key}",
                     expected_outcome="owner_approved_overlay_trial_only",
                     risk_tier="low",
-                    evidence_ids=sorted(behaviour_ids),
+                    evidence_ids=sorted(ids),
                     counterevidence_ids=list(counter_ids),
                     recurrence_key=rkey,
                     material_digest=md,
                     proposal_kind="overlay",
                     target_skill="digital-brain-buddy-session",
-                    extension_slot="fail_soft_language",
-                    target_ref=f"dream:{snap.dream_id}:behaviour:route",
-                    evidence_strength=_strength(len(behaviour_ids)),
+                    extension_slot="route_guidance",
+                    target_ref=f"dream:{snap.dream_id}:behaviour:gotcha:{class_key}",
+                    evidence_strength=_strength(len(ids)),
                 )
             )
+
+        if route_ids:
+            rkey = "behaviour:route_empty_or_fail"
+            hashes = [items_by_id[i].evidence_hash or "" for i in route_ids]
+            md = material_digest_for(
+                recurrence_key=rkey,
+                evidence_ids=route_ids,
+                evidence_hashes=hashes,
+                class_key="route_signal",
+            )
+            if not is_suppressed(rkey, md, rejected):
+                outputs.append(
+                    Finding(
+                        id=f"find-{snap.dream_id}-{_stable_id(rkey, md)}",
+                        dream_id=snap.dream_id,
+                        snapshot_id=snap.snapshot_id,
+                        class_key="behaviour_route_signal",
+                        lane="behaviour",
+                        summary=f"{len(route_ids)} route empty/fail signal(s)",
+                        evidence_strength=_strength(len(route_ids)),
+                        evidence_ids=sorted(route_ids),
+                        recurrence_key=rkey,
+                        support_counts={"generation": len(route_ids)},
+                        counterevidence_ids=list(counter_ids),
+                        material_digest=md,
+                    )
+                )
+                outputs.append(
+                    ChangeIntent(
+                        id=f"intent-{snap.dream_id}-{_stable_id(rkey, md, 'ci')}",
+                        dream_id=snap.dream_id,
+                        snapshot_id=snap.snapshot_id,
+                        lane="behaviour",
+                        effect_type="overlay_rule",
+                        operation="add_rule",
+                        rule_id="route-empty-guidance",
+                        summary="Optional fail-soft retrieval guidance for empty READ",
+                        expected_outcome="owner_approved_overlay_trial_only",
+                        risk_tier="low",
+                        evidence_ids=sorted(route_ids),
+                        counterevidence_ids=list(counter_ids),
+                        recurrence_key=rkey,
+                        material_digest=md,
+                        proposal_kind="overlay",
+                        target_skill="digital-brain-buddy-session",
+                        extension_slot="fail_soft_language",
+                        target_ref=f"dream:{snap.dream_id}:behaviour:route",
+                        evidence_strength=_strength(len(route_ids)),
+                    )
+                )
 
     # --- Housekeeping digest (always when any generation evidence) ---
     if gen_ids:
