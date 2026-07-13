@@ -65,7 +65,7 @@ the **plugin package hosts cache**, not Docker layers.
    - Grok: `grok plugin update digital-brain-buddy`
 8. Rebuild local MCP: `CLAUDE_PROJECT_DIR=$PWD bash plugins/digital-brain-buddy/scripts/compose-up.sh`
 
-## Why 0.3.0
+## Why these minors
 
 `0.1.0` was the first local buddy packaging (skills, hooks, MCP URL).
 
@@ -78,3 +78,12 @@ write path even when the MCP server rejects it.
 harness generation pins, guided report-only DreamRun skill/command, and a
 capability-fenced maintainer agent. MCP tools and the agent contract change;
 hosts must pick up a new cache path (including a fresh Codex `+codex.` suffix).
+
+`0.4.0` is the **initiate-on-first-run** session contract (language → intro →
+seed people/focus → light SOUL → initiation receipt).
+
+`0.5.0` is the **durable gotcha loop** after correction FEEDBACK: mandatory
+quality-plane seed + user-visible confirmation, agent-actionable
+`create_feedback` DX, and Dream clustering of corrected RunEvent taxonomy.
+Skill hard rules change; hosts on `0.4.0` caches keep teaching the incomplete
+path until they update.

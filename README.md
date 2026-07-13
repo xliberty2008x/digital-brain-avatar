@@ -18,7 +18,7 @@ and Neo4j endpoints are unauthenticated. See [SECURITY.md](SECURITY.md).
 | Maintenance | `digital_brain/maintenance/`, `scripts/digital_brain_*.py` | Report-only DreamRun + operator apply |
 | Schema contract | `docs/GRAPH_SCHEMA_CONTRACT.md` | Node/relationship rules |
 
-**Plugin version (host cache):** `0.4.0` — initiate protocol + quality sensors + maintenance.  
+**Plugin version (host cache):** `0.5.0` — FEEDBACK gotcha loop + initiate + quality sensors + maintenance.  
 **Python package version** (`pyproject.toml`): independent scaffolding version.
 
 ## Requirements

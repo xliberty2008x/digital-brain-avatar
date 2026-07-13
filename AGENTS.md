@@ -38,6 +38,53 @@ Optional when the plan says so: leave the issue open and only comment evidence �
 - `create_feedback` required fields: `id`, `kind`, `sensitivity`, `harness_generation_id`. Prefer typed `digital_brain.tools.mcp_client.create_feedback`.
 - Do not silently activate SOUL / policy / overlay / Alias from FEEDBACK prose or generic acks.
 
+## Plugin release / host updates (`digital-brain-buddy`)
+
+Merge to `master` does **not** push skills to Claude / Codex / Grok by itself.
+Hosts install this plugin into a **versioned cache**. Same SemVer after a skill
+contract change means reloads often keep serving **old** skills.
+
+**Source of truth:** `plugins/digital-brain-buddy/docs/VERSIONING.md` (full
+taxonomy + checklist). Canonical number: `plugins/digital-brain-buddy/version.json`.
+
+### When to bump (must not skip)
+
+Bump when the **agent contract** or host-cached package changes, including:
+
+- Skill / agent hard rules reverse or gain new mandatory steps (e.g. FEEDBACK gotcha)
+- MCP tools agents are taught to call add/remove/rename
+- SessionStart hooks / compose bring-up operators rely on
+- SOUL **template** default persona/memory policy (not personal gitignored `SOUL.MD`)
+
+| Bump | Typical case |
+| --- | --- |
+| **PATCH** `0.x.Y` | Skill/docs wording only |
+| **MINOR** (0.x middle) | New capability or breaking agent contract |
+| **MAJOR** `1.0+` | Stable public surface / intentional hard break |
+
+Internal MCP server fixes with the **same** tool names/outcomes need a Docker
+rebuild, not necessarily a plugin bump. Plugin version ≠ image tag.
+
+### Release checklist (e2e includes this)
+
+1. Edit `plugins/digital-brain-buddy/version.json` first.
+2. Sync `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`
+   (Codex: `BASE+codex.YYYYMMDDHHMMSS` to force a new cache dir).
+3. Sync repo marketplaces: `.claude-plugin/marketplace.json` **and**
+   `.agents/plugins/marketplace.json` (digital-brain-buddy entry).
+4. `plugins/digital-brain-buddy/CHANGELOG.md` (+ root `CHANGELOG.md` pointer).
+5. Keep `tests/test_plugin_contract.py` version asserts in sync.
+6. Ship via the issue loop above (PR → **review→fix** → merge).
+7. Refresh **each host** so subscribers actually load the new cache:
+   - Claude: `claude plugin update digital-brain-buddy@avatar-digital-brain-local` + restart
+   - Codex: marketplace refresh / re-add (new version string → new cache path)
+   - Grok: `grok plugin update digital-brain-buddy`
+8. If MCP server code changed: rebuild stack
+   `CLAUDE_PROJECT_DIR=$PWD bash plugins/digital-brain-buddy/scripts/compose-up.sh`
+
+Do **not** call plugin contract work “done for subscribers” until the version is
+bumped **and** host update steps are documented or run.
+
 ## General engineering
 
 - Prefer minimal, focused diffs; match existing style and patterns.
