@@ -204,22 +204,67 @@ acknowledgements alone (`yes`, `ok`, `👍`, “sure”) are **not** FEEDBACK an
   Default maintenance is manual report-only; no schedule/heartbeat; no private
   proposal queue in shared/non-owner sessions.
 
-### Evidence write
+### Evidence write (`create_feedback` contract)
 
-1. Call `create_feedback` with the session-pinned
-   `harness_generation_id` unchanged.
-2. Kinds: `entity_wrong` | `claim_false` | `miss` | `invent` | `praise`.
-3. Feedback is an immutable observation (plus optional removable
-   `QualityPayload` for raw text). Lifecycle events are separate rows.
+Call `create_feedback` **once** with the session-pinned
+`harness_generation_id` unchanged. Prefer the typed helper
+`digital_brain.tools.mcp_client.create_feedback` (or the MCP tool with the
+same kwargs) over free-form inventing of field names.
+
+**Required fields (exact names — do not invent alternatives):**
+
+| field | values / notes |
+| --- | --- |
+| `id` | client-minted stable id |
+| `kind` | `entity_wrong` \| `claim_false` \| `miss` \| `invent` \| `praise` |
+| `sensitivity` | `public_ops` \| `personal` \| `intimate` |
+| `harness_generation_id` | session pin (`DIGITAL_BRAIN_HARNESS_GENERATION_ID`) |
+
+**Optional:** `source_turn_ref`, `redacted_summary` (max 512; short **imperative
+gotcha rule** preferred), `raw_payload` (removable QualityPayload — never
+journal-indexed), `schema_version`, `taxonomy_version`, `request_fingerprint`,
+`created_at`.
+
+**Forbidden aliases (validation will reject):** `summary`, `detail`, `payload`,
+`note`, `text`, `message`, `body` — use `redacted_summary` / `raw_payload`.
+
+Feedback is an immutable quality-plane observation. Lifecycle events are
+separate rows. A life-journal append is **not** a substitute for this write.
+
+### Durable gotcha step (mandatory after correction FEEDBACK)
+
+When kind is a correction (`entity_wrong` / `claim_false` / `miss` / `invent`),
+**must** stage a durable gotcha candidate on the **quality plane** in the same
+turn (not only chat intent):
+
+1. **Seed:** the `create_feedback` row above — put a short imperative rule in
+   `redacted_summary` (e.g. “close people / diagnoses: deep graph pack before
+   first sentence”). Kind is the maintenance class signal.
+2. **Optional machine taxonomy:** `record_run_event` with
+   `route=FEEDBACK`, `task_outcome=corrected`, `approach` and/or
+   `error_class` / `recurrence_key` (stable across sessions), same
+   `harness_generation_id`. Use `sensitivity=public_ops` on the RunEvent when
+   the Feedback itself is intimate so Dream can cluster the class without
+   intimate free text.
+3. **User-visible confirmation (required):** surface one short line in the
+   reply or session status:
+   - success: `gotcha staged: <feedback_id> — <rule>`
+   - sensors unavailable: `parked: sensor down`
+4. **Must not** treat `append_journal_entry` / life-journal as satisfying (1–3).
+   Journal is life memory; ops learning lives in Feedback / RunEvent only.
+5. Do **not** silently activate SOUL / policy / overlay / Alias from the
+   gotcha; Dream/operator review is the promote path.
+
+Praise remains counter-only Feedback (no gotcha staging required).
 
 ### Kind-specific promote rules
 
 | kind | Online action | Activation |
 | --- | --- | --- |
-| `entity_wrong` | Feedback + optional typed Alias proposal (review card) | Operator-confirmed Alias effect only |
-| `claim_false` | Feedback + propose-only review note | **Propose-only** until a Claim/Assertion provenance model exists — never mutates life memory from FEEDBACK |
-| `miss` | Feedback; missing memory may become an owner-confirmed normal WRITE later | No silent journal invent |
-| `invent` | Feedback; optional session blocklist note | No identity mutation |
+| `entity_wrong` | Feedback + gotcha seed + optional typed Alias proposal (review card) | Operator-confirmed Alias effect only |
+| `claim_false` | Feedback + gotcha seed + propose-only review note | **Propose-only** until a Claim/Assertion provenance model exists — never mutates life memory from FEEDBACK |
+| `miss` | Feedback + gotcha seed; missing memory may become an owner-confirmed normal WRITE later | No silent journal invent |
+| `invent` | Feedback + gotcha seed; optional session blocklist note | No identity mutation |
 | `praise` | Feedback **counter only** | Never a life journal; never activation |
 
 ### Review card (when proposing)
@@ -234,6 +279,8 @@ path. Park for maintenance when evidence is thin. Do not invent canonical ids.
 - Do not treat textual “yes” as authority.
 - Do not call operator apply scripts, mint ActivationAuthority, or touch
   quality/operator credentials from the session agent or subagents.
+- Do not treat a life-journal append as the gotcha / quality sensor path
+  (no journal-as-gotcha).
 
 ## Subagent Mode
 
@@ -329,11 +376,16 @@ In subagent mode, steps 1-4 belong to the writer worker, not the main session ag
 For `FEEDBACK`:
 
 1. classify kind (`entity_wrong` / `claim_false` / `miss` / `invent` / `praise`)
-2. call `create_feedback` with pinned harness generation id
-3. for `entity_wrong`, draft a one-line Alias review proposal card (propose-only)
-4. for `claim_false`, keep propose-only — do not mutate life memory
-5. for `praise`, counter only — never append a journal
-6. never activate Alias from prose; operator path is
+2. call `create_feedback` with **exact** required fields
+   (`id`, `kind`, `sensitivity`, `harness_generation_id`) + pinned generation id;
+   put the short imperative gotcha rule in `redacted_summary`
+3. for corrections: optional `record_run_event`
+   (`task_outcome=corrected`, approach/`error_class`/`recurrence_key`)
+4. surface `gotcha staged: <id> — <rule>` (or `parked: sensor down`)
+5. for `entity_wrong`, draft a one-line Alias review proposal card (propose-only)
+6. for `claim_false`, keep propose-only — do not mutate life memory
+7. for `praise`, counter only — never append a journal; never journal-as-gotcha
+8. never activate Alias from prose; operator path is
    `scripts/digital_brain_apply_proposal.py`
 
 ## What To Store
@@ -418,6 +470,8 @@ harness session handle for this conversation**, not a leftover file from another
 - Do not let delegated workers invent buddy-tone prose on behalf of the main session.
 - Do not activate Alias / pinned identity / policy / overlay from FEEDBACK prose or generic acks.
 - Do not treat `claim_false` as a life-memory mutation path.
+- Do not treat JournalEntry / `append_journal_entry` as the gotcha or
+  quality-sensor path after FEEDBACK (no journal-as-gotcha).
 - Do not put operator apply credentials or ActivationAuthority mint/consume into
   reader/writer/entity-check toolsets.
 - Do not load overlay files from draft/proposal trees, plugin paths, or bare

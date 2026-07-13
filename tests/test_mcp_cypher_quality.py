@@ -17,14 +17,20 @@ sys.path.insert(0, str(ROOT / "mcp_servers" / "cypher" / "src"))
 from digital_brain_mcp_cypher.quality import (  # noqa: E402
     DETERMINISTIC_OUTCOME_SOURCES,
     FEEDBACK_KINDS,
+    FEEDBACK_REQUIRED_FIELDS,
+    GOTCHA_SENSOR_DOWN_LINE,
+    GOTCHA_STAGED_PREFIX,
     MAX_RAW_PAYLOAD_LEN,
     MAX_REF_COUNT,
     MAX_SUMMARY_LEN,
+    SENSITIVITIES,
     QualityStore,
     build_tool_outcome_run_event,
     compute_raw_hmac,
     compute_sensor_request_fingerprint,
+    create_feedback_contract_hint,
     feedback_identity_payload,
+    format_gotcha_staged_line,
     mint_tool_outcome_event_id,
     resolve_session_harness_generation_id,
     try_record_tool_outcome_run_event,
@@ -384,6 +390,124 @@ def test_create_feedback_validation_errors():
 
     with pytest.raises(ValueError, match="raw_payload exceeds"):
         store.create_feedback(_feedback(raw_payload="y" * (MAX_RAW_PAYLOAD_LEN + 1)))
+
+
+def test_create_feedback_wrong_alias_kwargs_and_missing_fields_are_agent_actionable():
+    """Wrong summary/detail kwargs and missing required fields name the real contract."""
+    session = _FakeSession()
+    store = _store_with(session)
+    hint = create_feedback_contract_hint()
+    assert "id" in hint and "kind" in hint and "sensitivity" in hint
+    assert "harness_generation_id" in hint
+    assert "entity_wrong" in hint or "miss" in hint
+    assert "public_ops" in hint
+    assert list(FEEDBACK_REQUIRED_FIELDS) == [
+        "id",
+        "kind",
+        "sensitivity",
+        "harness_generation_id",
+    ]
+
+    with pytest.raises(ValueError) as wrong_args:
+        store.create_feedback(
+            {
+                "harness_generation_id": GENERATION_ID,
+                "kind": "miss",
+                "summary": "agent invented field",
+                "detail": "also wrong",
+            }
+        )
+    err = str(wrong_args.value)
+    assert "missing required" in err
+    assert "id" in err and "sensitivity" in err
+    assert "summary" in err and "detail" in err
+    assert "redacted_summary" in err or "raw_payload" in err
+    for token in ("entity_wrong", "miss", "invent", "public_ops", "intimate"):
+        assert token in err
+    # No quality row written on bad kwargs.
+    assert session.feedback == {}
+
+    with pytest.raises(ValueError) as missing_id:
+        store.create_feedback(
+            {
+                "kind": "miss",
+                "sensitivity": "personal",
+                "harness_generation_id": GENERATION_ID,
+            }
+        )
+    mid = str(missing_id.value)
+    assert "missing required" in mid
+    assert "id" in mid
+    assert "create_feedback requires" in mid
+
+    # Alias alone (even with all required present) is rejected so agents fix shape.
+    with pytest.raises(ValueError, match="unexpected/alias|summary"):
+        store.create_feedback(
+            _feedback(summary="should not be accepted")
+        )
+
+
+def test_correction_feedback_path_seeds_quality_plane_gotcha_not_journal():
+    """Simulated user correction → Feedback (+ optional corrected RunEvent) with harness gen.
+
+    Journal is not required (and not written) for the sensor path.
+    """
+    session = _FakeSession()
+    store = _store_with(session)
+    rule = "close people / diagnoses: deep graph pack before first sentence"
+    fb = store.create_feedback(
+        _feedback(
+            id="fb-gotcha-olivia-1",
+            kind="miss",
+            sensitivity="intimate",
+            redacted_summary=rule,
+            raw_payload="intimate family correction — must stay off journal index",
+            source_turn_ref="turn-correction-1",
+        )
+    )
+    assert fb["outcome"] == "created"
+    assert fb["feedback_id"] == "fb-gotcha-olivia-1"
+    assert fb["kind"] == "miss"
+    assert fb["harness_generation_id"] == GENERATION_ID
+    assert "intimate family" not in fb
+    assert session.created_journal is False
+    assert "fb-gotcha-olivia-1" in session.feedback
+    row = session.feedback["fb-gotcha-olivia-1"]
+    assert row["harness_generation_id"] == GENERATION_ID
+    assert row["redacted_summary"] == rule
+    assert "payload_text" not in row
+
+    re = store.record_run_event(
+        _run_event(
+            id="re-gotcha-olivia-1",
+            route="FEEDBACK",
+            tool="create_feedback",
+            tool_outcome="success",
+            outcome_source="model_advisory",
+            task_outcome="corrected",
+            approach="shallow_reply_without_person_pack",
+            error_class="sensitive_person_reply_without_deep_read",
+            recurrence_key="sensitive_person_reply_without_deep_read",
+            decision_point="pre_reply_person_pack",
+            sensitivity="public_ops",
+            redacted_summary=rule,
+            entity_refs=["olivia_daughter"],
+        )
+    )
+    assert re["outcome"] == "created"
+    assert re["run_event_id"] == "re-gotcha-olivia-1"
+    assert re["harness_generation_id"] == GENERATION_ID
+    stored_re = session.run_events["re-gotcha-olivia-1"]
+    assert stored_re["task_outcome"] == "corrected"
+    assert stored_re["error_class"] == "sensitive_person_reply_without_deep_read"
+    assert stored_re["recurrence_key"] == "sensitive_person_reply_without_deep_read"
+    assert session.created_journal is False
+
+    line = format_gotcha_staged_line(fb["feedback_id"], rule)
+    assert line.startswith(GOTCHA_STAGED_PREFIX)
+    assert "fb-gotcha-olivia-1" in line
+    assert "deep graph pack" in line
+    assert GOTCHA_SENSOR_DOWN_LINE == "parked: sensor down"
 
 
 def test_feedback_fingerprint_excludes_raw_text_includes_hmac():

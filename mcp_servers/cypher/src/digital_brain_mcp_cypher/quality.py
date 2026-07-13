@@ -66,6 +66,41 @@ MAX_HOST_LEN = 128
 MAX_RECURRENCE_KEY_LEN = 128
 RAW_HMAC_KEY_VERSION = "sha256-v1"
 
+# Agent-facing create_feedback contract (skill + validation DX share these).
+FEEDBACK_REQUIRED_FIELDS: tuple[str, ...] = (
+    "id",
+    "kind",
+    "sensitivity",
+    "harness_generation_id",
+)
+FEEDBACK_OPTIONAL_FIELDS: frozenset[str] = frozenset(
+    {
+        "source_turn_ref",
+        "redacted_summary",
+        "raw_payload",
+        "schema_version",
+        "taxonomy_version",
+        "request_fingerprint",
+        "created_at",
+    }
+)
+# Common wrong kwargs agents invent when they have not loaded the schema.
+FEEDBACK_ALIAS_FIELD_HINTS: dict[str, str] = {
+    "summary": "redacted_summary",
+    "detail": "raw_payload (optional) or redacted_summary",
+    "payload": "raw_payload",
+    "note": "redacted_summary",
+    "text": "raw_payload or redacted_summary",
+    "message": "redacted_summary",
+    "body": "raw_payload",
+    "description": "redacted_summary",
+    "content": "raw_payload or redacted_summary",
+}
+
+# User-visible gotcha confirmation lines (skill obligation; not graph schema).
+GOTCHA_STAGED_PREFIX = "gotcha staged:"
+GOTCHA_SENSOR_DOWN_LINE = "parked: sensor down"
+
 # Every quality/control node carries Operational in addition to its specific
 # label. Generic retrieval excludes Operational centrally.
 OPERATIONAL_LABEL = "Operational"
@@ -750,18 +785,33 @@ class QualityStore:
         Same id + same request_fingerprint → ``replayed``.
         Same id + different fingerprint → ``conflict``.
         Raw text is stored only on a separate ``QualityPayload`` node.
+
+        Wrong alias kwargs (``summary``/``detail``/…) and missing required
+        fields raise ``ValueError`` bodies that name required keys and allowed
+        ``kind`` / ``sensitivity`` enums so host agents can recover without
+        falling back to journal-as-feedback.
         """
         if not isinstance(feedback, dict):
-            raise TypeError("feedback must be an object")
+            raise TypeError(
+                f"feedback must be an object. {create_feedback_contract_hint()}"
+            )
+        feedback = _normalize_feedback_input(feedback)
 
-        feedback_id = _require_sensor_id(feedback.get("id"), "feedback.id")
-        kind = _require_enum(feedback.get("kind"), FEEDBACK_KINDS, "feedback.kind")
-        sensitivity = _require_enum(
-            feedback.get("sensitivity"), SENSITIVITIES, "feedback.sensitivity"
-        )
-        harness_generation_id = _require_generation_id(
-            feedback.get("harness_generation_id")
-        )
+        try:
+            feedback_id = _require_sensor_id(feedback.get("id"), "feedback.id")
+            kind = _require_enum(feedback.get("kind"), FEEDBACK_KINDS, "feedback.kind")
+            sensitivity = _require_enum(
+                feedback.get("sensitivity"), SENSITIVITIES, "feedback.sensitivity"
+            )
+            harness_generation_id = _require_generation_id(
+                feedback.get("harness_generation_id")
+            )
+        except ValueError as exc:
+            # Append contract hint when field-level validators omit full enums.
+            msg = str(exc)
+            if "create_feedback requires" not in msg:
+                raise ValueError(f"{msg}. {create_feedback_contract_hint()}") from exc
+            raise
         schema_version = str(
             feedback.get("schema_version") or FEEDBACK_SCHEMA_VERSION
         ).strip()
@@ -2619,6 +2669,58 @@ def try_record_tool_outcome_run_event(
 def _now_iso(runner: Any) -> str:
     row = _run_one(runner, "RETURN toString(datetime()) AS ts")
     return (row or {}).get("ts") or "unknown"
+
+
+def create_feedback_contract_hint() -> str:
+    """Agent-actionable contract string for create_feedback failures and skills."""
+    return (
+        "create_feedback requires "
+        f"{list(FEEDBACK_REQUIRED_FIELDS)}; "
+        f"kind one of {sorted(FEEDBACK_KINDS)}; "
+        f"sensitivity one of {sorted(SENSITIVITIES)}; "
+        "optional: "
+        f"{sorted(FEEDBACK_OPTIONAL_FIELDS)}. "
+        "Do not pass summary/detail/payload/note — use redacted_summary/raw_payload. "
+        "Prefer typed digital_brain.tools.mcp_client.create_feedback over free-form kwargs."
+    )
+
+
+def format_gotcha_staged_line(feedback_id: str, rule: str) -> str:
+    """Short user-visible confirmation after a durable quality-plane gotcha seed."""
+    fid = str(feedback_id or "").strip() or "unknown"
+    rule_text = " ".join(str(rule or "").split())
+    if len(rule_text) > 160:
+        rule_text = rule_text[:157] + "..."
+    if not rule_text:
+        rule_text = "quality observation recorded"
+    return f"{GOTCHA_STAGED_PREFIX} {fid} — {rule_text}"
+
+
+def _normalize_feedback_input(feedback: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate create_feedback dict shape; raise agent-actionable ValueError."""
+    if not isinstance(feedback, Mapping):
+        raise TypeError(
+            f"feedback must be an object. {create_feedback_contract_hint()}"
+        )
+    keys = {str(k) for k in feedback.keys()}
+    alias_hits = sorted(k for k in keys if k in FEEDBACK_ALIAS_FIELD_HINTS)
+    # Treat empty string on required fields as missing for the preflight message.
+    missing_named: list[str] = []
+    for field in FEEDBACK_REQUIRED_FIELDS:
+        value = feedback.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            missing_named.append(field)
+
+    if alias_hits or missing_named:
+        parts: list[str] = []
+        if missing_named:
+            parts.append(f"missing required: {missing_named}")
+        if alias_hits:
+            remap = {k: FEEDBACK_ALIAS_FIELD_HINTS[k] for k in alias_hits}
+            parts.append(f"unexpected/alias fields (not accepted): {remap}")
+        parts.append(create_feedback_contract_hint())
+        raise ValueError("; ".join(parts))
+    return dict(feedback)
 
 
 def _require_sensor_id(value: Any, field_name: str) -> str:
