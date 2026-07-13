@@ -5,6 +5,14 @@
 - Public release hygiene: product README, SECURITY.md, MIT LICENSE, loopback
   Compose binds, personal dump removal, documentation redaction.
 
+## Plugin 0.5.0 — 2026-07-14
+
+See [plugins/digital-brain-buddy/CHANGELOG.md](plugins/digital-brain-buddy/CHANGELOG.md).
+
+FEEDBACK gotcha learning loop: durable quality-plane sensors after user
+correction, MCP create_feedback DX, Dream clustering of corrected failure
+classes, and host-facing version bump so Claude/Codex/Grok caches refresh.
+
 ## Plugin 0.4.0 — 2026-07-10
 
 See [plugins/digital-brain-buddy/CHANGELOG.md](plugins/digital-brain-buddy/CHANGELOG.md).

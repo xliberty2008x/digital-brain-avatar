@@ -7,8 +7,11 @@ a SessionStart compose hook, and Neo4j Cypher MCP config.
 **Personal identity:** `SOUL.MD` in the plugin root is created per user (from
 `assets/SOUL.template.md`) and is **gitignored**. Do not commit a personal SOUL.
 
-**Version:** see `version.json` (currently `0.4.0`).  
+**Version:** see `version.json` (currently `0.5.0`).  
 **License:** MIT (same as the repository root).
+
+After a version bump, hosts must **update** the plugin so skills leave the old
+cache (see `docs/VERSIONING.md`). Merge alone does not refresh Claude/Codex/Grok.
 
 ## What you get
 

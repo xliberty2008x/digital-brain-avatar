@@ -71,9 +71,9 @@ def _load_json(path: pathlib.Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_plugin_version_is_0_4_0():
+def test_plugin_version_is_0_5_0():
     raw = _load_json(VERSION_JSON)
-    assert raw == "0.4.0"
+    assert raw == "0.5.0"
 
 
 def test_host_manifests_share_base_version():
@@ -117,10 +117,12 @@ def test_maintenance_surface_files_exist():
         assert path.is_file(), path
 
 
-def test_changelog_mentions_0_4_0():
+def test_changelog_mentions_0_5_0():
     text = _read(CHANGELOG)
+    assert "## 0.5.0" in text
     assert "## 0.4.0" in text
     assert "## 0.3.0" in text
+    assert "gotcha" in text.lower() or "FEEDBACK" in text
     assert "maintenance" in text.lower() or "DreamRun" in text
 
 

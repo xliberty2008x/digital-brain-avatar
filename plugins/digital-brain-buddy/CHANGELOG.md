@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 — 2026-07-14
+
+Durable gotcha learning loop after FEEDBACK corrections (closes the “no gotcha” gap).
+
+- Session skill + subagent prompts: mandatory quality-plane gotcha after
+  correction FEEDBACK; exact `create_feedback` fields/enums; forbid journal-as-gotcha;
+  user-visible `gotcha staged: …` / `parked: sensor down`
+- MCP `create_feedback` DX: alias kwargs (`summary`/`detail`/…) rejected with
+  agent-actionable contract hint on the tool path
+- Dream analyzer clusters `task_outcome=corrected` RunEvents by
+  `recurrence_key` / `error_class` / `approach` (taxonomy survives freeze)
+- EvidenceItem freeze retains `recurrence_key`, `approach`, `decision_point`
+- Repo `AGENTS.md`: e2e ship loop includes review→fix before merge; plugin
+  host-update path documented
+- Fresh Codex cache suffix (`0.5.0+codex.…`); marketplace entries at `0.5.0`
+
 ## 0.4.0 — 2026-07-10
 
 Initiate protocol for empty buddy first run.
