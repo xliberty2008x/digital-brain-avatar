@@ -122,14 +122,29 @@ Do not spawn reader/writer/entity-check workers to activate identity effects.
 On a `FEEDBACK` turn the parent session agent:
 
 1. classifies kind (`entity_wrong` | `claim_false` | `miss` | `invent` | `praise`)
-2. calls `create_feedback` with the pinned harness generation id
-3. for `entity_wrong`, may show a propose-only Alias review card
-4. for `claim_false`, remains propose-only (no life-memory mutation)
-5. for `praise`, records a counter only (never a JournalEntry)
-6. never treats generic ack (`yes`/`ok`/👍) as activation
-7. max one confirmation prompt per user turn
-8. leaves apply/revoke to the operator script
-   `scripts/digital_brain_apply_proposal.py` (no unattended `--yes`)
+2. calls `create_feedback` with **exact** required fields only:
+   - `id` (client-minted)
+   - `kind` (`entity_wrong` | `claim_false` | `miss` | `invent` | `praise`)
+   - `sensitivity` (`public_ops` | `personal` | `intimate`)
+   - `harness_generation_id` (session pin, unchanged)
+   - optional: `redacted_summary` (short imperative gotcha rule), `raw_payload`,
+     `source_turn_ref`
+   - **never** pass `summary` / `detail` / `payload` / `note` aliases
+   - prefer typed `digital_brain.tools.mcp_client.create_feedback`
+3. for corrections (`miss`/`invent`/`entity_wrong`/`claim_false`): **must**
+   stage a durable quality-plane gotcha (the Feedback row is the seed; optional
+   `record_run_event` with `task_outcome=corrected` + approach/`error_class`/
+   `recurrence_key`). **Must not** treat life-journal append as the gotcha path
+   (no journal-as-gotcha).
+4. surfaces one user-visible line: `gotcha staged: <id> — <rule>` or
+   `parked: sensor down`
+5. for `entity_wrong`, may show a propose-only Alias review card
+6. for `claim_false`, remains propose-only (no life-memory mutation)
+7. for `praise`, records a counter only (never a JournalEntry; no gotcha required)
+8. never treats generic ack (`yes`/`ok`/👍) as activation
+9. max one confirmation prompt per user turn
+10. leaves apply/revoke to the operator script
+    `scripts/digital_brain_apply_proposal.py` (no unattended `--yes`)
 
 ## Writer Worker
 

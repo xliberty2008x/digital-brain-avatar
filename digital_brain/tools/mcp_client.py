@@ -646,8 +646,16 @@ async def create_feedback(
 ) -> dict[str, Any]:
     """Create Feedback through the quality-plane MCP tool.
 
-    On ``McpWriteOutcomeUnknown``, reconciles via :func:`get_quality_receipt`
-    instead of blind-retrying.
+    Required kwargs (exact names): ``id``, ``kind``, ``sensitivity``,
+    ``harness_generation_id`` (defaults from session pin when omitted).
+    ``kind`` ∈ {entity_wrong, claim_false, miss, invent, praise};
+    ``sensitivity`` ∈ {public_ops, personal, intimate}.
+    Optional: ``source_turn_ref``, ``redacted_summary`` (imperative gotcha
+    rule), ``raw_payload``. Do **not** pass ``summary``/``detail``/``note``.
+
+    Prefer this typed helper over free-form MCP ``tools/call`` kwargs so thin
+    hosts skip schema discovery. On ``McpWriteOutcomeUnknown``, reconciles via
+    :func:`get_quality_receipt` instead of blind-retrying.
     """
     arguments: dict[str, Any] = {
         "id": id,

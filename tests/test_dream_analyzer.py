@@ -218,6 +218,106 @@ def test_evidence_delimited_and_injection_rejected_from_change_intent():
         )
 
 
+def test_gotcha_failure_class_clusters_without_intimate_raw_payload():
+    """Correction Feedback + taxonomy RunEvent → class in analyzer; no intimate raw."""
+    from digital_brain.maintenance.privacy import (  # local import keeps module edge light
+        assert_no_intimate_fields,
+        redact_evidence_record,
+        redact_packet,
+    )
+
+    intimate_raw = "never surface this intimate family quote about Olivia/15q24"
+    rule = "close people / diagnoses: deep graph pack before first sentence"
+    evidence = [
+        {
+            "id": "fb-gotcha-miss-1",
+            "label": "Feedback",
+            "kind": "miss",
+            "sensitivity": "intimate",
+            "created_at": "2026-07-09T10:00:00Z",
+            "evidence_hash": "hash-fb-gotcha-miss-1",
+            "redacted_summary": rule,
+            "raw_payload": intimate_raw,
+            "payload_text": intimate_raw,
+            "harness_generation_id": GENERATION_ID,
+            "eligible_exposure": True,
+        },
+        {
+            "id": "re-gotcha-class-1",
+            "label": "RunEvent",
+            "route": "FEEDBACK",
+            "tool": "create_feedback",
+            "tool_outcome": "success",
+            "task_outcome": "corrected",
+            "error_class": "sensitive_person_reply_without_deep_read",
+            "recurrence_key": "sensitive_person_reply_without_deep_read",
+            "approach": "shallow_reply_without_person_pack",
+            "sensitivity": "public_ops",
+            "created_at": "2026-07-09T10:01:00Z",
+            "evidence_hash": "hash-re-gotcha-class-1",
+            "redacted_summary": rule,
+            "harness_generation_id": GENERATION_ID,
+            "eligible_exposure": True,
+        },
+        {
+            "id": "fb-gotcha-miss-2",
+            "label": "Feedback",
+            "kind": "miss",
+            "sensitivity": "personal",
+            "created_at": "2026-07-09T10:02:00Z",
+            "evidence_hash": "hash-fb-gotcha-miss-2",
+            "redacted_summary": rule,
+            "harness_generation_id": GENERATION_ID,
+            "eligible_exposure": True,
+        },
+    ]
+
+    # Field-level redaction: intimate drops free-form summary; class/kind retained.
+    intimate_projected = redact_evidence_record(evidence[0])
+    assert intimate_projected.get("kind") == "miss"
+    assert intimate_projected.get("sensitivity") == "intimate"
+    assert "raw_payload" not in intimate_projected
+    assert "payload_text" not in intimate_projected
+    assert intimate_projected.get("redacted_summary") is None
+    assert intimate_raw not in str(intimate_projected)
+
+    class_projected = redact_evidence_record(evidence[1])
+    assert class_projected.get("error_class") == "sensitive_person_reply_without_deep_read"
+    assert class_projected.get("recurrence_key") == "sensitive_person_reply_without_deep_read"
+    assert class_projected.get("kind") is None or class_projected.get("route") == "FEEDBACK"
+    assert intimate_raw not in str(class_projected)
+
+    packet = redact_packet({"items": evidence, "role": "analyzer"})
+    assert_no_intimate_fields(packet)
+    assert intimate_raw not in str(packet)
+
+    frozen = freeze_snapshot(
+        evidence,
+        policy=_policy(holdout_ids=frozenset(), holdout_ratio=0.0),
+        dream_id="dream-gotcha",
+        snapshot_id="snap-gotcha",
+    )
+    # Frozen analyzer packet must not leak intimate raw.
+    assert_no_intimate_fields(frozen.analyzer_packet)
+    assert intimate_raw not in str(frozen.analyzer_packet)
+
+    outputs = analyze(frozen)
+    findings = [o for o in outputs if isinstance(o, Finding)]
+    # Memory lane clusters non-intimate miss Feedback by kind.
+    memory_miss = [
+        f
+        for f in findings
+        if f.lane == "memory" and ("miss" in f.class_key or f.recurrence_key == "memory:miss")
+    ]
+    assert memory_miss, f"expected memory miss finding from gotcha Feedback; got {findings!r}"
+    for finding in findings:
+        dumped = finding.model_dump()
+        assert_no_intimate_fields(dumped)
+        assert intimate_raw not in str(dumped)
+        assert "Olivia" not in str(dumped)
+        assert "15q24" not in str(dumped)
+
+
 def test_engineering_outages_cannot_produce_semantic_memory_effects():
     evidence = [
         {

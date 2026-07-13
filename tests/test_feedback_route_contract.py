@@ -127,6 +127,43 @@ def test_feedback_kinds_and_create_feedback_path():
     assert re.search(r"counter only|counter-only", session, re.I)
 
 
+def test_feedback_create_feedback_required_fields_and_enums_documented():
+    """Skill embeds exact create_feedback contract so thin hosts skip tools/list."""
+    session = _read(SESSION_SKILL)
+    prompts = _read(SUBAGENT_PROMPTS)
+    combined = session + "\n" + prompts
+    for field in ("id", "kind", "sensitivity", "harness_generation_id"):
+        assert field in session, f"session skill missing required field {field}"
+        assert field in prompts, f"subagent prompts missing required field {field}"
+    for kind in ("entity_wrong", "claim_false", "miss", "invent", "praise"):
+        assert kind in combined
+    for sensitivity in ("public_ops", "personal", "intimate"):
+        assert sensitivity in combined
+    # Forbidden alias kwargs must be called out so agents stop inventing them.
+    for alias in ("summary", "detail"):
+        assert alias in session
+    assert re.search(r"redacted_summary", session)
+    assert "mcp_client.create_feedback" in session or "tools.mcp_client.create_feedback" in session
+
+
+def test_feedback_mandatory_gotcha_step_and_forbids_journal_as_gotcha():
+    session = _read(SESSION_SKILL)
+    prompts = _read(SUBAGENT_PROMPTS)
+    combined = session + "\n" + prompts
+    assert re.search(r"gotcha staged:", combined)
+    assert re.search(r"parked:\s*sensor down", combined)
+    assert re.search(r"journal-as-gotcha|journal as gotcha|not.*gotcha", combined, re.I)
+    assert re.search(
+        r"must not.*(?:journal|append_journal)|(?:journal|append_journal).*not.*(?:gotcha|sensor|substitut)",
+        combined,
+        re.I,
+    )
+    # Durable quality-plane seed (Feedback / optional RunEvent), not chat-only.
+    assert "create_feedback" in combined
+    assert re.search(r"record_run_event|task_outcome.*corrected|recurrence_key", combined)
+    assert re.search(r"Durable gotcha|gotcha step|gotcha candidate|stage a durable", combined, re.I)
+
+
 def test_apply_token_is_intent_not_authority():
     session = _read(SESSION_SKILL)
     assert "APPLY alias:" in session
