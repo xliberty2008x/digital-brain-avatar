@@ -370,10 +370,8 @@ def test_create_feedback_tool_does_not_call_embeddings(
     assert payload["outcome"] == "created"
 
 
-def test_create_feedback_tool_wrong_alias_kwargs_are_agent_actionable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """MCP tool path must surface contract hint for summary/detail (not silent drop)."""
+def _quality_store_factory_that_must_not_write():
+    """QualityStore driver factory whose session refuses any write."""
     from digital_brain_mcp_cypher.quality import QualityStore
 
     class _FakeSession:
@@ -406,7 +404,16 @@ def test_create_feedback_tool_wrong_alias_kwargs_are_agent_actionable(
 
         return _Wrapped()
 
-    monkeypatch.setattr(server, "_quality_store", lambda: QualityStore(factory, "neo4j"))
+    return QualityStore(factory, "neo4j")
+
+
+def test_create_feedback_tool_wrong_alias_kwargs_are_agent_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP tool path must surface contract hint for summary/detail (not silent drop)."""
+    monkeypatch.setattr(
+        server, "_quality_store", _quality_store_factory_that_must_not_write
+    )
     monkeypatch.setattr(server, "_ensure_quality_schema", lambda: None)
 
     with pytest.raises(ValueError) as excinfo:
@@ -425,6 +432,25 @@ def test_create_feedback_tool_wrong_alias_kwargs_are_agent_actionable(
         assert token in err
 
 
+def test_create_feedback_tool_missing_required_is_agent_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing required fields alone (no aliases) still name the full contract."""
+    monkeypatch.setattr(
+        server, "_quality_store", _quality_store_factory_that_must_not_write
+    )
+    monkeypatch.setattr(server, "_ensure_quality_schema", lambda: None)
+
+    with pytest.raises(ValueError) as excinfo:
+        _tool_function(server.create_feedback)(kind="miss")
+    err = str(excinfo.value)
+    assert "missing required" in err
+    for field in ("id", "sensitivity", "harness_generation_id"):
+        assert field in err
+    assert "create_feedback requires" in err
+    assert "public_ops" in err or "intimate" in err
+
+
 def test_create_feedback_tool_description_documents_contract() -> None:
     tools = asyncio.run(server.mcp.list_tools())
     create = next(t for t in tools if t.name == "create_feedback")
@@ -435,6 +461,29 @@ def test_create_feedback_tool_description_documents_contract() -> None:
     assert "summary" in tool_desc or "alias" in tool_desc.lower()
     for kind in ("miss", "invent", "entity_wrong"):
         assert kind in tool_desc
+    for field in ("id", "kind", "sensitivity"):
+        assert field in tool_desc
+
+
+def test_create_feedback_tool_schema_http_is_session_less() -> None:
+    """GET /tool-schemas/create_feedback needs no MCP session headers."""
+    response = asyncio.run(server.create_feedback_tool_schema(None))
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["name"] == "create_feedback"
+    assert body["required"] == [
+        "id",
+        "kind",
+        "sensitivity",
+        "harness_generation_id",
+    ]
+    assert "miss" in body["kind"]
+    assert "intimate" in body["sensitivity"]
+    assert body["forbidden_aliases"]["summary"] == "redacted_summary"
+    assert "redacted_summary" in body["contract_hint"] or "raw_payload" in body[
+        "contract_hint"
+    ]
+    assert "digital_brain.tools.mcp_client.create_feedback" in body["prefer"]
 
 
 def test_revoke_feedback_tool_shape(monkeypatch: pytest.MonkeyPatch) -> None:
