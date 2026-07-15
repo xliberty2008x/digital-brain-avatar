@@ -63,7 +63,7 @@ the **plugin package hosts cache**, not Docker layers.
    - Claude: `claude plugin update digital-brain-buddy@avatar-digital-brain-local` + restart
    - Codex: marketplace refresh + re-add (new cache dir from new version string)
    - Grok: `grok plugin update digital-brain-buddy`
-8. Rebuild local MCP: `CLAUDE_PROJECT_DIR=$PWD bash plugins/digital-brain-buddy/scripts/compose-up.sh`
+8. Rebuild local MCP: `bash plugins/digital-brain-buddy/scripts/compose-up.sh`
 
 ## Why these minors
 
@@ -87,3 +87,7 @@ quality-plane seed + user-visible confirmation, agent-actionable
 `create_feedback` DX, and Dream clustering of corrected RunEvent taxonomy.
 Skill hard rules change; hosts on `0.4.0` caches keep teaching the incomplete
 path until they update.
+
+`0.6.0` is host-agnostic stack recovery plus a durable Ollama trust-boundary
+fix. The launcher works from Codex/Grok workspaces as well as Claude hooks, and
+the MCP container no longer inherits a host-only `OLLAMA_BASE_URL`.

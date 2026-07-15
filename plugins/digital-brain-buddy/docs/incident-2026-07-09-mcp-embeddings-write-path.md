@@ -194,9 +194,9 @@ Note: `task9-verify-...` still has another non-septic follower (`journal-grok-pl
 File: `docker-compose.yml` (`mcp-cypher` service)
 
 ```yaml
-# Always the compose service name inside the network. Host .env may use
-# localhost for host-side tools; that must not leak into this container.
-OLLAMA_BASE_URL: "http://ollama:11434"
+# Application code keeps its OLLAMA_BASE_URL key, sourced from a compose-only
+# override so host-side OLLAMA_BASE_URL cannot leak into the container.
+OLLAMA_BASE_URL: "${MCP_OLLAMA_BASE_URL:-http://ollama:11434}"
 ```
 
 Previously:
@@ -205,7 +205,13 @@ Previously:
 OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
 ```
 
-Host `.env` may keep `OLLAMA_BASE_URL=http://localhost:11434` for host scripts; that value must **not** be interpolated into the MCP container.
+Host `.env` may keep `OLLAMA_BASE_URL=http://localhost:11434` for host scripts;
+that value is not interpolated into the MCP container. A trusted explicit
+override uses `MCP_OLLAMA_BASE_URL=http://host.docker.internal:11434`.
+
+On 2026-07-15 this incident class recurred because the hardcoded fix had been
+replaced by the ambiguous host variable. Issue #21 restored the variable split,
+added rendered-Compose regression tests, and made plugin recovery host-agnostic.
 
 ### 5.2 Operational recovery used during incident
 
@@ -287,7 +293,7 @@ bash scripts/run-journal-e2e.sh
 
 ### For runtime / repo maintainers
 
-1. **Never share a single `OLLAMA_BASE_URL` between host and in-network containers** without an explicit split (`OLLAMA_BASE_URL_HOST` vs container-only).
+1. **Never share a single `OLLAMA_BASE_URL` between host and in-network containers**; use host `OLLAMA_BASE_URL` and compose-only `MCP_OLLAMA_BASE_URL`.
 2. JournalEntry writes are **embedding-gated**; embedding outage = write outage. Monitor Ollama from the MCP container, not only from the host.
 3. Prefer compose service DNS (`http://ollama:11434`) hardcoded or set only in the service block for `mcp-cypher`.
 4. Document that `.env.example` host value is **host-only**.
@@ -346,9 +352,10 @@ If a buddy write takes more than a few minutes, treat it as an **incident**, not
 - **Broken piece:** embedding path from `mcp-cypher` → Ollama (`localhost` vs `ollama` hostname).
 - **Why writes died:** JournalEntry creates hard-require successful embedding injection.
 - **Why it felt like 2 hours:** infra debugging + MCP hangs + process without stop-rules, not Neo4j latency.
-- **Fix in repo:** Compose hardcodes the in-network Ollama URL for
-  `mcp-cypher`, requires a healthy Ollama dependency, and only reports the
-  stack ready after `/readyz` passes its real embedding check.
+- **Fix in repo:** Compose maps the application-facing key from the isolated
+  `MCP_OLLAMA_BASE_URL` (default `http://ollama:11434`), requires a healthy
+  Ollama dependency, and only reports the stack ready after `/readyz` passes
+  its real embedding check.
 - **OOM guardrail:** Docker Desktop below 6 GiB is rejected before startup;
   Neo4j has fixed heap/page-cache limits so Ollama retains headroom.
 - **Data:** startup never repairs legacy duplicates or forks; those require an

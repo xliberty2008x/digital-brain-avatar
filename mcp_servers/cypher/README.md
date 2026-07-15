@@ -132,13 +132,16 @@ For first-time model provisioning:
 ```bash
 docker compose up -d ollama
 docker compose exec ollama ollama pull bge-m3
-CLAUDE_PROJECT_DIR="$(pwd)" bash plugins/digital-brain-buddy/scripts/compose-up.sh
+bash plugins/digital-brain-buddy/scripts/compose-up.sh
 ```
 
 `OLLAMA_BASE_URL=http://localhost:11434` in `.env.example` is for host-side
-tools only. `mcp-cypher` always uses `http://ollama:11434` inside the Compose
-network. The startup script reports success only after `/readyz` passes; it
-does not mutate graph data or repair legacy journal forks.
+tools only. `mcp-cypher` defaults to `http://ollama:11434` inside the Compose
+network. Its explicit trusted override is `MCP_OLLAMA_BASE_URL` (for example,
+`http://host.docker.internal:11434` for host Ollama); container-local
+`localhost`, `127.0.0.1`, and `::1` are invalid. The startup script reports
+success only after `/readyz` passes; it does not mutate graph data or repair
+legacy journal forks.
 
 ## Isolated Docker E2E
 

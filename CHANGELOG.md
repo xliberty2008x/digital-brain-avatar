@@ -5,6 +5,14 @@
 - Public release hygiene: product README, SECURITY.md, MIT LICENSE, loopback
   Compose binds, personal dump removal, documentation redaction.
 
+## Plugin 0.6.0 — 2026-07-15
+
+See [plugins/digital-brain-buddy/CHANGELOG.md](plugins/digital-brain-buddy/CHANGELOG.md).
+
+Fixes the recurring MCP embedding outage by isolating host and container Ollama
+URLs, and makes plugin stack recovery work from validated Codex/Grok/Claude
+workspaces without a Claude-only project variable.
+
 ## Plugin 0.5.0 — 2026-07-14
 
 See [plugins/digital-brain-buddy/CHANGELOG.md](plugins/digital-brain-buddy/CHANGELOG.md).
