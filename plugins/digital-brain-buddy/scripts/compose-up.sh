@@ -15,6 +15,73 @@ warn_and_exit() {
   exit 0
 }
 
+is_avatar_project_root() {
+  candidate="$1"
+  [ -d "$candidate" ] || return 1
+
+  compose_file=""
+  if [ -f "$candidate/docker-compose.yml" ]; then
+    compose_file="$candidate/docker-compose.yml"
+  elif [ -f "$candidate/compose.yml" ]; then
+    compose_file="$candidate/compose.yml"
+  else
+    return 1
+  fi
+
+  # A generic Compose checkout (or a versioned plugin cache) is not enough.
+  # Require stable avatar repo markers plus the three services this hook owns.
+  [ -f "$candidate/pyproject.toml" ] || return 1
+  grep -Fq 'name = "avatar-digital-brain"' "$candidate/pyproject.toml" || return 1
+  [ -d "$candidate/mcp_servers/cypher" ] || return 1
+  [ -f "$candidate/scripts/pin_harness_generation.py" ] || return 1
+  grep -Eq '^[[:space:]]{2}neo4j:' "$compose_file" || return 1
+  grep -Eq '^[[:space:]]{2}ollama:' "$compose_file" || return 1
+  grep -Eq '^[[:space:]]{2}mcp-cypher:' "$compose_file" || return 1
+}
+
+canonical_dir() {
+  (cd -- "$1" 2>/dev/null && pwd -P)
+}
+
+find_project_upwards() {
+  search_dir="$(canonical_dir "$1")" || return 1
+  while true; do
+    if is_avatar_project_root "$search_dir"; then
+      printf '%s\n' "$search_dir"
+      return 0
+    fi
+    parent_dir="$(dirname -- "$search_dir")"
+    [ "$parent_dir" != "$search_dir" ] || return 1
+    search_dir="$parent_dir"
+  done
+}
+
+resolve_project_dir() {
+  if [ -n "${DIGITAL_BRAIN_PROJECT_DIR:-}" ]; then
+    resolved="$(canonical_dir "$DIGITAL_BRAIN_PROJECT_DIR")" || return 1
+    is_avatar_project_root "$resolved" || return 1
+    printf '%s\n' "$resolved"
+    return 0
+  fi
+
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    resolved="$(canonical_dir "$CLAUDE_PROJECT_DIR")" || return 1
+    is_avatar_project_root "$resolved" || return 1
+    printf '%s\n' "$resolved"
+    return 0
+  fi
+
+  resolved="$(find_project_upwards "$PWD")" && {
+    printf '%s\n' "$resolved"
+    return 0
+  }
+
+  # This succeeds for the script in a source checkout. A cached plugin path
+  # has no avatar repo markers above it and therefore cannot become the root.
+  script_dir="$(canonical_dir "$(dirname -- "${BASH_SOURCE[0]}")")" || return 1
+  find_project_upwards "$script_dir"
+}
+
 wait_for_service_health() {
   service="$1"
   max_attempts="$2"
@@ -67,15 +134,9 @@ wait_for_service_health() {
 
 echo "$PLUGIN_NAME: bringing up local Neo4j + Cypher MCP stack..."
 
-if [ -z "${CLAUDE_PROJECT_DIR:-}" ]; then
-  warn_and_exit "CLAUDE_PROJECT_DIR not set, skipping compose bring-up"
-fi
-
-cd "$CLAUDE_PROJECT_DIR" || warn_and_exit "cannot cd to CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR), skipping compose bring-up"
-
-if [ ! -f docker-compose.yml ] && [ ! -f compose.yml ]; then
-  warn_and_exit "no docker-compose.yml in $CLAUDE_PROJECT_DIR (expected avatar_digital_brain repo root), skipping compose bring-up"
-fi
+PROJECT_DIR="$(resolve_project_dir)" || warn_and_exit "could not resolve a validated avatar_digital_brain checkout; set DIGITAL_BRAIN_PROJECT_DIR (or legacy CLAUDE_PROJECT_DIR), or run from the repo"
+export DIGITAL_BRAIN_PROJECT_DIR="$PROJECT_DIR"
+cd -- "$PROJECT_DIR" || warn_and_exit "cannot cd to resolved project dir ($PROJECT_DIR), skipping compose bring-up"
 
 if ! command -v docker >/dev/null 2>&1; then
   warn_and_exit "docker not found, skipping local Neo4j/MCP bring-up"
@@ -244,7 +305,7 @@ fi
 export DIGITAL_BRAIN_SESSION_ID="$RESOLVED_SESSION_ID"
 
 echo "$PLUGIN_NAME: pinning harness generation for session=${DIGITAL_BRAIN_SESSION_ID} source=${HOOK_SOURCE:-manual} force_new=${PIN_FORCE_NEW}..."
-PIN_SCRIPT="$CLAUDE_PROJECT_DIR/scripts/pin_harness_generation.py"
+PIN_SCRIPT="$PROJECT_DIR/scripts/pin_harness_generation.py"
 if [ ! -f "$PIN_SCRIPT" ]; then
   echo "$PLUGIN_NAME: pin script missing at $PIN_SCRIPT; continuing without pin" >&2
   exit 0
@@ -253,8 +314,8 @@ fi
 SOUL_ARGS=()
 if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT}/SOUL.MD" ]; then
   SOUL_ARGS=(--soul-path "${CLAUDE_PLUGIN_ROOT}/SOUL.MD")
-elif [ -f "$CLAUDE_PROJECT_DIR/SOUL.MD" ]; then
-  SOUL_ARGS=(--soul-path "$CLAUDE_PROJECT_DIR/SOUL.MD")
+elif [ -f "$PROJECT_DIR/SOUL.MD" ]; then
+  SOUL_ARGS=(--soul-path "$PROJECT_DIR/SOUL.MD")
 fi
 PLUGIN_ARGS=()
 if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
@@ -268,7 +329,7 @@ if [ -n "$HOOK_SOURCE" ]; then
   PIN_EXTRA+=(--hook-source "$HOOK_SOURCE")
 fi
 if ! "${PIN_CMD[@]}" "$PIN_SCRIPT" \
-    --repo-root "$CLAUDE_PROJECT_DIR" \
+    --repo-root "$PROJECT_DIR" \
     "${PLUGIN_ARGS[@]}" \
     "${SOUL_ARGS[@]}" \
     --session-id "$DIGITAL_BRAIN_SESSION_ID" \

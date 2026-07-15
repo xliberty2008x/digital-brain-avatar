@@ -7,7 +7,7 @@ a SessionStart compose hook, and Neo4j Cypher MCP config.
 **Personal identity:** `SOUL.MD` in the plugin root is created per user (from
 `assets/SOUL.template.md`) and is **gitignored**. Do not commit a personal SOUL.
 
-**Version:** see `version.json` (currently `0.5.0`).  
+**Version:** see `version.json` (currently `0.6.0`).
 **License:** MIT (same as the repository root).
 
 After a version bump, hosts must **update** the plugin so skills leave the old
@@ -38,9 +38,11 @@ From the **repository root** (this checkout is the marketplace source):
    - Grok: `grok plugin update digital-brain-buddy`
 3. Start the stack:
    ```bash
-   CLAUDE_PROJECT_DIR="$(pwd)" bash plugins/digital-brain-buddy/scripts/compose-up.sh
+   bash plugins/digital-brain-buddy/scripts/compose-up.sh
    ```
    or use the `/digital-brain-up` command inside a host that loads the plugin.
+   From outside the checkout, set `DIGITAL_BRAIN_PROJECT_DIR=/path/to/repo`;
+   `CLAUDE_PROJECT_DIR` remains supported for existing Claude hooks.
 
 MCP URL (literal, loopback): `http://localhost:8000/api/mcp/`  
 Configured in `.mcp.json`. Hosts that do not expand env vars need the literal URL.

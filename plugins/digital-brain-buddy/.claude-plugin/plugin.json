@@ -1,6 +1,6 @@
 {
   "name": "digital-brain-buddy",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Buddy persona with Neo4j memory tools, initiate-on-first-run protocol, FEEDBACK quality sensors with durable gotcha staging, and guided report-only maintenance (DreamRun) for the avatar_digital_brain graph.",
   "author": {
     "name": "Kyrylo Dubovyk"

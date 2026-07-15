@@ -1,6 +1,6 @@
 {
     "name": "digital-brain-buddy",
-    "version": "0.5.0+codex.20260713221729",
+    "version": "0.6.0+codex.20260715102426",
     "description": "Repo-local buddy-session plugin for the avatar_digital_brain persona, SOUL file, Neo4j MCP memory workflow, first-run initiate protocol, FEEDBACK gotcha sensors, and guided report-only maintenance.",
     "author": {
         "name": "Kyrylo Dubovyk"

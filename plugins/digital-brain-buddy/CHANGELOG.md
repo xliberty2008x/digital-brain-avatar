@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 — 2026-07-15
+
+Host-agnostic stack recovery and durable Ollama URL isolation (fixes #21).
+
+- `mcp-cypher` maps its application `OLLAMA_BASE_URL` from compose-only
+  `MCP_OLLAMA_BASE_URL`, so host `.env` localhost values cannot leak in
+- `/digital-brain-up` resolves validated Codex/Grok/Claude workspaces without
+  requiring `CLAUDE_PROJECT_DIR`; explicit `DIGITAL_BRAIN_PROJECT_DIR` wins
+- Rendered Compose and launcher resolution regression tests cover the recurrence
+- Fresh Codex cache suffix (`0.6.0+codex.20260715102426`); marketplaces at `0.6.0`
+
 ## 0.5.0 — 2026-07-14
 
 Durable gotcha learning loop after FEEDBACK corrections (closes the “no gotcha” gap).
