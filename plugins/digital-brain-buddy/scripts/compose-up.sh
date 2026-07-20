@@ -9,10 +9,86 @@ OLLAMA_HEALTH_MAX_ATTEMPTS="${OLLAMA_HEALTH_MAX_ATTEMPTS:-60}"  # 60 × 2s = 120
 MCP_READY_MAX_ATTEMPTS="${MCP_READY_MAX_ATTEMPTS:-90}"  # 90 × 2s = 180s
 NEO4J_HEALTH_SLEEP_SECS="${NEO4J_HEALTH_SLEEP_SECS:-2}"
 MIN_DOCKER_MEMORY_BYTES=$((6 * 1024 * 1024 * 1024))
+DEFAULT_OLLAMA_HOST_PORT="${DEFAULT_OLLAMA_HOST_PORT:-11434}"
+FALLBACK_OLLAMA_HOST_PORT="${FALLBACK_OLLAMA_HOST_PORT:-11435}"
 
 warn_and_exit() {
   echo "$PLUGIN_NAME: $1" >&2
   exit 0
+}
+
+# Single operator recovery recipe (keep in sync with README / .env.example).
+print_recovery_recipe() {
+  cat >&2 <<'EOF'
+digital-brain-buddy: recovery recipe (Neo4j OOM / low Docker memory / port clash):
+  1) Prefer Docker Desktop ≥ 8 GiB (compose-up requires ≥ 6 GiB).
+  2) Tighter Neo4j budget (defaults; re-export if your shell overrode them):
+       export NEO4J_HEAP_INITIAL_SIZE=384M NEO4J_HEAP_MAX_SIZE=768M NEO4J_PAGECACHE_SIZE=384M
+  3) If host Ollama holds :11434 (often empty models) while compose volume has bge-m3:
+       export OLLAMA_PORT=11435
+     MCP still uses http://ollama:11434 on the compose network.
+  4) Re-up from the avatar_digital_brain checkout:
+       CLAUDE_PROJECT_DIR=$PWD bash plugins/digital-brain-buddy/scripts/compose-up.sh
+       # or: docker compose up -d neo4j ollama
+       #     docker compose up -d --build --no-deps mcp-cypher
+EOF
+}
+
+# True if something accepts TCP on 127.0.0.1:port (host publish clash).
+# Test hook: DIGITAL_BRAIN_TEST_PORT_PROBE=1 makes the check consult only
+# DIGITAL_BRAIN_TEST_PORTS_IN_USE (comma-separated ports), never the real host.
+host_port_in_use() {
+  port="$1"
+  case "$port" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  if [ "${DIGITAL_BRAIN_TEST_PORT_PROBE:-}" = "1" ]; then
+    case ",${DIGITAL_BRAIN_TEST_PORTS_IN_USE:-}," in
+      *,"$port",*) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  # Bash /dev/tcp probe (works when lsof is missing).
+  if (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+# Ensure OLLAMA_PORT is free for docker publish; remap or refuse with guidance.
+resolve_ollama_publish_port() {
+  requested="${OLLAMA_PORT:-$DEFAULT_OLLAMA_HOST_PORT}"
+  if ! host_port_in_use "$requested"; then
+    export OLLAMA_PORT="$requested"
+    return 0
+  fi
+
+  # Explicit operator choice is busy → refuse (do not silently override).
+  if [ -n "${OLLAMA_PORT:-}" ]; then
+    echo "$PLUGIN_NAME: host publish port ${OLLAMA_PORT} is already in use (Ollama publish clash)" >&2
+    echo "$PLUGIN_NAME: host Ollama on that port may have an empty model list while the compose volume holds bge-m3" >&2
+    echo "$PLUGIN_NAME: free the port or set OLLAMA_PORT to a free host port; MCP still uses http://ollama:11434 in-network" >&2
+    print_recovery_recipe
+    return 1
+  fi
+
+  # Default 11434 busy → auto-remap to fallback when free.
+  if ! host_port_in_use "$FALLBACK_OLLAMA_HOST_PORT"; then
+    export OLLAMA_PORT="$FALLBACK_OLLAMA_HOST_PORT"
+    echo "$PLUGIN_NAME: host :${DEFAULT_OLLAMA_HOST_PORT} is in use; publishing compose Ollama on 127.0.0.1:${OLLAMA_PORT}" >&2
+    echo "$PLUGIN_NAME: host Ollama may be empty while the compose volume holds bge-m3; MCP still uses http://ollama:11434 in-network" >&2
+    return 0
+  fi
+
+  echo "$PLUGIN_NAME: host ports ${DEFAULT_OLLAMA_HOST_PORT} and ${FALLBACK_OLLAMA_HOST_PORT} are both in use; set OLLAMA_PORT to a free port" >&2
+  echo "$PLUGIN_NAME: host Ollama may be empty while the compose volume holds bge-m3; MCP still uses http://ollama:11434 in-network" >&2
+  print_recovery_recipe
+  return 1
 }
 
 is_avatar_project_root() {
@@ -96,6 +172,7 @@ wait_for_service_health() {
     if [ -n "$container_id" ]; then
       running="$(docker inspect -f '{{.State.Running}}' "$container_id" 2>/dev/null || true)"
       exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$container_id" 2>/dev/null || true)"
+      oom_killed="$(docker inspect -f '{{.State.OOMKilled}}' "$container_id" 2>/dev/null || true)"
       status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
       if [ "$status" = "healthy" ]; then
         echo "$PLUGIN_NAME: ${wait_label} is healthy"
@@ -103,6 +180,9 @@ wait_for_service_health() {
       fi
       if [ "$status" = "unhealthy" ]; then
         echo "$PLUGIN_NAME: ${wait_label} healthcheck is unhealthy; inspect 'docker compose logs $service'" >&2
+        if [ "$service" = "neo4j" ]; then
+          print_recovery_recipe
+        fi
         return 1
       fi
       # Fail fast if the container crashed (for example, a store/image mismatch
@@ -110,7 +190,13 @@ wait_for_service_health() {
       if [ "$running" = "false" ] && [ "${exit_code:-0}" != "0" ]; then
         exited_streak=$((exited_streak + 1))
         if [ "$exited_streak" -ge 3 ]; then
-          echo "$PLUGIN_NAME: ${wait_label} container exited (status=${status}, exit=${exit_code}); inspect 'docker compose logs $service'" >&2
+          echo "$PLUGIN_NAME: ${wait_label} container exited (status=${status}, exit=${exit_code}, OOMKilled=${oom_killed:-unknown}); inspect 'docker compose logs $service'" >&2
+          if [ "$service" = "neo4j" ] && { [ "$exit_code" = "137" ] || [ "$oom_killed" = "true" ]; }; then
+            echo "$PLUGIN_NAME: neo4j looks OOM-killed (exit 137 / OOMKilled=true)" >&2
+            print_recovery_recipe
+          elif [ "$service" = "neo4j" ]; then
+            print_recovery_recipe
+          fi
           return 1
         fi
       else
@@ -122,6 +208,9 @@ wait_for_service_health() {
     attempt=$((attempt + 1))
     if [ "$attempt" -ge "$max_attempts" ]; then
       echo "$PLUGIN_NAME: ${wait_label} did not become healthy within ${max_wait_secs}s (last status: ${status:-unknown}); inspect 'docker compose logs $service'" >&2
+      if [ "$service" = "neo4j" ]; then
+        print_recovery_recipe
+      fi
       return 1
     fi
     # Progress every ~10s so SessionStart logs are not silent on cold start.
@@ -149,12 +238,16 @@ fi
 docker_memory_bytes="$(docker info --format '{{.MemTotal}}' 2>/dev/null || true)"
 case "$docker_memory_bytes" in
   ''|*[!0-9]*)
-    warn_and_exit "could not determine Docker memory; allocate at least 6 GiB in Docker Desktop before bringing up the embedding stack"
+    echo "$PLUGIN_NAME: could not determine Docker memory; allocate at least 6 GiB in Docker Desktop before bringing up the embedding stack" >&2
+    print_recovery_recipe
+    exit 0
     ;;
 esac
 if [ "$docker_memory_bytes" -lt "$MIN_DOCKER_MEMORY_BYTES" ]; then
   docker_memory_mib=$((docker_memory_bytes / 1024 / 1024))
-  warn_and_exit "Docker has ${docker_memory_mib} MiB available; allocate at least 6 GiB in Docker Desktop before bringing up Neo4j + Ollama"
+  echo "$PLUGIN_NAME: Docker has ${docker_memory_mib} MiB available; allocate at least 6 GiB in Docker Desktop before bringing up Neo4j + Ollama" >&2
+  print_recovery_recipe
+  exit 0
 fi
 
 # Resolve host state dir before any compose up that mounts it into mcp-cypher.
@@ -164,8 +257,15 @@ STATE_DIR="${DIGITAL_BRAIN_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/digi
 export DIGITAL_BRAIN_STATE_DIR="$STATE_DIR"
 mkdir -p "$STATE_DIR"
 
+# Avoid bind: address already in use on the Ollama host publish port.
+if ! resolve_ollama_publish_port; then
+  warn_and_exit "refusing to start ollama while the host publish port is unavailable"
+fi
+
 if ! docker compose up -d neo4j ollama; then
-  warn_and_exit "failed to start neo4j/ollama, skipping mcp-cypher bring-up"
+  echo "$PLUGIN_NAME: failed to start neo4j/ollama, skipping mcp-cypher bring-up" >&2
+  print_recovery_recipe
+  exit 0
 fi
 
 if ! wait_for_service_health neo4j "$NEO4J_HEALTH_MAX_ATTEMPTS" "neo4j"; then

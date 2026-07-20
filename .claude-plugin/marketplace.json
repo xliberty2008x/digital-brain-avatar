@@ -9,7 +9,7 @@
       "name": "digital-brain-buddy",
       "source": "./plugins/digital-brain-buddy",
       "description": "Buddy persona with Neo4j memory, initiate-on-first-run, FEEDBACK gotcha sensors, cross-host stack recovery, and guided report-only maintenance (v0.6).",
-      "version": "0.6.0"
+      "version": "0.6.1"
     }
   ]
 }

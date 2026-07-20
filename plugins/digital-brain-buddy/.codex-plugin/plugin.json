@@ -1,6 +1,6 @@
 {
     "name": "digital-brain-buddy",
-    "version": "0.6.0+codex.20260715102426",
+    "version": "0.6.1+codex.20260720194255",
     "description": "Repo-local buddy-session plugin for the avatar_digital_brain persona, SOUL file, Neo4j MCP memory workflow, first-run initiate protocol, FEEDBACK gotcha sensors, and guided report-only maintenance.",
     "author": {
         "name": "Kyrylo Dubovyk"
@@ -20,7 +20,7 @@
     "interface": {
         "displayName": "Digital Brain Buddy",
         "shortDescription": "Buddy persona with Neo4j memory and guided maintenance",
-        "longDescription": "Run a direct, pattern-aware buddy session on top of the avatar_digital_brain memory graph. The default internal pattern is: main session agent keeps the conversation, a reader gathers graph evidence, and a writer persists bounded memory updates when needed. On a fresh install the first session auto-enters initiate mode (language, intro, seed people/focus, light SOUL overlay, initiation receipt). v0.3+ adds typed quality sensors (FEEDBACK), harness generation pins, and a guided report-only maintenance skill (/digital-brain-dream) with a capability-fenced maintainer worker — activation stays on operator scripts only. v0.5+ requires a durable quality-plane gotcha after correction FEEDBACK (gotcha staged line; never journal-as-gotcha).",
+        "longDescription": "Run a direct, pattern-aware buddy session on top of the avatar_digital_brain memory graph. The default internal pattern is: main session agent keeps the conversation, a reader gathers graph evidence, and a writer persists bounded memory updates when needed. On a fresh install the first session auto-enters initiate mode (language, intro, seed people/focus, light SOUL overlay, initiation receipt). v0.3+ adds typed quality sensors (FEEDBACK), harness generation pins, and a guided report-only maintenance skill (/digital-brain-dream) with a capability-fenced maintainer worker \u2014 activation stays on operator scripts only. v0.5+ requires a durable quality-plane gotcha after correction FEEDBACK (gotcha staged line; never journal-as-gotcha).",
         "developerName": "Kyrylo Dubovyk",
         "category": "Productivity",
         "capabilities": [

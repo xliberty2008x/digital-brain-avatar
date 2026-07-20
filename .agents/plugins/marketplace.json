@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "digital-brain-buddy",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "source": {
         "source": "local",
         "path": "./plugins/digital-brain-buddy"
