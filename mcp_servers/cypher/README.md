@@ -122,10 +122,20 @@ Use `EMBEDDING_PROVIDER=ollama` for Ollama's `/api/embed` endpoint, or
 `EMBEDDING_PROVIDER=huggingface` for local `sentence-transformers`.
 
 The supported Compose runtime is Ollama with `bge-m3` and 1024 dimensions.
-Allocate Docker Desktop at least **6 GiB** of memory; Compose caps Neo4j at a
-512 MiB initial heap, 1 GiB maximum heap, and a 512 MiB page cache so Ollama
-has headroom. `OLLAMA_EMBEDDING_TIMEOUT_SECONDS` defaults to 20 seconds and
-can be raised deliberately for unusually slow local hardware.
+Allocate Docker Desktop at least **6 GiB** of memory (prefer **≥ 8 GiB**);
+Compose caps Neo4j at a **384 MiB** initial heap, **768 MiB** maximum heap,
+and a **384 MiB** page cache by default so Ollama has headroom near the 6 GiB
+floor. Override with `NEO4J_HEAP_INITIAL_SIZE` / `NEO4J_HEAP_MAX_SIZE` /
+`NEO4J_PAGECACHE_SIZE` when Desktop has more RAM. If Neo4j exits **137**
+(`OOMKilled`), raise Docker memory first, then re-run `compose-up.sh`.
+`OLLAMA_EMBEDDING_TIMEOUT_SECONDS` defaults to 20 seconds and can be raised
+deliberately for unusually slow local hardware.
+
+If a host Ollama already binds `127.0.0.1:11434` (often with an empty model
+list while the compose volume holds `bge-m3`), set `OLLAMA_PORT=11435` (or
+another free port). MCP still uses `http://ollama:11434` on the compose
+network; only the host publish port changes. `compose-up.sh` auto-remaps
+when the default is busy.
 
 For first-time model provisioning:
 

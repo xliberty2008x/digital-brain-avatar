@@ -18,15 +18,20 @@ and Neo4j endpoints are unauthenticated. See [SECURITY.md](SECURITY.md).
 | Maintenance | `digital_brain/maintenance/`, `scripts/digital_brain_*.py` | Report-only DreamRun + operator apply |
 | Schema contract | `docs/GRAPH_SCHEMA_CONTRACT.md` | Node/relationship rules |
 
-**Plugin version (host cache):** `0.5.0` — FEEDBACK gotcha loop + initiate + quality sensors + maintenance.  
+**Plugin version (host cache):** `0.6.1` — FEEDBACK gotcha loop + initiate + quality sensors + maintenance.  
 **Python package version** (`pyproject.toml`): independent scaffolding version.
 
 ## Requirements
 
 - Docker Desktop (or compatible) with **≥ 6 GiB** RAM allocated to Docker
+  (prefer **≥ 8 GiB**; the 6 GiB floor is tight once Ollama loads `bge-m3`)
 - Python 3.12+ (for scripts/tests)
 - Neo4j **Enterprise** license for the default image (`neo4j:2026.05-enterprise`);
   operators must accept Neo4j’s license terms
+
+Default Neo4j memory budget (overridable): **384M** initial heap / **768M**
+max heap / **384M** pagecache — sized so Neo4j + compose Ollama coexist near
+the 6 GiB minimum without exit 137 OOM kills.
 
 ## Quickstart (local stack)
 
@@ -45,9 +50,26 @@ Endpoints (loopback only):
 
 - MCP: `http://127.0.0.1:8000/api/mcp/`
 - Neo4j Browser: `http://127.0.0.1:7474`
-- Ollama: `http://127.0.0.1:11434`
+- Ollama: `http://127.0.0.1:11434` (or `$OLLAMA_PORT` if remapped)
 
 Health: `GET http://127.0.0.1:8000/readyz` checks Neo4j **and** a real 1024-dim embedding.
+
+### Stack recovery (Neo4j OOM / port clash)
+
+If Neo4j exits **137** / `OOMKilled`, or `compose-up` refuses low Docker memory:
+
+```bash
+# Prefer Docker Desktop ≥ 8 GiB. Defaults already use the tighter Neo4j budget;
+# override only when you intentionally raise or further tighten:
+export NEO4J_HEAP_INITIAL_SIZE=384M NEO4J_HEAP_MAX_SIZE=768M NEO4J_PAGECACHE_SIZE=384M
+
+# Host Ollama holding :11434 without bge-m3? Publish compose Ollama elsewhere
+# (MCP still uses http://ollama:11434 on the compose network):
+export OLLAMA_PORT=11435
+
+CLAUDE_PROJECT_DIR="$(pwd)" bash plugins/digital-brain-buddy/scripts/compose-up.sh
+# or: docker compose up -d neo4j ollama && docker compose up -d --build --no-deps mcp-cypher
+```
 
 ### Shared harness pin (host ↔ MCP)
 

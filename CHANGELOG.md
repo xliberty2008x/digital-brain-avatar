@@ -5,6 +5,14 @@
 - Public release hygiene: product README, SECURITY.md, MIT LICENSE, loopback
   Compose binds, personal dump removal, documentation redaction.
 
+## Plugin 0.6.1 — 2026-07-20
+
+See [plugins/digital-brain-buddy/CHANGELOG.md](plugins/digital-brain-buddy/CHANGELOG.md).
+
+Safer Neo4j heap/pagecache defaults and compose-up recovery recipe for Docker
+Desktop near the 6 GiB floor (Neo4j OOM exit 137); Ollama host-port clash
+remap/refuse. Closes #23.
+
 ## Plugin 0.6.0 — 2026-07-15
 
 See [plugins/digital-brain-buddy/CHANGELOG.md](plugins/digital-brain-buddy/CHANGELOG.md).
