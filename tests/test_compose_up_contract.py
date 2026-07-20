@@ -372,6 +372,36 @@ def test_launcher_low_docker_memory_emits_recovery_recipe_and_refuses(
     assert "compose up" not in log
 
 
+def test_launcher_reentry_reuses_existing_compose_ollama_port(
+    tmp_path: pathlib.Path,
+) -> None:
+    """SessionStart re-run must not treat our own publish as a foreign clash."""
+    ollama_port_file = tmp_path / "ollama-port.txt"
+    result, _, log_file = _run_launcher(
+        tmp_path,
+        cwd=ROOT,
+        mem_total=_FAKE_MEM_OK,
+        scenario="compose_up_records_port",
+        env_overrides={
+            "CLAUDE_PROJECT_DIR": str(ROOT),
+            "DIGITAL_BRAIN_TEST_PORT_PROBE": "1",
+            # Both default and fallback look "busy" (our stack + host ollama).
+            "DIGITAL_BRAIN_TEST_PORTS_IN_USE": "11434,11435",
+            # Compose already publishes on 11435 from a prior remap.
+            "DIGITAL_BRAIN_TEST_COMPOSE_OLLAMA_PORT": "11435",
+            "FAKE_DOCKER_OLLAMA_PORT_FILE": str(ollama_port_file),
+        },
+    )
+    assert result.returncode == 0
+    combined = result.stderr + result.stdout
+    assert "reusing existing compose Ollama publish on 127.0.0.1:11435" in combined
+    assert "already in use" not in combined
+    assert "refusing to start ollama" not in combined
+    assert ollama_port_file.exists(), "compose up did not record OLLAMA_PORT"
+    assert ollama_port_file.read_text(encoding="utf-8").strip() == "11435"
+    assert "compose up" in log_file.read_text(encoding="utf-8")
+
+
 def test_launcher_port_clash_remaps_ollama_port(tmp_path: pathlib.Path) -> None:
     ollama_port_file = tmp_path / "ollama-port.txt"
     result, _, log_file = _run_launcher(

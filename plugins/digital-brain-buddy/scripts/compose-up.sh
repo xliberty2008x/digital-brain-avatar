@@ -60,24 +60,79 @@ host_port_in_use() {
   return 1
 }
 
+# Host port currently published by this project's compose ollama (if any).
+# `docker compose port ollama 11434` → e.g. "127.0.0.1:11435". Empty if down.
+compose_ollama_host_port() {
+  if [ "${DIGITAL_BRAIN_TEST_PORT_PROBE:-}" = "1" ]; then
+    # Test hook: optional pre-seeded "already published" host port.
+    if [ -n "${DIGITAL_BRAIN_TEST_COMPOSE_OLLAMA_PORT:-}" ]; then
+      printf '%s\n' "$DIGITAL_BRAIN_TEST_COMPOSE_OLLAMA_PORT"
+      return 0
+    fi
+    return 1
+  fi
+  out="$(docker compose port ollama 11434 2>/dev/null || true)"
+  case "$out" in
+    *:*)
+      # Take the last colon segment (host port), strip CR.
+      host_port="${out##*:}"
+      host_port="$(printf '%s' "$host_port" | tr -d '\r\n')"
+      case "$host_port" in
+        ''|*[!0-9]*) return 1 ;;
+        *)
+          printf '%s\n' "$host_port"
+          return 0
+          ;;
+      esac
+      ;;
+  esac
+  return 1
+}
+
 # Ensure OLLAMA_PORT is free for docker publish; remap or refuse with guidance.
+# Re-entry safe: if this project's compose ollama already publishes a host port,
+# reuse it instead of treating our own bind as a foreign clash (SessionStart).
 resolve_ollama_publish_port() {
-  requested="${OLLAMA_PORT:-$DEFAULT_OLLAMA_HOST_PORT}"
+  existing_host_port="$(compose_ollama_host_port || true)"
+
+  # Operator set OLLAMA_PORT explicitly.
+  if [ -n "${OLLAMA_PORT:-}" ]; then
+    requested="$OLLAMA_PORT"
+    if [ -n "$existing_host_port" ] && [ "$existing_host_port" = "$requested" ]; then
+      export OLLAMA_PORT="$requested"
+      return 0
+    fi
+    if ! host_port_in_use "$requested"; then
+      export OLLAMA_PORT="$requested"
+      return 0
+    fi
+    echo "$PLUGIN_NAME: host publish port ${OLLAMA_PORT} is already in use (Ollama publish clash)" >&2
+    if [ -n "$existing_host_port" ] && [ "$existing_host_port" != "$requested" ]; then
+      echo "$PLUGIN_NAME: compose ollama already publishes 127.0.0.1:${existing_host_port}; set OLLAMA_PORT=${existing_host_port} to re-enter, or stop that service first" >&2
+    else
+      echo "$PLUGIN_NAME: host Ollama on that port may have an empty model list while the compose volume holds bge-m3" >&2
+      echo "$PLUGIN_NAME: free the port or set OLLAMA_PORT to a free host port; MCP still uses http://ollama:11434 in-network" >&2
+    fi
+    print_recovery_recipe
+    return 1
+  fi
+
+  # Unset OLLAMA_PORT: prefer whatever this stack already publishes (stable re-up).
+  if [ -n "$existing_host_port" ]; then
+    export OLLAMA_PORT="$existing_host_port"
+    if [ "$existing_host_port" != "$DEFAULT_OLLAMA_HOST_PORT" ]; then
+      echo "$PLUGIN_NAME: reusing existing compose Ollama publish on 127.0.0.1:${OLLAMA_PORT} (MCP still uses http://ollama:11434 in-network)" >&2
+    fi
+    return 0
+  fi
+
+  requested="$DEFAULT_OLLAMA_HOST_PORT"
   if ! host_port_in_use "$requested"; then
     export OLLAMA_PORT="$requested"
     return 0
   fi
 
-  # Explicit operator choice is busy → refuse (do not silently override).
-  if [ -n "${OLLAMA_PORT:-}" ]; then
-    echo "$PLUGIN_NAME: host publish port ${OLLAMA_PORT} is already in use (Ollama publish clash)" >&2
-    echo "$PLUGIN_NAME: host Ollama on that port may have an empty model list while the compose volume holds bge-m3" >&2
-    echo "$PLUGIN_NAME: free the port or set OLLAMA_PORT to a free host port; MCP still uses http://ollama:11434 in-network" >&2
-    print_recovery_recipe
-    return 1
-  fi
-
-  # Default 11434 busy → auto-remap to fallback when free.
+  # Default 11434 busy (foreign process) → auto-remap to fallback when free.
   if ! host_port_in_use "$FALLBACK_OLLAMA_HOST_PORT"; then
     export OLLAMA_PORT="$FALLBACK_OLLAMA_HOST_PORT"
     echo "$PLUGIN_NAME: host :${DEFAULT_OLLAMA_HOST_PORT} is in use; publishing compose Ollama on 127.0.0.1:${OLLAMA_PORT}" >&2

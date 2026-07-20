@@ -7,6 +7,7 @@ Safer Neo4j defaults and compose-up recovery guidance under ~6 GiB Docker (fixes
 - Compose Neo4j defaults: 384M initial heap / 768M max / 384M pagecache (was 512M/1G/512M OOM-prone near the 6 GiB floor)
 - `compose-up.sh` prints a single recovery recipe on low Docker memory, Neo4j exit 137/OOMKilled, and failed neo4j/ollama start
 - Host Ollama publish-port clash: auto-remap default `:11434` → `OLLAMA_PORT=11435` when free; refuse busy explicit ports with empty-host vs compose-volume guidance (MCP still uses `http://ollama:11434` in-network)
+- Re-entry safe: SessionStart re-up reuses this project's existing compose Ollama publish port instead of treating it as a foreign clash
 - Operator docs (README, `.env.example`, cypher README, `/digital-brain-up`) share the same budget and recipe
 - Contract tests cover rendered defaults, overrides, memory refuse, port remap/refuse, and OOM messaging
 - Fresh Codex cache suffix (`0.6.1+codex.…`); marketplaces at `0.6.1`
