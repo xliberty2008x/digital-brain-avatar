@@ -119,6 +119,7 @@ for install, version bumps, and host refresh. Changelog:
 - Ports bind to **127.0.0.1** by default; do not publish them to the internet.
 - Default Neo4j password is for local dev only.
 - Graph data and `backups/` are personal — keep them out of git (already gitignored).
+- Hosted Grok PR review sends the PR code and diff to xAI when enabled.
 - JWT / multi-user OAuth docs under `docs/architecture/` are design notes, not a shipped auth product.
 
 Details: [SECURITY.md](SECURITY.md).
@@ -145,6 +146,7 @@ DREAMS_E2E_DOCKER=1 DREAMS_E2E_REQUIRE_DOCKER=1 bash scripts/run-dreams-e2e.sh
 | --- | --- |
 | [mcp_servers/cypher/README.md](mcp_servers/cypher/README.md) | MCP tools, append protocol, e2e |
 | [docs/GRAPH_SCHEMA_CONTRACT.md](docs/GRAPH_SCHEMA_CONTRACT.md) | Graph constitution |
+| [docs/operations/hosted-grok-review.md](docs/operations/hosted-grok-review.md) | Hosted Grok review, privacy, and auth sync |
 | [docs/operations/self-evolving-quality-dreams-release.md](docs/operations/self-evolving-quality-dreams-release.md) | Dreams operations, privacy, receipts, release evidence |
 | [docs/local_mcp_embeddings.md](docs/local_mcp_embeddings.md) | Embeddings / backfill |
 | [plugins/digital-brain-buddy/docs/VERSIONING.md](plugins/digital-brain-buddy/docs/VERSIONING.md) | Plugin SemVer + release checklist |

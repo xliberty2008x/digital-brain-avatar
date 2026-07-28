@@ -43,6 +43,7 @@ tmp/
 digital_brain/misc/
 
 # Per-user buddy identity (install/copy from assets/SOUL.template.md)
+/SOUL.MD
 plugins/digital-brain-buddy/SOUL.MD
 plugins/digital-brain-buddy/SOUL.md
 
