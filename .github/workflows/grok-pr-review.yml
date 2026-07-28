@@ -41,7 +41,30 @@ jobs:
       # no .gitmodules entry. Remove the root credential explicitly before any
       # review process starts instead.
       - name: Remove checkout credential
-        run: git config --local --unset-all http.https://github.com/.extraheader || true
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          git config --local --unset-all http.https://github.com/.extraheader
+          UNSET_STATUS=$?
+          set -e
+          if [[ "${UNSET_STATUS}" -ne 0 && "${UNSET_STATUS}" -ne 5 ]]; then
+            echo "::error::Could not remove the checkout credential."
+            exit "${UNSET_STATUS}"
+          fi
+
+          set +e
+          git config --local --get-all http.https://github.com/.extraheader >/dev/null
+          GET_STATUS=$?
+          set -e
+          if [[ "${GET_STATUS}" -eq 0 ]]; then
+            echo "::error::Checkout credential remains configured."
+            exit 1
+          fi
+          if [[ "${GET_STATUS}" -ne 1 ]]; then
+            echo "::error::Could not verify checkout credential removal."
+            exit "${GET_STATUS}"
+          fi
 
       - name: Fetch base ref
         env:
