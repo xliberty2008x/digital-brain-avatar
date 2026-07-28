@@ -1,0 +1,156 @@
+# Grok PR Review — same-repo non-draft PRs only.
+# Security invariants:
+# - No pull_request_target
+# - Trusted runtime comes from xliberty2008x/grok-plugin; PR head is the review target only
+# - GROK_AUTH never shares a child process with GITHUB_TOKEN
+# - Findings never fail the job; infra/auth/schema/post failures do
+# - github.event.* values reach shell through env, not expression interpolation
+# - macos-latest: Linux hosted runners block bubblewrap uid maps for strict sandbox
+name: Grok PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: grok-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  grok-pr-review:
+    name: Grok headless review
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.draft == false
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out PR head (code under review)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # actions/checkout cannot complete its immediate persist-credentials:false
+      # cleanup in this repository because the historical mcp-neo4j gitlink has
+      # no .gitmodules entry. Remove the root credential explicitly before any
+      # review process starts instead.
+      - name: Remove checkout credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          git config --local --unset-all http.https://github.com/.extraheader
+          UNSET_STATUS=$?
+          set -e
+          if [[ "${UNSET_STATUS}" -ne 0 && "${UNSET_STATUS}" -ne 5 ]]; then
+            echo "::error::Could not remove the checkout credential."
+            exit "${UNSET_STATUS}"
+          fi
+
+          set +e
+          git config --local --get-all http.https://github.com/.extraheader >/dev/null
+          GET_STATUS=$?
+          set -e
+          if [[ "${GET_STATUS}" -eq 0 ]]; then
+            echo "::error::Checkout credential remains configured."
+            exit 1
+          fi
+          if [[ "${GET_STATUS}" -ne 1 ]]; then
+            echo "::error::Could not verify checkout credential removal."
+            exit "${GET_STATUS}"
+          fi
+
+      - name: Fetch base ref
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: git fetch origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+
+      - name: Check out trusted Grok review runtime
+        uses: actions/checkout@v4
+        with:
+          repository: xliberty2008x/grok-plugin
+          ref: ${{ vars.GROK_PR_REVIEW_TRUSTED_REF || '263906944acb6e131ff38d14280639ae6ef5b567' }}
+          path: _grok_trusted_src
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Isolate trusted runtime under RUNNER_TEMP
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/grok-trusted"
+          mv "${GITHUB_WORKSPACE}/_grok_trusted_src" "${RUNNER_TEMP}/grok-trusted"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Install Grok Build CLI
+        env:
+          GROK_CLI_VERSION: ${{ vars.GROK_CLI_VERSION || '0.2.112' }}
+        run: npm install -g "@xai-official/grok@${GROK_CLI_VERSION}"
+
+      - name: Run trusted Grok review
+        id: review
+        env:
+          GROK_AUTH_JSON: ${{ secrets.GROK_AUTH_JSON }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          OUT="${RUNNER_TEMP}/review-job.json"
+          node "${RUNNER_TEMP}/grok-trusted/scripts/ci/run-trusted-review.mjs" \
+            --trusted-root "${RUNNER_TEMP}/grok-trusted" \
+            --workspace "${GITHUB_WORKSPACE}" \
+            --base-ref "${BASE_REF}" \
+            --out "${OUT}"
+          echo "job_json=${OUT}" >> "$GITHUB_OUTPUT"
+
+      - name: Collect PR diff for inline mapping
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff \
+            "origin/${BASE_REF}...${HEAD_SHA}" \
+            > "${RUNNER_TEMP}/pr.diff"
+
+      - name: Post review to GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Do not pass GROK_AUTH_JSON here
+          JOB_JSON: ${{ steps.review.outputs.job_json }}
+          PR_OWNER: ${{ github.repository_owner }}
+          PR_REPO: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          node "${RUNNER_TEMP}/grok-trusted/scripts/ci/post-grok-review.mjs" \
+            --job-json "${JOB_JSON}" \
+            --diff "${RUNNER_TEMP}/pr.diff" \
+            --owner "${PR_OWNER}" \
+            --repo "${PR_REPO}" \
+            --pr "${PR_NUMBER}" \
+            --head-sha "${HEAD_SHA}"
+
+      - name: Upload review job JSON on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok-review-job-${{ github.event.pull_request.number }}
+          path: ${{ runner.temp }}/review-job.json
+          if-no-files-found: ignore
+
+      - name: Wipe staged Grok auth
+        if: always()
+        run: |
+          set +e
+          find "${RUNNER_TEMP}" -name 'auth.json' -type f -delete 2>/dev/null
+          true
