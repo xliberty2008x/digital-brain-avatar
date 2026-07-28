@@ -34,8 +34,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
+
+      # actions/checkout cannot complete its immediate persist-credentials:false
+      # cleanup in this repository because the historical mcp-neo4j gitlink has
+      # no .gitmodules entry. Remove the root credential explicitly before any
+      # review process starts instead.
+      - name: Remove checkout credential
+        run: git config --local --unset-all http.https://github.com/.extraheader || true
 
       - name: Fetch base ref
         env:
