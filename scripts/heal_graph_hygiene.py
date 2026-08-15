@@ -283,9 +283,111 @@ def _existing_rel(session, start: str, end: str, rel_type: str) -> bool:
     return bool(rec and int(rec["n"]) > 0)
 
 
-def rewire_and_remove(session, keep: str, drop: str) -> dict[str, int]:
+CHAIN_REL_TYPES = frozenset({"FOLLOWS", "HEAD"})
+NAME_BEARING_LABELS = frozenset(
+    {
+        "Person",
+        "Topic",
+        "State",
+        "Organization",
+        "Location",
+        "Pet",
+        "Object",
+        "Place",
+        "Group",
+        "Role",
+        "Activity",
+        "Project",
+        "Insight",
+        "Experience",
+    }
+)
+BACKFILL_ID_SET_QUERY = """
+                MATCH (n) WHERE elementId(n) = $eid
+                WITH n
+                WHERE n.id IS NULL OR (n.id IS :: STRING AND trim(n.id) = '')
+                SET n.id = $donor_id
+                RETURN n.id AS id
+                """
+
+
+def journal_keep_sort_key(node: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        0 if node.get("on_primary") else 1,
+        -int(node.get("deg") or 0),
+        0 if node.get("has_timestamp") or node.get("has_ts") else 1,
+        str(node.get("element_id") or ""),
+    )
+
+
+def pick_journal_keep(nodes: list[dict[str, Any]]) -> str:
+    return min(nodes, key=journal_keep_sort_key)["element_id"]
+
+
+def topic_keep_sort_key(node: dict[str, Any]) -> tuple[Any, ...]:
+    eid = node.get("element_id") or node.get("elementId") or ""
+    return (
+        -int(node.get("deg") or 0),
+        0 if node.get("has_id") else 1,
+        str(eid),
+    )
+
+
+def pick_topic_keep(nodes: list[dict[str, Any]]) -> str:
+    winner = min(nodes, key=topic_keep_sort_key)
+    return str(winner.get("element_id") or winner.get("elementId"))
+
+
+def is_true_follows_fork(members: list[dict[str, Any]]) -> bool:
+    chainish = [
+        m
+        for m in members
+        if m.get("has_follows") or m.get("has_head") or m.get("head_rels")
+    ]
+    return len(chainish) >= 2
+
+
+def classify_journal_group(
+    journal_id: str, members: list[dict[str, Any]]
+) -> dict[str, Any]:
+    eids = [m["element_id"] for m in members]
+    reasons: list[str] = []
+    if journal_id in PARKED_JOURNAL_IDS:
+        reasons.append("parked_twin_tip")
+    if is_true_follows_fork(members):
+        reasons.append("follows_fork")
+    if any(eid in PROTECTED_JOURNAL_EIDS for eid in eids) and (
+        journal_id in PARKED_JOURNAL_IDS or is_true_follows_fork(members)
+    ):
+        reasons.append("protected_chain_node")
+    if reasons:
+        return {"decision": "park", "reasons": reasons, "keep": None, "drop": []}
+    extras = [m for m in members if not m.get("has_follows") and not m.get("has_head")]
+    chainish = [m for m in members if m.get("has_follows") or m.get("has_head")]
+    if len(chainish) > 1:
+        return {"decision": "park", "reasons": ["follows_fork"], "keep": None, "drop": []}
+    if any(m["element_id"] in PROTECTED_JOURNAL_EIDS for m in extras):
+        return {
+            "decision": "park",
+            "reasons": ["protected_chain_node"],
+            "keep": None,
+            "drop": [],
+        }
+    keep = pick_journal_keep(members)
+    drops = [m["element_id"] for m in members if m["element_id"] != keep]
+    return {"decision": "merge", "reasons": [], "keep": keep, "drop": drops}
+
+
+def rewire_and_remove(
+    session,
+    keep: str,
+    drop: str,
+    *,
+    copy_fields: tuple[str, ...] = PROP_COPY_FIELDS,
+    forbid_rel_types: frozenset[str] = frozenset(),
+) -> dict[str, int]:
     stats = {"rewired": 0, "skipped_existing": 0, "deleted_to_keep": 0, "copied_fields": 0}
-    for field in PROP_COPY_FIELDS:
+    for field in copy_fields:
         if _copy_field_if_null(session, keep, drop, field):
             stats["copied_fields"] += 1
     rels = list(
@@ -304,6 +406,8 @@ def rewire_and_remove(session, keep: str, drop: str) -> dict[str, int]:
     )
     for rec in rels:
         t = sanitize_rel_type(rec["t"])
+        if t in forbid_rel_types:
+            raise ValueError(f"forbidden_rel_on_drop:{t}")
         start, end = rec["start"], rec["end"]
         if start == keep or end == keep:
             session.run(
@@ -405,8 +509,9 @@ def _journal_node_stats(session, eids: list[str]) -> list[dict[str, Any]]:
         MATCH (j) WHERE elementId(j) = eid
         RETURN elementId(j) AS element_id,
                COUNT { (j)--() } AS deg,
-               coalesce(j.timestamp, j.entry_date, j.created_at) IS NOT NULL AS has_ts,
-               EXISTS { MATCH (j)-[:FOLLOWS]-() } AS has_follows
+               coalesce(j.timestamp, j.entry_date, j.created_at) IS NOT NULL AS has_timestamp,
+               EXISTS { MATCH (j)-[:FOLLOWS]-() } AS has_follows,
+               EXISTS { MATCH (:JournalChain)-[:HEAD]->(j) } AS has_head
         """,
         eids=eids,
     )
@@ -434,54 +539,55 @@ def plan_journal_same_id(session) -> dict[str, Any]:
         jid = raw["id"]
         eids = list(raw["element_ids"])
         stats = {s["element_id"]: s for s in _journal_node_stats(session, eids)}
-        reasons: list[str] = []
-        if jid in PARKED_JOURNAL_IDS:
-            reasons.append("parked_twin_tip")
-        if any(eid in fork_parents for eid in eids):
-            reasons.append("follows_fork_parent")
-        if any(stats.get(eid, {}).get("has_follows") for eid in eids):
-            reasons.append("has_follows")
-        if any(eid in PROTECTED_JOURNAL_EIDS for eid in eids):
-            reasons.append("protected_chain_node")
+        members = []
+        missing_stats = [eid for eid in eids if eid not in stats]
+        if missing_stats:
+            parked.append({"id": jid, "n": int(raw["n"]), "element_ids": eids, "reason": ["missing_node"]})
+            continue
+        for eid in eids:
+            s = dict(stats[eid])
+            s["on_primary"] = eid in chain
+            s["has_head"] = bool(s.get("has_head"))
+            members.append(s)
+        if any(eid in fork_parents for eid in eids) and not is_true_follows_fork(members):
+            # A same-id node that is itself a multi-child parent is a fork root.
+            for m in members:
+                m["has_follows"] = True
+        classified = classify_journal_group(jid, members)
         public = {
-            "id": _public_journal_id(jid),
+            "id": jid,
             "n": int(raw["n"]),
             "element_ids": eids,
         }
-        if reasons:
-            parked.append({**public, "reason": reasons})
+        if classified["decision"] == "park":
+            parked.append({**public, "reason": classified["reasons"]})
             continue
-        ranked = []
-        for eid in eids:
-            s = stats[eid]
-            ranked.append(
-                (
-                    1 if eid in chain else 0,
-                    int(s["deg"]),
-                    1 if s["has_ts"] else 0,
-                    eid,
-                )
-            )
-        ranked.sort(reverse=True)
-        keep = ranked[0][3]
+        keep = classified["keep"]
+        drops = classified["drop"]
+        keep_member = next(m for m in members if m["element_id"] == keep)
         keep_reason = (
             "primary_head_chain"
-            if ranked[0][0]
-            else ("higher_deg" if ranked[0][1] > ranked[1][1] else "has_timestamp")
+            if keep_member.get("on_primary")
+            else (
+                "higher_deg"
+                if keep_member.get("deg", 0) > max(m.get("deg", 0) for m in members if m["element_id"] != keep)
+                else "has_timestamp"
+            )
         )
-        drops = [eid for eid in eids if eid != keep]
-        if keep in PROTECTED_JOURNAL_EIDS or any(d in PROTECTED_JOURNAL_EIDS for d in drops):
-            parked.append({**public, "reason": ["protected_chain_node"]})
-            continue
         apply_groups.append(
             {
-                "id": _public_journal_id(jid),
+                "id": jid,
                 "keep": keep,
                 "drop": drops,
                 "keep_reason": keep_reason,
                 "n": int(raw["n"]),
             }
         )
+    apply_ready = all(
+        drop not in PROTECTED_JOURNAL_EIDS and keep_row["keep"] not in PROTECTED_JOURNAL_EIDS
+        for keep_row in apply_groups
+        for drop in keep_row["drop"]
+    )
     return {
         "phase": "journal-same-id",
         "groups": len(groups_raw),
@@ -490,19 +596,28 @@ def plan_journal_same_id(session) -> dict[str, Any]:
         "parked_groups": parked,
         "apply_n": len(apply_groups),
         "parked_n": len(parked),
-        "apply_ready": True,
+        "apply_ready": apply_ready,
         "keep_rule": "primary_head_chain else higher_deg else has_timestamp",
     }
 
 
 def apply_journal_same_id(session, plan: dict[str, Any]) -> dict[str, Any]:
+    if not plan.get("apply_ready"):
+        raise SystemExit("journal-same-id plan is not apply_ready")
+
     def _work(tx):
         applied = []
         for group in plan["apply_groups"]:
             for drop in group["drop"]:
                 if drop in PROTECTED_JOURNAL_EIDS or group["keep"] in PROTECTED_JOURNAL_EIDS:
                     raise SystemExit("refusing to mutate protected journal eids")
-                stats = rewire_and_remove(tx, group["keep"], drop)
+                stats = rewire_and_remove(
+                    tx,
+                    group["keep"],
+                    drop,
+                    copy_fields=(),
+                    forbid_rel_types=CHAIN_REL_TYPES,
+                )
                 applied.append({"id": group["id"], "keep": group["keep"], "drop": drop, **stats})
         return applied
 
@@ -534,9 +649,9 @@ def plan_topic_ci(session) -> dict[str, Any]:
     apply_groups = []
     for raw in rows:
         nodes = list(raw["nodes"])
-        nodes.sort(key=lambda n: (int(n["deg"]), 1 if n["has_id"] else 0, n["elementId"]), reverse=True)
-        keep = nodes[0]
-        drops = [n["elementId"] for n in nodes[1:]]
+        keep_eid = pick_topic_keep(nodes)
+        keep = next(n for n in nodes if n["elementId"] == keep_eid)
+        drops = [n["elementId"] for n in nodes if n["elementId"] != keep_eid]
         apply_groups.append(
             {
                 "key_hash": _id_hash(raw["key"]),
@@ -573,6 +688,9 @@ def _copy_id_if_null(tx, keep: str, drop: str) -> bool:
 
 
 def apply_topic_ci(session, plan: dict[str, Any]) -> dict[str, Any]:
+    if not plan.get("apply_ready"):
+        raise SystemExit("topic-ci plan is not apply_ready")
+
     def _work(tx):
         applied = []
         for group in plan["apply_groups"]:
@@ -605,6 +723,9 @@ def plan_orphan_states(session) -> dict[str, Any]:
 
 
 def apply_orphan_states(session, plan: dict[str, Any]) -> dict[str, Any]:
+    if not plan.get("apply_ready"):
+        raise SystemExit("orphan-states plan is not apply_ready")
+
     def _work(tx):
         rec = tx.run(
             """
@@ -629,28 +750,28 @@ def plan_backfill_ids(session) -> dict[str, Any]:
         session.run(
             """
             MATCH (n)
-            WHERE (n:Person OR n:Topic)
-              AND (n.id IS NULL OR (n.id IS :: STRING AND trim(n.id) = ''))
+            WHERE (n.id IS NULL OR (n.id IS :: STRING AND trim(n.id) = ''))
               AND n.name IS :: STRING
               AND NOT n.name IS :: LIST<ANY>
               AND trim(n.name) <> ''
-            WITH labels(n) AS labels, n.name AS name, collect(elementId(n)) AS missing
+              AND any(l IN labels(n) WHERE l IN $labels)
+            WITH [l IN labels(n) WHERE l IN $labels] AS labels, toLower(n.name) AS key, collect(elementId(n)) AS missing
             MATCH (donor)
-            WHERE (donor:Person OR donor:Topic)
-              AND donor.name IS :: STRING
+            WHERE donor.name IS :: STRING
               AND NOT donor.name IS :: LIST<ANY>
-              AND donor.name = name
+              AND toLower(donor.name) = key
               AND donor.id IS :: STRING AND trim(donor.id) <> ''
               AND any(l IN labels WHERE l IN labels(donor))
-            WITH labels, name, missing, collect(DISTINCT donor.id) AS donor_ids, collect(elementId(donor)) AS donors
+            WITH labels, key, missing, collect(DISTINCT donor.id) AS donor_ids, collect(elementId(donor)) AS donors
             WHERE size(donor_ids) = 1
-            RETURN labels, size(name) AS name_len, missing, donor_ids[0] AS donor_id, donors
-            """
+            RETURN labels, size(key) AS name_len, missing, donor_ids[0] AS donor_id, donors
+            """,
+            labels=list(NAME_BEARING_LABELS),
         )
     )
     copies = []
     for raw in rows:
-        labels = [l for l in raw["labels"] if l in {"Person", "Topic"}]
+        labels = [l for l in raw["labels"] if l in NAME_BEARING_LABELS]
         if "Person" in labels and raw["donor_id"] in FORBIDDEN_PERSON_MERGE_IDS:
             continue
         if "Person" in labels and raw["donor_id"] in PARKED_PERSON_IDS:
@@ -664,27 +785,36 @@ def plan_backfill_ids(session) -> dict[str, Any]:
                     "name_len": int(raw["name_len"]),
                 }
             )
+    leftover_rows = list(
+        session.run(
+            """
+            MATCH (n)
+            WHERE n.id IS NULL OR (n.id IS :: STRING AND trim(n.id) = '')
+            UNWIND labels(n) AS lab
+            RETURN lab, count(*) AS n
+            ORDER BY n DESC
+            """
+        )
+    )
     return {
         "phase": "backfill-ids",
         "copies": copies,
         "n": len(copies),
         "apply_ready": True,
         "rule": "copy_existing_stable_id_only",
+        "leftover_missing_by_label": [dict(r) for r in leftover_rows],
     }
 
 
 def apply_backfill_ids(session, plan: dict[str, Any]) -> dict[str, Any]:
+    if not plan.get("apply_ready"):
+        raise SystemExit("backfill-ids plan is not apply_ready")
+
     def _work(tx):
         done = 0
         for row in plan["copies"]:
             rec = tx.run(
-                """
-                MATCH (n) WHERE elementId(n) = $eid
-                WITH n
-                WHERE n.id IS NULL OR (n.id IS :: STRING AND trim(n.id) = '')
-                SET n.id = $donor_id
-                RETURN n.id AS id
-                """,
+                BACKFILL_ID_SET_QUERY,
                 eid=row["target"],
                 donor_id=row["donor_id"],
             ).single()
